@@ -1,20 +1,83 @@
-import { ipcMain, BrowserWindow } from 'electron';
+import { ipcMain } from 'electron';
 import type { DatabaseSync } from 'node:sqlite';
 import { IpcChannels } from '../shared/ipc-channels';
 import { getSettings, updateSettings } from './store/settings';
-import { setSecret, getSecret, apiKeyService } from './store/secrets';
+import { setSecret, getSecret, apiKeyService, isEncryptionAvailable } from './store/secrets';
 import { createConversation, listConversations, addMessage, getMessages, deleteConversation } from './db/conversations';
 import { listTemplates, upsertTemplate, listWorkflows, render } from './db/templates';
 import { streamChat } from './ai/stream';
 import { testConnectivity } from './ai/providers';
 import { buildRegistry, querySlash, resolveSlash } from './slash/registry';
 import { runWorkflow } from './workflow/engine';
-import type { ChatMessage, Settings } from '../shared/types';
+import { routeRequest, type RouteInput } from './agent/router';
+import { createOpencodeAdapter } from './agent/opencode';
+import { createClaudeAdapter, createCodexAdapter } from './agent/cli';
+import type { AgentRuntimeAdapter } from './agent/adapter';
+import type { ChatMessage, Mode, RuntimeId, Settings } from '../shared/types';
 
-let aborter: AbortController | null = null;
+const aborters = new Map<string, AbortController>();
+let seq = 0;
 
 function db(): DatabaseSync {
   return (globalThis as unknown as { __miniaiDb: DatabaseSync }).__miniaiDb;
+}
+
+function buildAgents(s: Settings): Partial<Record<RuntimeId, AgentRuntimeAdapter>> {
+  return {
+    opencode: createOpencodeAdapter({ baseUrl: s.opencodeBaseUrl || '' }),
+    claude: createClaudeAdapter(s.claudeBin || '', undefined, s.agentCwd),
+    codex: createCodexAdapter(s.codexBin || '', undefined, s.agentCwd),
+  };
+}
+
+export interface SendOpts {
+  mode?: Mode;
+  runtimeId?: RuntimeId;
+  sessionId?: string;
+  requestId?: string;
+}
+
+async function runSend(
+  sender: Electron.WebContents,
+  conversationId: string,
+  content: string,
+  opts: SendOpts = {},
+): Promise<string> {
+  const d = db();
+  // Freeze mode/runtime/sessionId/requestId at send time.
+  const s = getSettings(d);
+  const mode: Mode = opts.mode || s.mode || 'chat';
+  const runtimeId: RuntimeId = opts.runtimeId || s.agentRuntime || 'opencode';
+  const sessionId = opts.sessionId || conversationId;
+  const requestId = opts.requestId || `req-${Date.now()}-${++seq}`;
+  addMessage(d, conversationId, 'user', content);
+  const history = getMessages(d, conversationId);
+  const key = getSecret(d, apiKeyService(s.provider)) || '';
+  const aborter = new AbortController();
+  aborters.set(requestId, aborter);
+  const frozen: RouteInput = { mode, runtimeId, sessionId, requestId, prompt: content };
+  try {
+    const full = await routeRequest(
+      { ...frozen, cwd: s.agentCwd, signal: aborter.signal, onToken: (t) => sender.send(IpcChannels.chatStream, { token: t, done: false, conversationId, requestId }) },
+      {
+        chat: async (input) => {
+          let acc = '';
+          await streamChat(s.provider, {
+            apiKey: key, model: s.model, baseUrl: s.baseUrl, temperature: s.temperature,
+            messages: history, signal: input.signal,
+            onToken: (t) => { acc += t; input.onToken?.(t); },
+          });
+          return acc;
+        },
+        agents: buildAgents(s),
+      },
+    );
+    addMessage(d, conversationId, 'assistant', full);
+    sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
+    return full;
+  } finally {
+    aborters.delete(requestId);
+  }
 }
 
 export function registerIpc(): void {
@@ -25,6 +88,7 @@ export function registerIpc(): void {
     setSecret(db(), apiKeyService(provider), key);
     return true;
   });
+  ipcMain.handle(IpcChannels.isEncryptionAvailable, () => isEncryptionAvailable());
   ipcMain.handle(IpcChannels.testConnectivity, async (_e, provider, model: string, baseUrl?: string) => {
     const key = getSecret(db(), apiKeyService(provider as string)) || '';
     return testConnectivity(provider, key, model, baseUrl);
@@ -38,91 +102,100 @@ export function registerIpc(): void {
   ipcMain.handle(IpcChannels.upsertTemplate, (_e, t) => upsertTemplate(db(), t));
   ipcMain.handle(IpcChannels.listWorkflows, () => listWorkflows(db()));
 
-  ipcMain.handle(IpcChannels.slashQuery, (_e, text: string) => {
+  ipcMain.handle(IpcChannels.slashQuery, (_e, text: string, mode?: Mode) => {
     const templates = listTemplates(db()).map((t) => ({ trigger: t.trigger, label: t.title, description: t.body.slice(0, 80), source: 'prompt' as const }));
     const workflows = listWorkflows(db()).map((w) => ({ trigger: w.trigger, label: w.title, description: `${w.steps.length} steps`, source: 'workflow' as const }));
-    return querySlash(buildRegistry({ prompts: templates, workflows }), text);
+    return querySlash(buildRegistry({ prompts: templates, workflows }), text, 8, mode);
   });
-  ipcMain.handle(IpcChannels.slashResolve, (_e, trigger: string) => {
+  ipcMain.handle(IpcChannels.slashResolve, (_e, trigger: string, mode?: Mode) => {
     const templates = listTemplates(db()).map((t) => ({ trigger: t.trigger, label: t.title, description: t.body.slice(0, 80), source: 'prompt' as const }));
     const workflows = listWorkflows(db()).map((w) => ({ trigger: w.trigger, label: w.title, description: `${w.steps.length} steps`, source: 'workflow' as const }));
-    return resolveSlash(buildRegistry({ prompts: templates, workflows }), trigger);
+    return resolveSlash(buildRegistry({ prompts: templates, workflows }), trigger, mode);
   });
 
   ipcMain.handle(IpcChannels.runWorkflow, async (e, trigger: string, vars: Record<string, string>) => {
     const d = db();
     const w = listWorkflows(d).find((x) => x.trigger === trigger || x.id === trigger);
     if (!w) throw new Error(`Unknown workflow: ${trigger}`);
-    aborter = new AbortController();
+    const requestId = `wf-${Date.now()}-${++seq}`;
+    const aborter = new AbortController();
+    aborters.set(requestId, aborter);
     const sender = e.sender;
-    const result = await runWorkflow(w, vars, {
-      vars,
-      getTemplateBody: (id) => {
-        const t = listTemplates(d).find((x) => x.id === id || x.trigger === id);
-        if (!t) return undefined;
-        try { return render(t.body, { ...vars, text: vars.text || vars.input || '' }); }
-        catch { return t.body; }
-      },
-      runPrompt: async (prompt: string, signal?: AbortSignal) => {
-        const s = getSettings(d);
-        const key = getSecret(d, apiKeyService(s.provider)) || '';
-        let acc = '';
-        await streamChat(s.provider, {
-          apiKey: key, model: s.model, baseUrl: s.baseUrl,
-          messages: [{ id: 'w', role: 'user', content: prompt, createdAt: 0 }],
-          signal: signal || aborter?.signal,
-          onToken: (t) => { acc += t; sender.send(IpcChannels.chatStream, { token: t, done: false }); },
-        });
-        return acc;
-      },
-      askUser: async (p) => vars[p] || vars.text || '',
-      signal: aborter.signal,
-    });
-    d.prepare('INSERT INTO runs (id, workflowId, status, output, createdAt) VALUES (?, ?, ?, ?, ?)').run(
-      `r-${Date.now()}`, w.id, result.status, result.outputs['__output'] || '', Date.now(),
-    );
-    sender.send(IpcChannels.chatStream, { token: '', done: true });
-    return result;
+    try {
+      const result = await runWorkflow(w, vars, {
+        vars,
+        getTemplateBody: (id) => {
+          const t = listTemplates(d).find((x) => x.id === id || x.trigger === id);
+          if (!t) return undefined;
+          try { return render(t.body, { ...vars, text: vars.text || vars.input || '' }); }
+          catch { return t.body; }
+        },
+        runPrompt: async (prompt: string, signal?: AbortSignal) => {
+          const s = getSettings(d);
+          const key = getSecret(d, apiKeyService(s.provider)) || '';
+          let acc = '';
+          await streamChat(s.provider, {
+            apiKey: key, model: s.model, baseUrl: s.baseUrl,
+            messages: [{ id: 'w', role: 'user', content: prompt, createdAt: 0 }],
+            signal: signal || aborter.signal,
+            onToken: (t) => { acc += t; sender.send(IpcChannels.chatStream, { token: t, done: false }); },
+          });
+          return acc;
+        },
+        askUser: async (p) => vars[p] || vars.text || '',
+        signal: aborter.signal,
+      });
+      d.prepare('INSERT INTO runs (id, workflowId, status, output, createdAt) VALUES (?, ?, ?, ?, ?)').run(
+        `r-${Date.now()}`, w.id, result.status, result.outputs['__output'] || '', Date.now(),
+      );
+      sender.send(IpcChannels.chatStream, { token: '', done: true });
+      return result;
+    } finally {
+      aborters.delete(requestId);
+    }
   });
 
-  ipcMain.on(IpcChannels.chatCancel, () => aborter?.abort());
+  ipcMain.on(IpcChannels.chatCancel, (_e, requestId?: string) => {
+    if (requestId) aborters.get(requestId)?.abort();
+    else for (const a of aborters.values()) a.abort();
+  });
 
   // Chat: streams tokens via `chatStream` event, resolves with full text.
-  ipcMain.handle('miniai:chat', async (e, conversationId: string, messages: ChatMessage[]) => {
+  ipcMain.handle(IpcChannels.chat, async (e, conversationId: string, messages: ChatMessage[], opts: SendOpts = {}) => {
     const d = db();
     const s = getSettings(d);
     const key = getSecret(d, apiKeyService(s.provider)) || process.env[`${s.provider.toUpperCase()}_API_KEY`] || '';
-    aborter = new AbortController();
+    const requestId = opts.requestId || `req-${Date.now()}-${++seq}`;
+    const aborter = new AbortController();
+    aborters.set(requestId, aborter);
     const sender = e.sender;
-    let full = '';
-    await streamChat(s.provider, {
-      apiKey: key, model: s.model, baseUrl: s.baseUrl, temperature: s.temperature,
-      messages, signal: aborter.signal,
-      onToken: (t) => { full += t; sender.send(IpcChannels.chatStream, { token: t, done: false, conversationId }); },
-    });
-    addMessage(d, conversationId, 'assistant', full);
-    sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId });
-    return full;
+    try {
+      let full = '';
+      await streamChat(s.provider, {
+        apiKey: key, model: s.model, baseUrl: s.baseUrl, temperature: s.temperature,
+        messages, signal: aborter.signal,
+        onToken: (t) => { full += t; sender.send(IpcChannels.chatStream, { token: t, done: false, conversationId, requestId }); },
+      });
+      addMessage(d, conversationId, 'assistant', full);
+      sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
+      return full;
+    } finally {
+      aborters.delete(requestId);
+    }
   });
 
-  ipcMain.handle('miniai:send', async (e, conversationId: string, content: string) => {
-    const d = db();
-    addMessage(d, conversationId, 'user', content);
-    const history = getMessages(d, conversationId);
-    const win = BrowserWindow.fromWebContents(e.sender);
-    void win;
-    // Delegate to chat handler logic via direct call
-    const s = getSettings(d);
-    const key = getSecret(d, apiKeyService(s.provider)) || '';
-    aborter = new AbortController();
-    let full = '';
-    await streamChat(s.provider, {
-      apiKey: key, model: s.model, baseUrl: s.baseUrl, temperature: s.temperature,
-      messages: history, signal: aborter.signal,
-      onToken: (t) => { full += t; e.sender.send(IpcChannels.chatStream, { token: t, done: false, conversationId }); },
-    });
-    addMessage(d, conversationId, 'assistant', full);
-    e.sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId });
-    return full;
-  });
+  ipcMain.handle(IpcChannels.send, (e, conversationId: string, content: string, opts: SendOpts = {}) =>
+    runSend(e.sender, conversationId, content, opts),
+  );
+
+  ipcMain.handle(IpcChannels.agentRun, (e, conversationId: string, content: string, opts: SendOpts = {}) =>
+    runSend(e.sender, conversationId, content, { ...opts, mode: 'agent' }),
+  );
+
+  const capsOf = () => {
+    const s = getSettings(db());
+    return Promise.all(Object.values(buildAgents(s)).map((a) => a!.caps()));
+  };
+  ipcMain.handle(IpcChannels.runtimeList, () => capsOf());
+  ipcMain.handle(IpcChannels.runtimeRefresh, () => capsOf());
 }

@@ -32,8 +32,13 @@ function unxorBuf(b: Buffer): string {
   return c.toString('utf8');
 }
 
+export function isEncryptionAvailable(): boolean {
+  return loadSafeStorage() !== null;
+}
+
 export function setSecret(db: DatabaseSync, service: string, value: string): void {
   const ss = loadSafeStorage();
+  if (!ss) console.warn('[MiniAI] safeStorage unavailable — persisting secret with insecure fallback obfuscation (dev only)');
   const enc: Buffer = ss ? ss.encryptString(value) : Buffer.concat([Buffer.from(FALLBACK_PREFIX), xorBuf(value)]);
   db.prepare('INSERT INTO secrets (service, value, updatedAt) VALUES (?, ?, ?) ON CONFLICT(service) DO UPDATE SET value=excluded.value, updatedAt=excluded.updatedAt').run(service, enc, Date.now());
 }
@@ -43,6 +48,7 @@ export function getSecret(db: DatabaseSync, service: string): string | undefined
   if (!row) return undefined;
   const buf = Buffer.from(row.value as Uint8Array);
   if (buf.subarray(0, FALLBACK_PREFIX.length).toString() === FALLBACK_PREFIX) {
+    console.warn('[MiniAI] safeStorage unavailable — reading secret stored with insecure fallback obfuscation');
     return unxorBuf(buf.subarray(FALLBACK_PREFIX.length));
   }
   const ss = loadSafeStorage();

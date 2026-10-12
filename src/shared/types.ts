@@ -1,5 +1,9 @@
 export type ProviderId = 'openai' | 'anthropic' | 'gemini' | 'compatible';
 
+export type Mode = 'chat' | 'agent';
+export type RuntimeId = 'opencode' | 'claude' | 'codex';
+export type SlashScope = 'chat' | 'agent' | 'all';
+
 export interface ChatMessage {
   id: string;
   role: 'system' | 'user' | 'assistant';
@@ -52,6 +56,13 @@ export interface Settings {
   temperature?: number;
   theme: 'light' | 'dark';
   hotkey: string;
+  mode: Mode;
+  agentRuntime: RuntimeId;
+  modeHotkey: string;
+  opencodeBaseUrl?: string;
+  claudeBin?: string;
+  codexBin?: string;
+  agentCwd?: string;
 }
 
 export interface MiniAIError {

@@ -16,6 +16,14 @@
       <button id="btn-hide" title="Hide (Esc)">×</button>
     </div>
   </header>
+  <div id="modebar" role="tablist" aria-label="Mode">
+    <button id="tab-chat" role="tab" aria-selected="true" class="tab active">Chat</button>
+    <button id="tab-agent" role="tab" aria-selected="false" class="tab">Agent</button>
+    <select id="runtime" title="Agent runtime" class="hidden">
+      <option value="opencode">opencode</option><option value="claude">claude</option><option value="codex">codex</option>
+    </select>
+    <span id="mode-hint" title="Tab switches mode">Tab ↵</span>
+  </div>
   <div id="messages"></div>
   <div id="palette" class="hidden"></div>
   <footer>
@@ -32,6 +40,11 @@
     <label>Base URL <input id="set-baseurl" placeholder="optional" /></label>
     <label>API key <input id="set-apikey" type="password" placeholder="sk-…" /></label>
     <label>Theme <select id="set-theme"><option value="light">light</option><option value="dark">dark</option></select></label>
+    <label>Agent runtime <select id="set-runtime"><option value="opencode">opencode</option><option value="claude">claude</option><option value="codex">codex</option></select></label>
+    <label>OpenCode URL <input id="set-opencode" placeholder="http://localhost:4096" /></label>
+    <label>Claude bin <input id="set-claudebin" placeholder="claude" /></label>
+    <label>Codex bin <input id="set-codexbin" placeholder="codex" /></label>
+    <label>Agent cwd <input id="set-agentcwd" placeholder="optional" /></label>
     <div class="row">
       <button id="btn-save-settings">Save</button>
       <button id="btn-test-conn">Test</button>

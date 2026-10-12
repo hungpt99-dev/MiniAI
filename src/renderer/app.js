@@ -3,8 +3,27 @@
 const $ = (id) => document.getElementById(id);
 const messagesEl = $('messages'), inputEl = $('input'), paletteEl = $('palette');
 let convId = null, paletteItems = [], paletteActive = 0, assistantDiv = null;
+let mode = 'chat', runtime = 'opencode', reqSeq = 0;
+let drafts = { chat: '', agent: '' };
 
-function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function setMode(m, persist) {
+  drafts[mode] = inputEl.value;
+  mode = m;
+  inputEl.value = drafts[mode] || '';
+  updateModeUI();
+  if (persist !== false && window.miniAI?.setSettings) void window.miniAI.setSettings({ mode: m }).catch(() => {});
+}
+function updateModeUI() {
+  const isChat = mode === 'chat';
+  $('tab-chat').classList.toggle('active', isChat);
+  $('tab-chat').setAttribute('aria-selected', String(isChat));
+  $('tab-agent').classList.toggle('active', !isChat);
+  $('tab-agent').setAttribute('aria-selected', String(!isChat));
+  $('runtime').classList.toggle('hidden', isChat);
+  inputEl.placeholder = isChat ? 'Ask anything…  ( / for commands )' : `Agent (${runtime}) — describe the task…  (Tab to switch)`;
+}
+
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
 // markdown-lite: code blocks, inline code, bold, italic, links, line breaks
 function mdLite(src) {
@@ -17,7 +36,7 @@ function mdLite(src) {
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
     .replace(/(^|\W)\*([^*\n]+)\*/g, '$1<i>$2</i>')
-    .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
+    .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, (_, text, href) => (/^https?:\/\/[^"'\s<>]+$/.test(href) ? `<a href="${href}" target="_blank" rel="noopener">${text}</a>` : text))
     .replace(/\n/g, '<br>');
   return html.replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[Number(i)]);
 }
@@ -46,8 +65,12 @@ async function send() {
   hidePalette();
   if (text.startsWith('/')) {
     const [trigger, ...rest] = text.split(' ');
-    const r = await window.miniAI.slashResolve(trigger);
+    const r = await window.miniAI.slashResolve(trigger, mode);
     if (r.found) {
+      if (r.found.scope && r.found.scope !== 'all' && r.found.scope !== mode) {
+        addMsg('assistant', `${esc(trigger)} is only available in ${esc(r.found.scope)} mode.`);
+        return;
+      }
       if (r.found.source === 'workflow') {
         addMsg('user', text);
         assistantDiv = addMsg('assistant', '…');
@@ -71,7 +94,7 @@ async function send() {
       // prompt template: send rendered via chat
       const id = await ensureConv();
       assistantDiv = addMsg('assistant', '…');
-      await window.miniAI.send(id, text);
+      await window.miniAI.send(id, text, { mode, runtimeId: runtime, sessionId: id, requestId: `r${Date.now()}-${++reqSeq}` });
       return;
     }
     addMsg('assistant', `Unknown command ${esc(trigger)}. Did you mean: ${(r.suggestions || []).map((s) => esc(s.trigger)).join(', ') || '—'}?`);
@@ -81,7 +104,8 @@ async function send() {
   const id = await ensureConv();
   assistantDiv = addMsg('assistant', '…');
   try {
-    await window.miniAI.send(id, text);
+    const requestId = `r${Date.now()}-${++reqSeq}`;
+    await window.miniAI.send(id, text, { mode, runtimeId: runtime, sessionId: id, requestId });
   } catch (e) {
     assistantDiv.innerHTML = mdLite('Error: ' + (e.message || e));
   }
@@ -98,17 +122,27 @@ window.miniAI.onStream((ev) => {
 // slash palette
 let paletteTimer = null;
 inputEl.addEventListener('input', () => {
+  drafts[mode] = inputEl.value;
   clearTimeout(paletteTimer);
   paletteTimer = setTimeout(async () => {
     const v = inputEl.value;
     if (!/\/[A-Za-z0-9_-]*$/.test(v)) return hidePalette();
-    paletteItems = await window.miniAI.slashQuery(v);
+    paletteItems = await window.miniAI.slashQuery(v, mode);
     if (!paletteItems.length) return hidePalette();
     paletteActive = 0;
     renderPalette();
   }, 80);
 });
 inputEl.addEventListener('keydown', (e) => {
+  const paletteOpen = !paletteEl.classList.contains('hidden');
+  if (e.key === 'Tab' && document.activeElement === inputEl && !paletteOpen && !e.isComposing) {
+    e.preventDefault();
+    setMode(mode === 'chat' ? 'agent' : 'chat');
+    return;
+  }
+  if (e.altKey && (e.key === 'm' || e.key === 'M')) { e.preventDefault(); e.stopPropagation(); setMode(mode === 'chat' ? 'agent' : 'chat'); return; }
+  if (e.altKey && e.key === '1') { e.preventDefault(); e.stopPropagation(); setMode('chat'); return; }
+  if (e.altKey && e.key === '2') { e.preventDefault(); e.stopPropagation(); setMode('agent'); return; }
   if (!paletteEl.classList.contains('hidden')) {
     if (e.key === 'ArrowDown') { e.preventDefault(); paletteActive = (paletteActive + 1) % paletteItems.length; renderPalette(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); paletteActive = (paletteActive - 1 + paletteItems.length) % paletteItems.length; renderPalette(); }
@@ -139,6 +173,18 @@ function hidePalette() { paletteEl.classList.add('hidden'); paletteItems = []; }
 document.addEventListener('click', (e) => { if (!paletteEl.contains(e.target) && e.target !== inputEl) hidePalette(); });
 
 $('btn-send').onclick = () => void send();
+$('tab-chat').onclick = () => setMode('chat');
+$('tab-agent').onclick = () => setMode('agent');
+$('runtime').onchange = () => {
+  runtime = $('runtime').value;
+  updateModeUI();
+  if (window.miniAI?.setSettings) void window.miniAI.setSettings({ agentRuntime: runtime }).catch(() => {});
+};
+document.addEventListener('keydown', (e) => {
+  if (e.altKey && (e.key === 'm' || e.key === 'M')) { e.preventDefault(); setMode(mode === 'chat' ? 'agent' : 'chat'); }
+  else if (e.altKey && e.key === '1') { e.preventDefault(); setMode('chat'); }
+  else if (e.altKey && e.key === '2') { e.preventDefault(); setMode('agent'); }
+});
 function togglePanel(which) {
   $('settings').classList.toggle('hidden', which !== 'settings' || !$('settings').classList.contains('hidden') && which === 'settings' ? true : which !== 'settings');
   $('history').classList.toggle('hidden', which !== 'history' || !$('history').classList.contains('hidden') && which === 'history' ? true : which !== 'history');
@@ -151,6 +197,9 @@ $('btn-settings').onclick = async () => {
   const s = await window.miniAI.getSettings();
   $('set-provider').value = s.provider; $('set-model').value = s.model;
   $('set-baseurl').value = s.baseUrl || ''; $('set-theme').value = s.theme;
+  $('set-runtime').value = s.agentRuntime || 'opencode';
+  $('set-opencode').value = s.opencodeBaseUrl || ''; $('set-claudebin').value = s.claudeBin || '';
+  $('set-codexbin').value = s.codexBin || ''; $('set-agentcwd').value = s.agentCwd || '';
   document.documentElement.dataset.theme = s.theme;
 };
 $('btn-history').onclick = () => togglePanel('history');
@@ -160,10 +209,18 @@ $('btn-save-settings').onclick = async () => {
     provider: $('set-provider').value,
     model: $('set-model').value,
     theme: $('set-theme').value,
+    agentRuntime: $('set-runtime').value,
+    opencodeBaseUrl: $('set-opencode').value.trim(),
+    claudeBin: $('set-claudebin').value.trim(),
+    codexBin: $('set-codexbin').value.trim(),
+    agentCwd: $('set-agentcwd').value.trim(),
   };
   if ($('set-baseurl').value.trim()) patch.baseUrl = $('set-baseurl').value.trim();
   await window.miniAI.setSettings(patch);
+  runtime = patch.agentRuntime || runtime;
+  updateModeUI();
   if ($('set-apikey').value) await window.miniAI.setApiKey(patch.provider, $('set-apikey').value);
+  $('set-apikey').value = '';
   document.documentElement.dataset.theme = patch.theme;
   $('settings-status').textContent = 'Saved';
   setTimeout(() => ($('settings-status').textContent = ''), 1500);
@@ -199,6 +256,27 @@ async function refreshHistory() {
   try {
     const s = await window.miniAI.getSettings();
     document.documentElement.dataset.theme = s.theme || 'light';
+    mode = s.mode === 'agent' ? 'agent' : 'chat';
+    runtime = s.agentRuntime || 'opencode';
+    if ($('runtime')) $('runtime').value = runtime;
+    try {
+      const caps = await window.miniAI.runtimeList?.();
+      if (Array.isArray(caps) && $('runtime')) {
+        for (const c of caps) {
+          const opt = [...$('runtime').options].find((o) => o.value === c.id);
+          if (opt) opt.textContent = `${c.id}${c.available ? '' : ' (unavailable)'}`;
+        }
+      }
+    } catch { /* runtime list optional */ }
+    updateModeUI();
+    try {
+      if (window.miniAI.isEncryptionAvailable && !(await window.miniAI.isEncryptionAvailable())) {
+        const b = document.createElement('div');
+        b.textContent = 'Warning: encryption unavailable — API keys will not be securely stored.';
+        b.style.cssText = 'background:#fef3c7;color:#92400e;padding:6px 10px;font-size:12px;text-align:center';
+        $('app').prepend(b);
+      }
+    } catch { /* encryption check optional */ }
     await refreshHistory();
   } catch { /* preload unavailable in plain browser preview */ }
 })();

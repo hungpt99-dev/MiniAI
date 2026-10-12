@@ -22,6 +22,9 @@ footer { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--bord
 #palette .item.active, #palette .item:hover { background: var(--panel); }
 #palette .item small { color: var(--muted); margin-left: 6px; }
 .hidden { display: none !important; }
+.tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+#modebar { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+#mode-hint { margin-left: auto; color: var(--muted); font-size: 11px; }
 aside { position: absolute; top: 37px; right: 0; width: 300px; max-height: calc(100% - 100px); overflow-y: auto;
   background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.15); }
 aside label { display: block; margin: 6px 0; }

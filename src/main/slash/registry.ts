@@ -1,15 +1,17 @@
-import type { SlashMatch, SlashSource } from '../../shared/types';
+import type { Mode, SlashMatch, SlashScope, SlashSource } from '../../shared/types';
+import { filterByScope as filterScope } from '../../shared/mode-utils';
 
 export interface SlashEntry extends SlashMatch {
   action?: string;
+  scope?: SlashScope;
 }
 
 const BUILTINS: SlashEntry[] = [
-  { trigger: '/help', label: 'Help', description: 'Show available commands', source: 'builtin', action: 'help' },
-  { trigger: '/new', label: 'New chat', description: 'Start a new conversation', source: 'builtin', action: 'new' },
-  { trigger: '/clear', label: 'Clear', description: 'Clear current messages', source: 'builtin', action: 'clear' },
-  { trigger: '/model', label: 'Model', description: 'Switch model (usage: /model <name>)', source: 'builtin', action: 'model' },
-  { trigger: '/history', label: 'History', description: 'Show conversation history', source: 'builtin', action: 'history' },
+  { trigger: '/help', label: 'Help', description: 'Show available commands', source: 'builtin', action: 'help', scope: 'all' },
+  { trigger: '/new', label: 'New chat', description: 'Start a new conversation', source: 'builtin', action: 'new', scope: 'all' },
+  { trigger: '/clear', label: 'Clear', description: 'Clear current messages', source: 'builtin', action: 'clear', scope: 'all' },
+  { trigger: '/model', label: 'Model', description: 'Switch model (usage: /model <name>)', source: 'builtin', action: 'model', scope: 'chat' },
+  { trigger: '/history', label: 'History', description: 'Show conversation history', source: 'builtin', action: 'history', scope: 'all' },
 ];
 
 function isSubsequence(query: string, target: string): boolean {
@@ -55,10 +57,16 @@ export function rankMatches(entries: SlashEntry[], query: string, limit = 8): Sl
   return scored.slice(0, limit).map((x) => x.e);
 }
 
-export function querySlash(entries: SlashEntry[], text: string, limit = 8): SlashEntry[] {
+export function querySlash(entries: SlashEntry[], text: string, limit = 8, mode?: Mode): SlashEntry[] {
   const m = text.match(/\/([A-Za-z0-9_-]*)$/);
   if (!m) return [];
-  return rankMatches(entries, m[1], limit);
+  const scoped = mode ? filterScope(entries, mode) : entries;
+  return rankMatches(scoped, m[1], limit);
+}
+
+/** Pure scope filter re-export for tests/consumers. */
+export function filterByScope(entries: SlashEntry[], mode: Mode): SlashEntry[] {
+  return filterScope(entries, mode);
 }
 
 export interface ResolveResult {
@@ -67,9 +75,15 @@ export interface ResolveResult {
 }
 
 /** Exact resolve; unknown trigger returns top-3 fuzzy suggestions. */
-export function resolveSlash(entries: SlashEntry[], trigger: string): ResolveResult {
+export function resolveSlash(entries: SlashEntry[], trigger: string, mode?: Mode): ResolveResult {
   const found = entries.find((e) => e.trigger === trigger);
-  if (found) return { found, suggestions: [] };
+  if (found) {
+    if (mode && found.scope && found.scope !== 'all' && found.scope !== mode) {
+      const q = trigger.replace(/^\//, '');
+      return { suggestions: rankMatches(filterScope(entries, mode), q, 3) };
+    }
+    return { found, suggestions: [] };
+  }
   const q = trigger.replace(/^\//, '');
   return { suggestions: rankMatches(entries, q, 3) };
 }
