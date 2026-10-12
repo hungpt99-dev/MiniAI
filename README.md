@@ -1,70 +1,128 @@
-# MiniAI
+# MiniAI — Your AI, One Shortcut Away.
 
-Popup AI assistant (BYOK). Alt+Space toggles a frameless 480×640 window. Tray icon, slash commands, prompt templates, 2-step workflows, SQLite history.
+Lightweight Windows desktop assistant for direct AI chat, reusable prompts, workflows, path toward integrated coding agents.
 
-## Setup
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform: Windows x64](https://img.shields.io/badge/Platform-Windows_x64-lightgrey.svg)](docs/development/setup.md)
+[![Status: v0.1.0 pre-release experimental](https://img.shields.io/badge/Status-v0.1.0_pre--release_experimental-orange.svg)](docs/product/implementation-status.md)
+
+[Why MiniAI](#why-miniai) · [Features](#features) · [When to use it](#when-to-use-it) · [Quick Start](#quick-start) · [Build / Dev](#build--dev) · [Status](#status) · [Contributing](#contributing) · [License](#license) · [Docs](docs/README.md)
+
+## Why MiniAI
+
+Most AI tools live in a browser tab. MiniAI lives on a hotkey.
+
+Press `Alt+Space`, type, get an answer, dismiss. No tab-switching, no copy-paste round-trip. Reusable slash prompts and small multi-step workflows handle the repeatable work. Bring your own keys, keep history in a local SQLite file.
+
+## Features
+
+**Instant access**
+
+- Global `Alt+Space` (default, configurable) toggles a frameless `480x640` popup.
+- Popup hides on blur (launcher behavior). Tray has Show / Hide + Quit.
+- Single-instance app. Mode toggle with `Tab` in the composer or `Alt+M`.
+
+**Bring your own key (BYOK) chat**
+
+- Providers: `openai` (default model `gpt-4o-mini`), `anthropic`, `gemini`, `compatible` (default `http://localhost:11434/v1`, e.g. Ollama).
+- Keys are entered in the settings panel and stored via `safeStorage` / DPAPI in the SQLite `secrets` table. Fallback XOR obfuscation warns only (dev).
+- `redact()` masks `sk-` / `Bearer` / `api_key` before logging. Dev-only env fallback: `OPENAI_API_KEY`, etc.
+- Chat streams with cancel. Provider usage may incur charges.
+
+**Slash commands and prompt templates**
+
+- Builtins: `/help` `/new` `/clear` `/model` (chat-only) `/history`.
+- Templates: `/translate` `/rewrite` `/summarize` `/explain` `/analyze` `/reply`.
+- Workflows: `/email-reply` `/requirement-review`.
+- Palette: type `/`, ranked exact > prefix > substring > fuzzy. Arrows + `Enter` + `Esc` + click. Unknown commands show top-3 suggestions.
+- Scopes (`chat` / `agent` / `all`) follow the active mode.
+
+See [docs/agents/README.md](docs/agents/README.md).
+
+**Small multi-step workflows**
+
+- 5 step kinds: `prompt` / `transform` / `conditional` / `user-input` / `output`.
+- Transforms: `append` / `prepend` / `replace` / `uppercase` / `lowercase`.
+- Limits: max 20 steps, conditional depth <= 2, last step must be `output`.
+- Per-step history; cancel via cancel action (Esc closes popup, may strand run).
+
+See [docs/agents/workflows.md](docs/agents/workflows.md).
+
+**Local history**
+
+- Stored in `%APPDATA%\MiniAI\miniai.db` (WAL mode). Override with `MINIAI_DATA_DIR`.
+- Note: message text is sent to the configured provider on each request.
+
+**Agent Mode (implemented, needs real-runtime verification)**
+
+- Adapters exist for OpenCode (HTTP-SSE) and Claude / Codex (CLI-JSONL). Router never falls back silently. Sessions are tracked per runtime.
+- This is implemented but not live-verified: tests are mocked only, no real runtime has been connected. Do not treat it as done.
+
+See [docs/architecture/agent-runtime-adapters.md](docs/architecture/agent-runtime-adapters.md) and [docs/agents/compatibility.md](docs/agents/compatibility.md).
+
+## When to use it
+
+- Quick AI answers without leaving the current window (`Alt+Space`, ask, dismiss).
+- Repeated rewrites: summarize, translate, or explain with one slash command.
+- Repeatable two-path tasks via `/email-reply` or `/requirement-review`.
+- Local-first draft history with your own provider keys and models.
+
+## Quick Start
+
+No releases exist. Run from source.
+
+Prerequisites: Node >= 22.5, Windows x64.
 
 ```powershell
-npm install
-npm run build:main
-npm run build:renderer
-npm run dev        # runs Electron
-npm run dist       # electron-builder portable + NSIS (win x64)
+npm ci
+npm run dev
 ```
 
-## BYOK
+1. Press `Alt+Space`.
+2. Open settings, pick a provider, paste your key.
+3. Try: `/summarize paste text here`.
 
-Settings panel → provider → paste API key. Stored via `safeStorage` (DPAPI on Windows) in SQLite `secrets` table. Keys never logged — `redact()` masks `sk-…`, `Bearer …`, `api_key=…`.
+If the hotkey is taken, change `hotkey` in settings. If the window disappears on focus loss, that is by design — reopen it from the tray. See [docs/development/troubleshooting.md](docs/development/troubleshooting.md).
 
-Providers: OpenAI, Anthropic, Gemini (OpenAI-compatible endpoint), Custom compatible (e.g. Ollama `http://localhost:11434/v1`). `Test` button pings the chat endpoint.
+## Build / Dev
 
-Env fallback for dev: `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / etc.
-
-## Commands
-
-| Command | Action |
-|---|---|
-| `/help` | list commands |
-| `/new` | new conversation |
-| `/clear` | clear view |
-| `/model <name>` | get/set model |
-| `/history` | history panel |
-| `/translate /rewrite /summarize /explain /analyze /reply` | prompt templates (`{{var}}` filled from trailing text) |
-| `/email-reply /requirement-review` | workflows |
-
-Slash palette: type `/`, filter exact › prefix › substring › fuzzy, ↑↓ navigate, Enter select, Esc close, click selects.
-
-## Workflows
-
-Steps: `prompt` (templateId + inputVar/outputVar) → `transform` (append/prepend/replace/upper/lower) → `conditional` (contains → then/else) → `user-input` → `output` (must be last). Max 20 steps, conditional depth ≤ 2. Engine returns `{ok|failed|aborted}` with per-step history; abort via Esc/cancel.
-
-## Data location
-
-`%APPDATA%\MiniAI\miniai.db` (WAL mode). Tables: meta (schema_version=1), conversations, messages, templates, workflows, runs, secrets, settings. Override with `MINIAI_DATA_DIR`.
-
-## Troubleshooting
-
-- Hotkey taken: change `hotkey` in settings (letters/digits joined by `+`).
-- Window hides on blur by design (launcher behavior); click tray to reshow.
-- 401 → wrong key; 429 → rate limit; timeout 60 s; model error → check model name.
-- No icon? `assets/icon.svg` placeholder — replace with PNG for tray/installer.
-
-## Tests
+Commands from `package.json`:
 
 ```powershell
-npx vitest run
+npm run build:main      # compile Electron main (tsc)
+npm run build:renderer  # copy renderer assets
+npm run dev             # build + run Electron
+npx vitest run          # tests (npm test runs vitest run)
+npm test                # tests (vitest run)
+npm run typecheck       # typecheck main (tsc --noEmit)
+npm run dist            # build + electron-builder --win portable
 ```
 
-Unit: slash, providers (fake SSE, no network), workflow, settings, db, secrets-redaction.
+Setup details: [docs/development/setup.md](docs/development/setup.md). Testing details: [docs/development/testing.md](docs/development/testing.md). Architecture: [docs/architecture/overview.md](docs/architecture/overview.md).
 
-## Requirements
+## Status
 
-- Windows x64.
-- Node >= 22.5 for tests (`node:sqlite` via `process.getBuiltinModule`).
+v0.1.0 pre-release / experimental.
 
-## Known limitation
+**Working:** popup / hotkey / tray, chat + streaming + cancel, slash + templates, workflows, history, `Tab` switching, router.
 
-Electron 33.4.11 bundles Node 20.18.x, but `node:sqlite`
-(`src/main/db/sqlite.ts`) requires Node 22.5+. The packaged app
-therefore fails to open SQLite. Dev and tests on Node >= 22.5 work.
-Documented as-is; upgrading Electron is a separate decision.
+**Implemented, needs real-runtime verification:** Agent Mode adapters (OpenCode HTTP-SSE, Claude / Codex CLI-JSONL) versus live runtimes. Mocked tests only, no real runtime connected.
+
+**Planned:** live runtime verification, installer release, PNG icon.
+
+**Known issues:**
+
+- Packaged app fails to open SQLite: Electron 33 bundles Node 20.18.x, but `node:sqlite` needs 22.5+. Dev and tests on Node >= 22.5 work.
+- Tray icon missing until PNG ships (`assets/icon.svg` is a placeholder).
+
+**Screenshots wanted:** no screenshots exist yet (`assets/` has only the `icon.svg` placeholder). Contributions welcome for: popup, slash palette, workflow run.
+
+Details: [docs/product/implementation-status.md](docs/product/implementation-status.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Start with [docs/](docs/README.md) and [AGENTS.md](AGENTS.md).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
