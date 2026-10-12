@@ -31,7 +31,7 @@ Press `Alt+Space`, type, get an answer, dismiss. No tab-switching, no copy-paste
 
 **Slash commands and prompt templates**
 
-- Builtins: `/help` `/new` `/clear` `/model` (chat-only) `/history`.
+- Builtins: `/help` `/new` `/clear` `/model` (chat-only) `/history` `/settings`.
 - Templates: `/translate` `/rewrite` `/summarize` `/explain` `/analyze` `/reply`.
 - Workflows: `/email-reply` `/requirement-review`.
 - Palette: type `/`, ranked exact > prefix > substring > fuzzy. Arrows + `Enter` + `Esc` + click. Unknown commands show top-3 suggestions.

@@ -6,8 +6,11 @@
   chat providers, agent runtimes, slash registry, secret/settings stores.
 - **shared** (`src/shared/`): IPC channel names, types, mode-utils.
   Must stay main+renderer safe (no Node/Electron imports).
-- **renderer** (`src/renderer/`): plain JS/CSS popup (480×640, frameless).
-  Talks to main only via preload-exposed IPC.
+- **renderer** (`src/renderer/`): plain JS/CSS Spotlight popup (640 content
+  width, auto-height 72–560, window==panel (no shadow, no pad), transparent frameless).
+  Talks to main only via preload-exposed IPC. Sends `miniai:resize` with
+  panel height; main clamps and sizes the window. Bundled fonts only
+  (`fonts/`, Geist + JetBrains Mono, OFL) — no remote links. Dark only.
 
 ## IPC
 
