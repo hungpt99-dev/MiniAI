@@ -3,3 +3,7 @@ dist/
 release/
 *.log
 logs/
+.env
+*.db*
+*.sqlite*
+coverage/

@@ -56,3 +56,15 @@ npx vitest run
 ```
 
 Unit: slash, providers (fake SSE, no network), workflow, settings, db, secrets-redaction.
+
+## Requirements
+
+- Windows x64.
+- Node >= 22.5 for tests (`node:sqlite` via `process.getBuiltinModule`).
+
+## Known limitation
+
+Electron 33.4.11 bundles Node 20.18.x, but `node:sqlite`
+(`src/main/db/sqlite.ts`) requires Node 22.5+. The packaged app
+therefore fails to open SQLite. Dev and tests on Node >= 22.5 work.
+Documented as-is; upgrading Electron is a separate decision.
