@@ -13,14 +13,16 @@
     "typecheck": "tsc -p tsconfig.main.json --noEmit"
   },
   "devDependencies": {
+    "@fontsource/geist": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
     "@types/node": "^22.7.0",
-    "electron": "^33.0.0",
+    "electron": "^37.10.3",
     "electron-builder": "^25.1.8",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   },
   "allowScripts": {
-    "electron@33.4.11": true,
+    "electron@37.10.3": true,
     "esbuild@0.21.5": true
   }
 }

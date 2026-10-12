@@ -7,7 +7,7 @@ const workflows = [{ trigger: '/email-reply', label: 'Email', description: 'w', 
 describe('slash registry', () => {
   it('merges builtin+prompt+workflow without dupes', () => {
     const reg = buildRegistry({ prompts, workflows });
-    expect(reg.length).toBe(5 + 2);
+    expect(reg.length).toBe(6 + 2);
     expect(reg[0].trigger).toBe('/help');
   });
   it('exact beats prefix beats fuzzy', () => {

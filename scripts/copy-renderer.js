@@ -5,7 +5,13 @@ const src = path.join(__dirname, '..', 'src', 'renderer');
 const dst = path.join(__dirname, '..', 'dist', 'renderer');
 fs.mkdirSync(dst, { recursive: true });
 for (const f of fs.readdirSync(src)) {
-  fs.copyFileSync(path.join(src, f), path.join(dst, f));
+  const s = path.join(src, f);
+  const d = path.join(dst, f);
+  if (fs.statSync(s).isDirectory()) {
+    fs.cpSync(s, d, { recursive: true });
+  } else {
+    fs.copyFileSync(s, d);
+  }
 }
 console.log('renderer copied to', dst);
 // assets -> dist/assets (tray icon, installer)

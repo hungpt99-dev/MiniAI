@@ -33,6 +33,7 @@ const api = {
   runtimeList: () => ipcRenderer.invoke(IpcChannels.runtimeList),
   runtimeRefresh: () => ipcRenderer.invoke(IpcChannels.runtimeRefresh),
   cancel: (requestId?: string) => ipcRenderer.send(IpcChannels.chatCancel, requestId),
+  resize: (contentHeight: number) => ipcRenderer.send(IpcChannels.resize, contentHeight),
   onStream: (cb: (ev: { token: string; done: boolean; conversationId?: string; requestId?: string }) => void) => {
     const fn = (_e: unknown, data: { token: string; done: boolean; conversationId?: string; requestId?: string }) => cb(data);
     ipcRenderer.on(IpcChannels.chatStream, fn);

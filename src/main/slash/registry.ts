@@ -12,6 +12,7 @@ const BUILTINS: SlashEntry[] = [
   { trigger: '/clear', label: 'Clear', description: 'Clear current messages', source: 'builtin', action: 'clear', scope: 'all' },
   { trigger: '/model', label: 'Model', description: 'Switch model (usage: /model <name>)', source: 'builtin', action: 'model', scope: 'chat' },
   { trigger: '/history', label: 'History', description: 'Show conversation history', source: 'builtin', action: 'history', scope: 'all' },
+  { trigger: '/settings', label: 'Settings', description: 'Open settings', source: 'builtin', action: 'settings', scope: 'all' },
 ];
 
 function isSubsequence(query: string, target: string): boolean {
@@ -79,8 +80,7 @@ export function resolveSlash(entries: SlashEntry[], trigger: string, mode?: Mode
   const found = entries.find((e) => e.trigger === trigger);
   if (found) {
     if (mode && found.scope && found.scope !== 'all' && found.scope !== mode) {
-      const q = trigger.replace(/^\//, '');
-      return { suggestions: rankMatches(filterScope(entries, mode), q, 3) };
+      return { found, suggestions: [] }; // caller reports scope mismatch
     }
     return { found, suggestions: [] };
   }

@@ -8,54 +8,57 @@
 </head>
 <body>
 <div id="app">
-  <header id="titlebar">
-    <span>MiniAI</span>
-    <div>
-      <button id="btn-history" title="History">☰</button>
-      <button id="btn-settings" title="Settings">⚙</button>
-      <button id="btn-hide" title="Hide (Esc)">×</button>
+  <div class="panel" id="panel">
+    <header class="bar">
+      <svg id="search-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#B8F26B" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="M16 16l4.5 4.5"></path></svg>
+      <textarea id="input" rows="1" placeholder="Ask MiniAI anything…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Prompt" class="scroll"></textarea>
+      <span id="hotkey-hint" aria-hidden="true"><span class="k">Alt</span> <span class="k">Space</span></span>
+      <div id="modebar" role="tablist" aria-label="Mode" class="hidden">
+        <button id="tab-chat" role="tab" aria-selected="true" class="tab active">Chat</button>
+        <button id="tab-agent" role="tab" aria-selected="false" class="tab">Agent</button>
+        <button id="runtime" title="Agent runtime" class="hidden" aria-label="Agent runtime">opencode</button>
+        <span id="mode-hint" title="Tab switches mode"><span class="k">Tab</span></span>
+      </div>
+    </header>
+    <div class="view scroll hidden" id="view">
+      <div id="palette" class="scroll hidden" role="listbox" aria-label="Commands"></div>
+      <div id="answer-meta" class="hidden"><span class="dot" aria-hidden="true"></span><span id="model-name">gpt-4o-mini</span></div>
+      <div id="messages" class="scroll hidden" aria-live="polite"></div>
+      <div id="actions" class="hidden">
+        <button id="btn-copy">Copy</button>
+        <button id="btn-followup">Follow up</button>
+        <button id="btn-newchat">New chat</button>
+      </div>
+      <aside id="settings" class="hidden" aria-label="Settings">
+        <div class="set-head"><h3>Settings</h3><button id="btn-settings-back" aria-label="Back" title="Back (Esc)">←</button></div>
+        <div class="fld"><span class="flab">Provider</span><div class="seg" id="set-prov-seg" role="group" aria-label="Provider">
+          <button data-prov="openai" class="on">OpenAI</button><button data-prov="anthropic">Anthropic</button><button data-prov="gemini">Gemini</button><button data-prov="compatible">Custom</button>
+        </div></div>
+        <label class="fld"><span class="flab">API key</span><input id="set-apikey" type="password" placeholder="sk-…" class="mono" /></label>
+        <div class="note">Encrypted on this device with Windows DPAPI.</div>
+        <label class="fld"><span class="flab">Model</span><input id="set-model" class="mono" /></label>
+        <label class="fld hidden" id="fld-baseurl"><span class="flab">Base URL</span><input id="set-baseurl" placeholder="optional" class="mono" /></label>
+        <label class="fld"><span class="flab">OpenCode URL</span><input id="set-opencode" placeholder="http://localhost:4096" class="mono" /></label>
+        <label class="fld"><span class="flab">Claude bin</span><input id="set-claudebin" placeholder="claude" class="mono" /></label>
+        <label class="fld"><span class="flab">Codex bin</span><input id="set-codexbin" placeholder="codex" class="mono" /></label>
+        <label class="fld"><span class="flab">Agent cwd</span><input id="set-agentcwd" placeholder="optional" class="mono" /></label>
+        <div class="hotkey-row"><span>Global hotkey</span><span><span class="k">Alt</span> <span class="k">Space</span></span></div>
+        <div class="row save-row">
+          <button id="btn-save-settings">Save changes</button>
+        </div>
+        <div class="row test-row">
+          <button id="btn-test-conn">Test</button>
+          <span id="settings-status" role="status"></span>
+        </div>
+      </aside>
+      <aside id="history" class="hidden" aria-label="History">
+        <div class="set-head"><h3>History</h3><button id="btn-history-back" aria-label="Back" title="Back (Esc)">←</button></div>
+        <div class="row"><button id="btn-new">+ New chat</button></div>
+        <ul id="history-list"></ul>
+      </aside>
     </div>
-  </header>
-  <div id="modebar" role="tablist" aria-label="Mode">
-    <button id="tab-chat" role="tab" aria-selected="true" class="tab active">Chat</button>
-    <button id="tab-agent" role="tab" aria-selected="false" class="tab">Agent</button>
-    <select id="runtime" title="Agent runtime" class="hidden">
-      <option value="opencode">opencode</option><option value="claude">claude</option><option value="codex">codex</option>
-    </select>
-    <span id="mode-hint" title="Tab switches mode">Tab ↵</span>
+    <footer id="hints"><span id="hint-nav"><span class="k">↑↓</span> navigate <span class="k">↵</span> select <span class="k">Esc</span> close</span><span id="hint-multi" class="hidden"><span class="k">Enter</span> send <span class="k">Shift Enter</span> new line</span> <span class="sp"></span><span id="hist-note">Local history on</span><button id="btn-history" class="fbtn" aria-label="History" title="History">☰</button><button id="btn-settings" class="fbtn" aria-label="Settings" title="Settings">⚙</button><button id="btn-send" class="fbtn send" aria-label="Send" title="Send (Enter)">➤</button></footer>
   </div>
-  <div id="messages"></div>
-  <div id="palette" class="hidden"></div>
-  <footer>
-    <input id="input" type="text" placeholder="Ask anything…  ( / for commands )" autocomplete="off" />
-    <button id="btn-send">➤</button>
-  </footer>
-  <aside id="settings" class="hidden">
-    <h3>Settings</h3>
-    <label>Provider <select id="set-provider">
-      <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
-      <option value="gemini">Gemini</option><option value="compatible">Compatible</option>
-    </select></label>
-    <label>Model <input id="set-model" /></label>
-    <label>Base URL <input id="set-baseurl" placeholder="optional" /></label>
-    <label>API key <input id="set-apikey" type="password" placeholder="sk-…" /></label>
-    <label>Theme <select id="set-theme"><option value="light">light</option><option value="dark">dark</option></select></label>
-    <label>Agent runtime <select id="set-runtime"><option value="opencode">opencode</option><option value="claude">claude</option><option value="codex">codex</option></select></label>
-    <label>OpenCode URL <input id="set-opencode" placeholder="http://localhost:4096" /></label>
-    <label>Claude bin <input id="set-claudebin" placeholder="claude" /></label>
-    <label>Codex bin <input id="set-codexbin" placeholder="codex" /></label>
-    <label>Agent cwd <input id="set-agentcwd" placeholder="optional" /></label>
-    <div class="row">
-      <button id="btn-save-settings">Save</button>
-      <button id="btn-test-conn">Test</button>
-      <span id="settings-status"></span>
-    </div>
-  </aside>
-  <aside id="history" class="hidden">
-    <h3>History</h3>
-    <div class="row"><button id="btn-new">+ New chat</button></div>
-    <ul id="history-list"></ul>
-  </aside>
 </div>
 <script src="app.js"></script>
 </body>

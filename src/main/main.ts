@@ -20,10 +20,14 @@ async function startup(): Promise<void> {
   createPopup();
   createTray();
   const hotkey = getSettings(db).hotkey || 'Alt+Space';
-  try {
-    globalShortcut.register(hotkey, () => togglePopup());
-  } catch {
-    globalShortcut.register('Alt+Space', () => togglePopup());
+  // register() returns false (no throw) on conflict — never fail silently.
+  const fallback = hotkey === 'Alt+Space' ? 'Alt+X' : 'Alt+Space';
+  if (globalShortcut.register(hotkey, () => togglePopup())) {
+    console.log(`[MiniAI] hotkey registered: ${hotkey}`);
+  } else if (globalShortcut.register(fallback, () => togglePopup())) {
+    console.warn(`[MiniAI] hotkey ${hotkey} taken, using fallback ${fallback}`);
+  } else {
+    console.error(`[MiniAI] no hotkey registered (${hotkey}, ${fallback} both taken)`);
   }
 }
 

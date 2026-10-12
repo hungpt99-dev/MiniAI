@@ -10,6 +10,7 @@ import { testConnectivity } from './ai/providers';
 import { buildRegistry, querySlash, resolveSlash } from './slash/registry';
 import { runWorkflow } from './workflow/engine';
 import { routeRequest, type RouteInput } from './agent/router';
+import { setPopupHeight } from './popup';
 import { createOpencodeAdapter } from './agent/opencode';
 import { createClaudeAdapter, createCodexAdapter } from './agent/cli';
 import type { AgentRuntimeAdapter } from './agent/adapter';
@@ -17,6 +18,16 @@ import type { ChatMessage, Mode, RuntimeId, Settings } from '../shared/types';
 
 const aborters = new Map<string, AbortController>();
 let seq = 0;
+
+// IPC serializes non-Error rejections as "[object Object]" — normalize at the boundary
+// so the real cause (e.g. `auth: ...`, `runtime-unavailable: ...`) reaches the UI.
+function asError(e: unknown): Error {
+  if (e instanceof Error) return e;
+  const o = e as { code?: string; message?: string };
+  if (o?.code && o?.message) return new Error(`${o.code}: ${o.message}`);
+  try { return new Error(`Unknown error: ${JSON.stringify(e)}`); }
+  catch { return new Error(`Unknown error: ${String(e)}`); }
+}
 
 function db(): DatabaseSync {
   return (globalThis as unknown as { __miniaiDb: DatabaseSync }).__miniaiDb;
@@ -75,6 +86,8 @@ async function runSend(
     addMessage(d, conversationId, 'assistant', full);
     sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
     return full;
+  } catch (e) {
+    throw asError(e);
   } finally {
     aborters.delete(requestId);
   }
@@ -150,6 +163,8 @@ export function registerIpc(): void {
       );
       sender.send(IpcChannels.chatStream, { token: '', done: true });
       return result;
+    } catch (e) {
+      throw asError(e);
     } finally {
       aborters.delete(requestId);
     }
@@ -158,6 +173,11 @@ export function registerIpc(): void {
   ipcMain.on(IpcChannels.chatCancel, (_e, requestId?: string) => {
     if (requestId) aborters.get(requestId)?.abort();
     else for (const a of aborters.values()) a.abort();
+  });
+
+  ipcMain.on(IpcChannels.resize, (_e, h: unknown) => {
+    if (typeof h !== 'number' || !Number.isFinite(h)) return;
+    setPopupHeight(h);
   });
 
   // Chat: streams tokens via `chatStream` event, resolves with full text.
@@ -179,6 +199,8 @@ export function registerIpc(): void {
       addMessage(d, conversationId, 'assistant', full);
       sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
       return full;
+    } catch (e) {
+      throw asError(e);
     } finally {
       aborters.delete(requestId);
     }

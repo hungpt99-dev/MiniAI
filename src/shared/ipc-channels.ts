@@ -21,5 +21,6 @@ export const IpcChannels = {
   runWorkflow: 'miniai:run-workflow',
   slashQuery: 'miniai:slash-query',
   slashResolve: 'miniai:slash-resolve',
+  resize: 'miniai:resize',
 } as const;
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels];
