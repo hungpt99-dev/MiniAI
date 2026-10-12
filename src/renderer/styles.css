@@ -1,0 +1,32 @@
+:root { --bg: #fff; --fg: #111; --muted: #666; --accent: #2563eb; --panel: #f3f4f6; --border: #e5e7eb; }
+[data-theme="dark"] { --bg: #111318; --fg: #e8eaf0; --muted: #9aa0ae; --accent: #60a5fa; --panel: #1b1e25; --border: #2a2f3a; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { font: 13px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+#app { display: flex; flex-direction: column; height: 100vh; }
+#titlebar { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px;
+  background: var(--panel); border-bottom: 1px solid var(--border); -webkit-app-region: drag; }
+#titlebar button { -webkit-app-region: no-drag; }
+button { cursor: pointer; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; padding: 3px 8px; }
+#messages { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.msg { padding: 7px 9px; border-radius: 8px; max-width: 100%; white-space: pre-wrap; word-break: break-word; }
+.msg.user { background: var(--panel); align-self: flex-end; }
+.msg.assistant { border: 1px solid var(--border); align-self: flex-start; width: 100%; }
+.msg pre { background: #0d1117; color: #e6edf3; padding: 8px; border-radius: 6px; overflow-x: auto; }
+.msg code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+footer { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border); position: relative; }
+#input { flex: 1; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--fg); }
+#palette { position: absolute; left: 8px; right: 8px; bottom: 52px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 8px; max-height: 220px; overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,.15); z-index: 10; }
+#palette .item { padding: 7px 10px; cursor: pointer; }
+#palette .item.active, #palette .item:hover { background: var(--panel); }
+#palette .item small { color: var(--muted); margin-left: 6px; }
+.hidden { display: none !important; }
+aside { position: absolute; top: 37px; right: 0; width: 300px; max-height: calc(100% - 100px); overflow-y: auto;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.15); }
+aside label { display: block; margin: 6px 0; }
+aside input, aside select { width: 100%; padding: 5px; margin-top: 2px; }
+aside .row { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+#history-list { list-style: none; padding: 0; }
+#history-list li { padding: 6px; border-bottom: 1px solid var(--border); cursor: pointer; }
+#history-list li:hover { background: var(--panel); }

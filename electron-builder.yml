@@ -1,0 +1,19 @@
+appId: com.miniai.app
+productName: MiniAI
+directories:
+  output: release
+files:
+  - dist/**/*
+  - package.json
+win:
+  signAndEditExecutable: false
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+portable:
+  artifactName: MiniAI-portable.exe

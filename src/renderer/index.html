@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MiniAI</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="app">
+  <header id="titlebar">
+    <span>MiniAI</span>
+    <div>
+      <button id="btn-history" title="History">☰</button>
+      <button id="btn-settings" title="Settings">⚙</button>
+      <button id="btn-hide" title="Hide (Esc)">×</button>
+    </div>
+  </header>
+  <div id="messages"></div>
+  <div id="palette" class="hidden"></div>
+  <footer>
+    <input id="input" type="text" placeholder="Ask anything…  ( / for commands )" autocomplete="off" />
+    <button id="btn-send">➤</button>
+  </footer>
+  <aside id="settings" class="hidden">
+    <h3>Settings</h3>
+    <label>Provider <select id="set-provider">
+      <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
+      <option value="gemini">Gemini</option><option value="compatible">Compatible</option>
+    </select></label>
+    <label>Model <input id="set-model" /></label>
+    <label>Base URL <input id="set-baseurl" placeholder="optional" /></label>
+    <label>API key <input id="set-apikey" type="password" placeholder="sk-…" /></label>
+    <label>Theme <select id="set-theme"><option value="light">light</option><option value="dark">dark</option></select></label>
+    <div class="row">
+      <button id="btn-save-settings">Save</button>
+      <button id="btn-test-conn">Test</button>
+      <span id="settings-status"></span>
+    </div>
+  </aside>
+  <aside id="history" class="hidden">
+    <h3>History</h3>
+    <div class="row"><button id="btn-new">+ New chat</button></div>
+    <ul id="history-list"></ul>
+  </aside>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
