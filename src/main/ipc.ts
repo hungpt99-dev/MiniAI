@@ -1,4 +1,4 @@
-import { dialog, globalShortcut, ipcMain, shell } from 'electron';
+import { globalShortcut, ipcMain } from 'electron';
 import type { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -31,7 +31,8 @@ import { readInstalledWorkflows } from './extensions/store';
 import { parseWorkflowDoc, runExtWorkflow } from './extensions/workflows';
 import type { ExtAction, ExtSourceInput } from '../shared/types';
 import type { SourceInput } from './extensions/sources';
-import { setPopupHeight, togglePopup } from './popup';
+import { setPopupHeight, togglePopup, getPopup } from './popup';
+import { openExternalUrl, pickFile, pickFolder, revealPath } from './app/dialogs';
 import type { ChatMessage, Mode, Settings } from '../shared/types';
 
 const aborters = new Map<string, AbortController>();
@@ -812,8 +813,20 @@ export function registerIpc(): void {
   ipcMain.handle(IpcChannels.agentLog, () => getLatestLog());
 
   ipcMain.handle(IpcChannels.agentPickFolder, async () => {
-    const r = await dialog.showOpenDialog({ properties: ['openDirectory'] });
-    return r.canceled ? null : (r.filePaths[0] || null);
+    // Parent-modal picker through the dialog lock (no blur-hide, Esc cancels
+    // in the dialog). Blocked system paths reject for the UI; cancel is null.
+    try {
+      const s = getSettings(db());
+      return await pickFolder(getPopup(), {
+        defaultPath: s.agentCwd || undefined,
+        cwd: s.agentCwd || undefined,
+        allowedRoots: s.agentAllowedRoots?.length ? s.agentAllowedRoots : undefined,
+        explicitRoots: s.agentAllowedRoots || [],
+      });
+    } catch (e) {
+      if ((e as Error)?.message?.startsWith('blocked path')) throw asError(e);
+      return null;
+    }
   });
 
   ipcMain.handle(IpcChannels.platform, () => platformInfo());
@@ -826,12 +839,7 @@ export function registerIpc(): void {
   ipcMain.handle(IpcChannels.openPrivacySettings, async () => {
     // macOS Files and Folders pane; other platforms have no equivalent.
     if (platform().key !== 'darwin') return false;
-    try {
-      await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders');
-      return true;
-    } catch {
-      return false;
-    }
+    return openExternalUrl(getPopup(), 'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders');
   });
 
   ipcMain.handle(IpcChannels.defaultFolders, () => {
@@ -847,15 +855,7 @@ export function registerIpc(): void {
 
   ipcMain.handle(IpcChannels.runs, () => listRuns(50));
 
-  ipcMain.handle(IpcChannels.reveal, async (_e, dir: string) => {
-    try {
-      if (typeof dir !== 'string' || !dir.trim()) return false;
-      const err = await shell.openPath(dir);
-      return !err;
-    } catch {
-      return false;
-    }
-  });
+  ipcMain.handle(IpcChannels.reveal, async (_e, dir: string) => revealPath(getPopup(), dir));
 
   // Undo a run's reversible ops in reverse order, through the normal
   // permission layer (approvals + policy apply to every reversal).
@@ -1054,14 +1054,7 @@ export function registerIpc(): void {
           return { filename: `${rec.name}.workflow.json`, content: fs.readFileSync(loc, 'utf8') };
         }
         case 'pickFile': {
-          const r = await dialog.showOpenDialog({
-            properties: ['openFile'],
-            filters: [
-              { name: 'Extension files', extensions: ['zip', 'json', 'md'] },
-              { name: 'All files', extensions: ['*'] },
-            ],
-          });
-          return r.canceled ? null : (r.filePaths[0] || null);
+          return pickFile(getPopup());
         }
         default:
           throw new Error(`unknown ext action: ${(a as { action: string }).action}`);

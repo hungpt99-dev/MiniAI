@@ -4,6 +4,7 @@ import { getDb, closeDb } from './db/db';
 import { seedBuiltins } from './db/templates';
 import { getSettings } from './store/settings';
 import { createPopup, togglePopup, getPopup } from './popup';
+import { resetDialogLock } from './app/dialogs';
 import { createTray } from './tray';
 import { registerIpc, refreshToggleHotkey, applyLaunchAtLogin } from './ipc';
 import { extService, shutdownExtensions } from './extensions/index';
@@ -78,6 +79,7 @@ void startup();
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  resetDialogLock();
   void shutdownExtensions().finally(() => closeDb());
 });
 app.on('window-all-closed', () => { /* stay in tray */ });

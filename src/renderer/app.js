@@ -748,6 +748,7 @@ document.addEventListener('keydown', (e) => {
   const obOpen = currentView === 'onboard';
   const sugBox = $('suggest');
   if (sugBox && !sugBox.classList.contains('hidden')) { e.stopPropagation(); hideSuggest(); inputEl.focus(); return; }
+  if (dismissRootConfirm()) { e.stopPropagation(); inputEl.focus(); return; } // Esc drops the add-folder confirm first
   if (setOpen || histOpen || extOpen || obOpen) { // dismiss panels before collapsing results
     e.stopPropagation();
     if (currentView === 'onboard') { void skipOnboard(); return; }
@@ -1119,6 +1120,67 @@ function paintAgentRoots(roots) {
   });
 }
 
+function dismissRootConfirm() {
+  const old = $('agent-root-confirm');
+  if (old) { old.remove(); requestResize(); return true; }
+  return false;
+}
+
+function rootNotice(text) {
+  const ul = $('agent-roots');
+  if (!ul) return;
+  dismissRootConfirm();
+  const li = document.createElement('li');
+  li.id = 'agent-root-confirm';
+  const span = document.createElement('span');
+  span.textContent = text;
+  const ok = document.createElement('button');
+  ok.type = 'button';
+  ok.textContent = 'Dismiss';
+  ok.onclick = () => { dismissRootConfirm(); };
+  li.appendChild(span);
+  li.appendChild(ok);
+  ul.appendChild(li);
+  requestResize();
+}
+
+// Inline add-folder confirm: touches only the settings list, so the composer
+// draft, scroll position and any running agent are left alone.
+function confirmAddRoot(picked) {
+  const ul = $('agent-roots');
+  if (!ul) return;
+  dismissRootConfirm();
+  const li = document.createElement('li');
+  li.id = 'agent-root-confirm';
+  const span = document.createElement('span');
+  span.textContent = 'Add ' + picked + ' to allowed folders?';
+  span.title = picked;
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.textContent = 'Add';
+  add.onclick = async () => {
+    try {
+      const s = await window.nexio.getSettings();
+      const next = [...(s.agentAllowedRoots || [])];
+      if (!next.includes(picked)) next.push(picked);
+      await window.nexio.setSettings({ agentAllowedRoots: next });
+      paintAgentRoots(next);
+    } catch (err) { rootNotice(errText(err)); return; }
+    dismissRootConfirm();
+    requestResize();
+  };
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = 'Cancel';
+  cancel.onclick = () => { dismissRootConfirm(); };
+  li.appendChild(span);
+  li.appendChild(add);
+  li.appendChild(cancel);
+  ul.appendChild(li);
+  add.focus();
+  requestResize();
+}
+
 function ruleLabel(r) {
   if (!r) return '';
   if (r.scope === 'exact-command') return `shell: ${r.command || ''}`;
@@ -1227,10 +1289,9 @@ if ($('btn-agent-add-root')) $('btn-agent-add-root').onclick = async () => {  tr
     if (!picked) return;
     const s = await window.nexio.getSettings();
     const next = [...(s.agentAllowedRoots || [])];
-    if (!next.includes(picked)) next.push(picked);
-    await window.nexio.setSettings({ agentAllowedRoots: next });
-    paintAgentRoots(next);
-  } catch { /* picker cancelled */ }
+    if (next.includes(picked)) return;
+    confirmAddRoot(picked);
+  } catch (err) { rootNotice(errText(err)); }
 };
 (function initAgentChrome() {
   paintChip();
