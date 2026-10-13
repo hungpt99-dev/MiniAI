@@ -2872,13 +2872,19 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
         del.setAttribute('aria-label', 'Delete attachments');
         del.addEventListener('click', function (ev) {
           ev.stopPropagation();
-          try {
+          // why: the menu stays until the main-process delete lands — a
+          // failure keeps its Retry (this button), never a fake "cleared".
+          function done() {
             delete sentStash[cid];
-            if (window.nexio && window.nexio.attachClear && cid) {
-              window.nexio.attachClear(cid).catch(function () {});
-            }
             if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
             announce('Delete attachments — cleared');
+          }
+          try {
+            if (window.nexio && window.nexio.attachClear && cid) {
+              window.nexio.attachClear(cid).then(done, function () {
+                showError('Delete attachments failed — Retry');
+              });
+            } else done();
           } catch (e2) {}
         });
         wrap.appendChild(del);
