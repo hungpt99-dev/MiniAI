@@ -1,5 +1,5 @@
-// Full E2E suite driving the real MiniAI popup via CDP + pywinauto hotkeys.
-// Visibility = count of UIA top-level 'MiniAI' matches (0 hidden/closed, 1 shown).
+// Full E2E suite driving the real Nexio popup via CDP + pywinauto hotkeys.
+// Visibility = count of UIA top-level 'Nexio' matches (0 hidden/closed, 1 shown).
 // window.close() destroys the target -> reconnect() after any close.
 const { execFile } = require('child_process');
 const fs = require('fs');
@@ -18,7 +18,7 @@ function py(code) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let id = 0;
-const VIS_PY = "from pywinauto.findwindows import find_elements\nprint('N:'+str(len(find_elements(title='MiniAI',top_level_only=True,backend='uia'))))";
+const VIS_PY = "from pywinauto.findwindows import find_elements\nprint('N:'+str(len(find_elements(title='Nexio',top_level_only=True,backend='uia')+find_elements(title='MiniAI',top_level_only=True,backend='uia'))))";
 const HOTKEY_FOR = (hk) => (/alt\+x/i.test(hk || '') ? '%x' : '%{SPACE}');
 let HOTKEY_PY = "import sys; sys.argv=['x','show','%{SPACE}']; exec(open('e2e/hotkey_show.py').read())";
 let HIDE_PY = "import sys; sys.argv=['x','hide','%{SPACE}']; exec(open('e2e/hotkey_show.py').read())";
@@ -30,7 +30,7 @@ async function syncHotkey() {
     const k = HOTKEY_FOR(hs && hs.hotkey);
     HOTKEY_PY = "import sys; sys.argv=['x','show','" + k + "']; exec(open('e2e/hotkey_show.py').read())";
     HIDE_PY = "import sys; sys.argv=['x','hide','" + k + "']; exec(open('e2e/hotkey_show.py').read())";
-  } catch {}
+  } catch (e) { console.log('syncHotkey-fallback using default | ' + ((e && e.message) || e)); }
 }
 const SHOT_PY = "import sys; sys.argv=['x','NAME']; exec(open('e2e/shots.py').read())";
 const ensureVisible = async () => {
@@ -407,8 +407,8 @@ async function main() {
     trashOut = await ev(`window.__trash||''`);
     trashDone = await ev(`window.__trashDone||''`);
   } finally {
-    try { await ev(`{const s0=JSON.parse(window.__s0||'null');if(s0)await window.nexio.setSettings({provider:s0.provider,model:s0.model,baseUrl:(s0.baseUrl??''),agentAllowedRoots:s0.roots,agentCwd:s0.cwd,agentAlwaysAllow:s0.rules});}`); } catch {}
-    await new Promise((r) => toolFake.close(r));
+    try { await ev(`{const s0=JSON.parse(window.__s0||'null');if(s0)await window.nexio.setSettings({provider:s0.provider,model:s0.model,baseUrl:(s0.baseUrl??''),agentAllowedRoots:s0.roots,agentCwd:s0.cwd,agentAlwaysAllow:s0.rules});}`); } catch (e) { console.log('settings-restore-failed | ' + ((e && e.message) || e)); }
+    await Promise.race([new Promise((r) => toolFake.close(r)), sleep(2000).then(() => console.log('toolFake-close-timeout'))]);
   }
   check('trash-live-path', trashDone === 'done' && /true moved to trash/.test(trashOut) && !/staged at/.test(trashOut), `${trashDone} ${(trashOut || '').slice(0, 120)}`);
   check('trash-file-gone', !fs.existsSync(trashFile));
@@ -419,7 +419,7 @@ async function main() {
     await ev(`window.__tc=null;window.nexio.testConnectivity('compatible','e2e-model',${JSON.stringify(unauthBase)}).then(r=>{window.__tc=JSON.stringify(r)}).catch(e=>{window.__tc='err:'+e.message})`);
     await sleep(2500);
   } finally {
-    await new Promise((r) => unauth.close(r));
+    await Promise.race([new Promise((r) => unauth.close(r)), sleep(2000).then(() => console.log('unauth-close-timeout'))]);
   }
   const tc = await ev(`window.__tc||''`);
   check('conn-401-auth', tc.includes('"ok":false') && /auth|401/.test(tc), tc.slice(0, 120));
