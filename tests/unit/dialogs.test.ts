@@ -11,6 +11,7 @@ vi.mock('electron', () => ({
 import { dialog, shell } from 'electron';
 import type { BrowserWindow } from 'electron';
 import { __setPlatform, adapterFor } from '../../src/main/platform/index';
+import { IpcChannels } from '../../src/shared/ipc-channels';
 import {
   __resetDialogStateForTests,
   getDialogLockCount,
@@ -146,7 +147,7 @@ describe('pickFolder / pickFile', () => {
     await flush();
     expect((win.focus as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
     expect((win.show as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
-    expect(win.webContents.send).toHaveBeenCalledWith('nexio:popup-shown');
+    expect(win.webContents.send).toHaveBeenCalledWith(IpcChannels.popupShown);
   });
   it('reshows a hidden popup on the refocus tick', async () => {
     showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });

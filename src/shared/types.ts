@@ -85,7 +85,7 @@ export interface NexioError {
   message: string;
 }
 
-/** Single-channel extension management (nexio:ext). Renderer-safe: plain data only. */
+/** Single-channel extension management (the ext dispatch channel). Renderer-safe: plain data only. */
 export interface ExtSourceInput {
   sourceType: 'folder' | 'zip' | 'git' | 'paste' | 'file';
   path?: string;

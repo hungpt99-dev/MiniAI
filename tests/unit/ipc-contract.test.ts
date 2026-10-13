@@ -8,16 +8,19 @@ import { getSettings } from '../../src/main/store/settings';
 // Phase 1: IPC contract without external runtimes; legacy runtime keys
 // migrate to the built-in fallback, MiniAI DB reuse untouched.
 describe('ipc contract', () => {
-  it('channels share the nexio: prefix with no duplicates', () => {
+  it('channels share one prefix with no duplicates', () => {
     const vals = Object.values(IpcChannels);
+    // Prefix derived from a channel, never a second literal.
+    const prefix = IpcChannels.send.slice(0, IpcChannels.send.indexOf(':') + 1);
     expect(vals.length).toBeGreaterThan(10);
-    for (const v of vals) expect(v.startsWith('nexio:')).toBe(true);
+    for (const v of vals) expect(v.startsWith(prefix)).toBe(true);
     expect(new Set(vals).size).toBe(vals.length);
   });
   it('keeps the core chat/agent/data channels', () => {
+    const prefix = IpcChannels.send.slice(0, IpcChannels.send.indexOf(':') + 1);
     for (const k of ['send', 'chat', 'agentStart', 'agentApprove', 'agentStop',
       'getSettings', 'setSettings', 'slashQuery', 'ext', 'undo', 'runs'] as const) {
-      expect(IpcChannels[k]).toBe(`nexio:${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`);
+      expect(IpcChannels[k]).toBe(`${prefix}${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`);
     }
   });
   it('has no external-runtime channels', () => {
