@@ -111,6 +111,10 @@ describe('shouldSuppressBlur', () => {
     const win = mockWin({ getChildWindows: () => [child] });
     expect(shouldSuppressBlur(win)).toBe(true);
   });
+  it('ignores a merely visible (unfocused) child', () => {
+    const child = { isDestroyed: () => false, isFocused: () => false, isVisible: () => true };
+    expect(shouldSuppressBlur(mockWin({ getChildWindows: () => [child] }))).toBe(false);
+  });
   it('ignores destroyed children', () => {
     const child = { isDestroyed: () => true, isFocused: () => true, isVisible: () => true };
     expect(shouldSuppressBlur(mockWin({ getChildWindows: () => [child] }))).toBe(false);
@@ -238,6 +242,12 @@ describe('reveal / openExternal / openTarget', () => {
     openExternal.mockRejectedValue(new Error('denied'));
     await expect(openExternalUrl(mockWin(), 'https://example.com')).resolves.toBe(false);
     expect(openExternal).toHaveBeenCalledTimes(3);
+  });
+  it('trims whitespace before allowlisting and sending', async () => {
+    openExternal.mockResolvedValue({} as never);
+    await expect(openExternalUrl(mockWin(), '  https://example.com  ')).resolves.toBe(true);
+    expect(openExternal).toHaveBeenCalledWith('https://example.com');
+    await expect(openExternalUrl(mockWin(), '   file:///etc/passwd  ')).resolves.toBe(false);
   });
   it('holds the lock during shell opens', async () => {
     let seen = -1;

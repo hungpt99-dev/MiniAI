@@ -748,7 +748,7 @@ document.addEventListener('keydown', (e) => {
   const obOpen = currentView === 'onboard';
   const sugBox = $('suggest');
   if (sugBox && !sugBox.classList.contains('hidden')) { e.stopPropagation(); hideSuggest(); inputEl.focus(); return; }
-  if (dismissRootConfirm()) { e.stopPropagation(); inputEl.focus(); return; } // Esc drops the add-folder confirm first
+  if (dismissRootConfirm()) { e.stopPropagation(); if (rootConfirmPrior && document.contains(rootConfirmPrior)) rootConfirmPrior.focus(); else ($('btn-agent-add-root') || inputEl).focus(); rootConfirmPrior = null; return; } // Esc drops the add-folder confirm first, restoring prior focus
   if (setOpen || histOpen || extOpen || obOpen) { // dismiss panels before collapsing results
     e.stopPropagation();
     if (currentView === 'onboard') { void skipOnboard(); return; }
@@ -1125,6 +1125,9 @@ function dismissRootConfirm() {
   if (old) { old.remove(); requestResize(); return true; }
   return false;
 }
+// Element focused before the add-folder confirm stole focus (usually the
+// settings "Add folder" button) — Esc restores it instead of the composer.
+var rootConfirmPrior = null;
 
 function rootNotice(text) {
   const ul = $('agent-roots');
@@ -1177,6 +1180,7 @@ function confirmAddRoot(picked) {
   li.appendChild(add);
   li.appendChild(cancel);
   ul.appendChild(li);
+  rootConfirmPrior = document.activeElement;
   add.focus();
   requestResize();
 }

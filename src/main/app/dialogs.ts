@@ -73,7 +73,8 @@ export function shouldSuppressBlur(win?: BlurWindow): boolean {
     const kids = win?.getChildWindows?.() || [];
     for (const c of kids) {
       try {
-        if (!c.isDestroyed() && (c.isFocused() || c.isVisible())) return true;
+        // Focused only: a merely visible (unfocused) child must not pin the popup open.
+        if (!c.isDestroyed() && c.isFocused()) return true;
       } catch { /* half-dead child */ }
     }
   } catch { /* window gone */ }
@@ -171,7 +172,9 @@ export function validateFolderSelection(raw: string, opts: PickFolderOpts = {}):
   return { path: real, outsideAllowed: !isInsideRoots(resolved, allowed) };
 }
 
-/** Parent-modal folder picker. Cancel (or a gone window) resolves null, never rejects. */
+/** Parent-modal folder picker. Cancel (or a gone window) resolves null, never rejects.
+ * Returns the path only: validateFolderSelection's outsideAllowed stays internal —
+ * every renderer add-folder path already inline-confirms via confirmAddRoot. */
 export async function pickFolder(
   win: BrowserWindow | null | undefined,
   opts: PickFolderOpts = {},
@@ -245,7 +248,9 @@ export async function pickFile(win: BrowserWindow | null | undefined): Promise<s
   });
 }
 
-/** Reveal a folder in the OS file manager. Never throws. */
+/** Reveal a folder in the OS file manager. Never throws.
+ * No refocus: focus intentionally stays with the file manager the user asked to see
+ * (pickers refocus because their modal returns to the popup). */
 export async function revealPath(win: BrowserWindow | null | undefined, dir: string): Promise<boolean> {
   if (typeof dir !== 'string' || !dir.trim()) return false;
   return withDialogLock(win, async () => {
@@ -260,12 +265,15 @@ export async function revealPath(win: BrowserWindow | null | undefined, dir: str
 
 const EXTERNAL_ALLOW = /^(https?:|x-apple\.systempreferences:)/i;
 
-/** Open a URL with the OS handler. Only http(s) + the macOS settings scheme. Never throws. */
+/** Open a URL with the OS handler. Only http(s) + the macOS settings scheme. Never throws.
+ * No refocus: focus intentionally stays with the browser/settings app that opened. */
 export async function openExternalUrl(win: BrowserWindow | null | undefined, url: string): Promise<boolean> {
-  if (typeof url !== 'string' || !EXTERNAL_ALLOW.test(url.trim())) return false;
+  if (typeof url !== 'string') return false;
+  const clean = url.trim();
+  if (!EXTERNAL_ALLOW.test(clean)) return false;
   return withDialogLock(win, async () => {
     try {
-      await shell.openExternal(url);
+      await shell.openExternal(clean);
       return true;
     } catch {
       return false;
@@ -273,7 +281,8 @@ export async function openExternalUrl(win: BrowserWindow | null | undefined, url
   });
 }
 
-/** Agent app_open through the lock so the popup doesn't hide mid-open. Rejects on failure. */
+/** Agent app_open through the lock so the popup doesn't hide mid-open. Rejects on failure.
+ * No refocus: like the shell opens above, focus stays with the launched target. */
 export async function openTargetGuarded(
   win: BrowserWindow | null | undefined,
   target: string,

@@ -818,6 +818,7 @@ export function registerIpc(): void {
     try {
       const s = getSettings(db());
       return await pickFolder(getPopup(), {
+        // agentCwd seeds the picker ahead of lastUsedDir (pickFolder fallback) — keeps picks near the working folder.
         defaultPath: s.agentCwd || undefined,
         cwd: s.agentCwd || undefined,
         allowedRoots: s.agentAllowedRoots?.length ? s.agentAllowedRoots : undefined,
