@@ -349,8 +349,9 @@ $('btn-save-settings').onclick = async () => {
     model: $('set-model').value,
     agentCwd: $('set-agentcwd').value.trim(),
   };
-  if (settingsProvider === 'compatible' && $('set-baseurl').value.trim()) patch.baseUrl = $('set-baseurl').value.trim();
-  else if (settingsProvider !== 'compatible') patch.baseUrl = '';
+  // Custom keeps its own base URL (empty clears a stale one); other providers use their default.
+  if (settingsProvider === 'compatible') patch.baseUrl = $('set-baseurl').value.trim().replace(/\/+$/, '') || '';
+  else patch.baseUrl = '';
   if (settingsProvider === 'compatible' && $('set-sendtemp')) patch.sendTemperature = $('set-sendtemp').checked;
   patch.agentStopHotkey = $('set-stophotkey').value.trim() || 'Ctrl+Alt+Esc';
   const mc = parseInt($('set-maxcalls').value, 10);
@@ -386,10 +387,11 @@ $('btn-test-conn').onclick = async () => {
     btn.disabled = false;
   }, 16000);
   try {
-    // Unsaved panel values go straight through; the key field is never logged.
+    // Unsaved panel values only; the hidden base URL is ignored unless Custom. Key never logged.
+    const testBase = settingsProvider === 'compatible' ? $('set-baseurl').value.trim().replace(/\/+$/, '') : '';
     const r = await window.nexio.testConnectivity(
       settingsProvider, $('set-model').value.trim(),
-      $('set-baseurl').value.trim() || undefined, $('set-apikey').value);
+      testBase || undefined, $('set-apikey').value.trim() || undefined);
     clearTimeout(timer);
     if (r.ok) {
       const d = r.details || {};
@@ -429,7 +431,8 @@ async function refreshModelSuggestions() {
   const dl = $('model-list');
   if (!dl || !window.nexio.listModels) return;
   try {
-    const models = await window.nexio.listModels(settingsProvider, $('set-baseurl').value.trim() || undefined);
+    const sugBase = settingsProvider === 'compatible' ? $('set-baseurl').value.trim().replace(/\/+$/, '') : '';
+    const models = await window.nexio.listModels(settingsProvider, sugBase || undefined);
     dl.innerHTML = '';
     for (const m of (models || []).slice(0, 100)) {
       const o = document.createElement('option');
@@ -1904,7 +1907,10 @@ function renderOnboard() {
     $('ob-test').onclick = async () => {
       $('ob-status').textContent = 'Testing…';
       try {
-        const r = await window.nexio.testConnectivity(prov, $('ob-key').value, undefined);
+        // (provider, model, baseUrl, key): the stored model fills the missing input.
+        let obModel = '';
+        try { obModel = (await window.nexio.getSettings()).model || ''; } catch {}
+        const r = await window.nexio.testConnectivity(prov, obModel, undefined, $('ob-key').value.trim() || undefined);
         $('ob-status').textContent = r.ok ? 'OK' : ('Fail: ' + (r.error?.code || '') + ' ' + (r.error?.message || ''));
       } catch (e) { $('ob-status').textContent = errText(e); }
     };

@@ -19,4 +19,5 @@ export function getAdapter(provider: ProviderId): ProviderAdapter {
 }
 
 export { DEFAULT_MAX_OUTPUT_TOKENS, TEST_MAX_OUTPUT_TOKENS, TEST_MAX_REASONING_TOKENS, TEST_TIMEOUT_MS, CHAT_TIMEOUT_MS } from './constants';
+export { stripTrailingSlash, resolveBase } from './base';
 export type { NormalizedRequest, ProviderAdapter, ProviderCapabilities, ToolTurn } from './types';

@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { testConnectivity } from '../../src/main/ai/providers/testing';
+import { getAdapter, PROVIDER_ADAPTERS } from '../../src/main/ai/providers/index';
 import { TEST_MAX_OUTPUT_TOKENS, TEST_MAX_REASONING_TOKENS } from '../../src/main/ai/providers/constants';
 
 function okJson(body: unknown): Response {
@@ -79,5 +82,69 @@ describe('testConnectivity flow', () => {
     const r = await testConnectivity('openai', 'k', 'gpt-6-sol', undefined, down);
     expect(r.ok).toBe(false);
     expect(r.error?.kind).toBe('network');
+  });
+});
+
+describe('test fetch fix (mocked, no keys)', () => {
+  function probeFetch(seen: Array<{ url: string; auth: string }>) {
+    return (async (url: unknown, init: unknown) => {
+      const h = (init as { headers: Record<string, string> }).headers;
+      seen.push({ url: String(url), auth: h.Authorization || h['x-api-key'] || '' });
+      if (String(url).endsWith('/models')) return okJson({ data: [{ id: 'm1' }] });
+      return okJson({ choices: [{ message: { content: 'ok' } }] });
+    }) as unknown as typeof fetch;
+  }
+  it('strips trailing slashes: no //models or //chat/completions', async () => {
+    const seen: Array<{ url: string; auth: string }> = [];
+    const r = await testConnectivity('openai', 'k', 'm1', 'https://example.test/v1///', probeFetch(seen));
+    expect(r.ok).toBe(true);
+    expect(seen.length).toBeGreaterThan(0);
+    for (const s of seen) {
+      expect(s.url.startsWith('https://example.test/v1/')).toBe(true);
+      expect(s.url.replace('https://', '')).not.toContain('//');
+    }
+  });
+  it('empty or blank base falls back to the adapter default (stale never wins)', async () => {
+    const fallback = getAdapter('openai').defaultBaseUrl;
+    for (const base of ['', '   ', undefined]) {
+      const seen: Array<{ url: string; auth: string }> = [];
+      const r = await testConnectivity('openai', 'k', 'm1', base, probeFetch(seen));
+      expect(r.ok).toBe(true);
+      for (const s of seen) expect(s.url.startsWith(fallback)).toBe(true);
+    }
+  });
+  it('trims a padded key and model', async () => {
+    const seen: Array<{ url: string; auth: string }> = [];
+    const r = await testConnectivity('openai', '  unsaved-key  ', '  m1  ', undefined, probeFetch(seen));
+    expect(r.ok).toBe(true);
+    expect(r.details?.model).toBe('m1');
+    expect(seen.length).toBeGreaterThan(0);
+    for (const s of seen) expect(s.auth).toBe('Bearer unsaved-key');
+  });
+  it('keeps the catch-[] flow but reports listModels failure detail', async () => {
+    const a = PROVIDER_ADAPTERS.openai;
+    const orig = a.listModels;
+    a.listModels = (async () => { throw new Error('list down'); }) as typeof a.listModels;
+    try {
+      const seen: Array<{ url: string; auth: string }> = [];
+      const r = await testConnectivity('openai', 'k', 'm1', undefined, probeFetch(seen));
+      expect(r.ok).toBe(true);
+      expect(r.details?.modelsListed).toBe(0);
+      expect(r.details?.listError).toContain('list down');
+    } finally {
+      a.listModels = orig;
+    }
+  });
+});
+
+describe('settings panel wiring (source shape, no keys)', () => {
+  const flat = fs.readFileSync(path.join(process.cwd(), 'src', 'renderer', 'app.js'), 'utf8').replace(/\s+/g, ' ');
+  it('onboard Test passes (provider, model, baseUrl, key)', () => {
+    expect(flat).toContain("testConnectivity(prov, obModel, undefined, $('ob-key').value.trim() || undefined)");
+  });
+  it('settings Test gates baseUrl on compatible and trims the key', () => {
+    expect(flat).toContain("settingsProvider === 'compatible' ? $('set-baseurl')");
+    expect(flat).toContain("testBase || undefined, $('set-apikey').value.trim() || undefined");
+    expect(flat).toContain('listModels(settingsProvider, sugBase || undefined)');
   });
 });

@@ -1,6 +1,7 @@
 import type { ProviderId } from '../../../shared/types';
 import { providerError, toProviderError, type ProviderError } from '../errors/provider-error';
 import { getAdapter } from './index';
+import { resolveBase } from './base';
 import { TEST_MAX_OUTPUT_TOKENS, TEST_MAX_REASONING_TOKENS, TEST_TIMEOUT_MS } from './constants';
 import { fetchWithRetry } from './retry';
 
@@ -10,6 +11,8 @@ export interface TestDetails {
   ms: number;
   toolsOk: boolean;
   modelsListed: number;
+  /** listModels failure text (display-only; the probe still runs). Never a key. */
+  listError?: string;
 }
 
 export interface TestResult {
@@ -44,23 +47,29 @@ export async function testConnectivity(
   const start = Date.now();
   const t = withTimeout(parentSignal);
   try {
-    if (!apiKey && provider !== 'compatible') {
+    const key = (apiKey || '').trim();
+    const cleanModel = (model || '').trim();
+    if (!key && provider !== 'compatible') {
       return { ok: false, error: providerError('auth', 'no API key entered') };
     }
-    if (!model?.trim()) return { ok: false, error: providerError('bad_request', 'no model entered') };
+    if (!cleanModel) return { ok: false, error: providerError('bad_request', 'no model entered') };
     const adapter = getAdapter(provider);
-    const base = baseUrl || adapter.defaultBaseUrl;
-    const models = await adapter.listModels(apiKey, base, t.signal, fetchFn).catch(() => [] as string[]);
+    const base = resolveBase(baseUrl, adapter.defaultBaseUrl);
+    let listError: string | undefined;
+    const models = await adapter.listModels(key, base, t.signal, fetchFn).catch((e: unknown) => {
+      listError = e instanceof Error ? e.message : String(e);
+      return [] as string[];
+    });
     // Tiny completion: reasoning-aware limit/sampling handled by the adapter.
-    const budget = adapter.capabilitiesFor(model).reasoningAware ? TEST_MAX_REASONING_TOKENS : TEST_MAX_OUTPUT_TOKENS;
-    const built = adapter.buildRequest(model, {
+    const budget = adapter.capabilitiesFor(cleanModel).reasoningAware ? TEST_MAX_REASONING_TOKENS : TEST_MAX_OUTPUT_TOKENS;
+    const built = adapter.buildRequest(cleanModel, {
       messages: [{ role: 'user', content: 'Reply with exactly: ok' }],
       maxOutputTokens: budget,
       stream: false,
     }, base);
     // why: header placeholder swapped here so adapters stay fetch-free
     const res = await fetchWithRetry({
-      adapter, model, baseUrl: base, apiKey, body: built.body as Record<string, unknown>,
+      adapter, model: cleanModel, baseUrl: base, apiKey: key, body: built.body as Record<string, unknown>,
       signal: t.signal, fetchFn, streaming: false, debugLabel: `test:${provider}`,
     });
     if (!res.ok) {
@@ -73,8 +82,8 @@ export async function testConnectivity(
     }
     // Trivial tool check: offer one echo tool; text-only backends pass as fallback.
     let toolsOk = true;
-    if (adapter.capabilitiesFor(model).supportsTools) {
-      const toolReq = adapter.buildRequest(model, {
+    if (adapter.capabilitiesFor(cleanModel).supportsTools) {
+      const toolReq = adapter.buildRequest(cleanModel, {
         messages: [{ role: 'user', content: 'Call test_ping with {}' }],
         tools: [{ name: 'test_ping', description: 'Connectivity probe tool', inputSchema: { type: 'object', properties: {} } }],
         maxOutputTokens: budget,
@@ -83,7 +92,7 @@ export async function testConnectivity(
       }, base);
       try {
         const r2 = await fetchWithRetry({
-          adapter, model, baseUrl: base, apiKey, body: toolReq.body as Record<string, unknown>,
+          adapter, model: cleanModel, baseUrl: base, apiKey: key, body: toolReq.body as Record<string, unknown>,
           signal: t.signal, fetchFn, streaming: false, debugLabel: `test-tools:${provider}`,
         });
         if (r2.ok) {
@@ -92,7 +101,7 @@ export async function testConnectivity(
         }
       } catch { toolsOk = false; }
     }
-    return { ok: true, details: { provider, model, ms: Date.now() - start, toolsOk, modelsListed: models.length } };
+    return { ok: true, details: { provider, model: cleanModel, ms: Date.now() - start, toolsOk, modelsListed: models.length, ...(listError ? { listError } : {}) } };
   } catch (e) {
     if (t.timedOut() && !parentSignal?.aborted) return { ok: false, error: providerError('timeout', 'test timed out') };
     return { ok: false, error: toProviderError(e) };

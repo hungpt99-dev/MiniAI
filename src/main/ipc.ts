@@ -10,6 +10,7 @@ import { createConversation, listConversations, addMessage, getMessages, deleteC
 import { listTemplates, upsertTemplate, listWorkflows, render } from './db/templates';
 import { streamChat } from './ai/stream';
 import { testConnectivity, resetParamCache } from './ai/providers';
+import { resolveBase } from './ai/providers/base';
 import { getAdapter } from './ai/providers/index';
 import { buildRegistry, querySlash, resolveSlash, type SlashEntry } from './slash/registry';
 import { runWorkflow } from './workflow/engine';
@@ -601,18 +602,30 @@ export function registerIpc(): void {
   ipcMain.handle(IpcChannels.isEncryptionAvailable, () => isEncryptionAvailable());
   ipcMain.handle(IpcChannels.testConnectivity, async (_e, provider, model: string, baseUrl?: string, apiKey?: string) => {
     // Unsaved settings-panel values win; stored key is the fallback. Never logged.
-    const key = (typeof apiKey === 'string' && apiKey) || getSecret(db(), apiKeyService(provider as string)) || '';
-    return testConnectivity(provider, key, model, baseUrl);
+    try {
+      const key = (typeof apiKey === 'string' && apiKey.trim()) || getSecret(db(), apiKeyService(provider as string)) || '';
+      const cleanModel = typeof model === 'string' ? model.trim() : '';
+      const rawBase = typeof baseUrl === 'string' && baseUrl.trim() ? baseUrl.trim() : undefined;
+      return await testConnectivity(provider, key, cleanModel, rawBase);
+    } catch (e) {
+      throw asError(e);
+    }
   });
   ipcMain.handle(IpcChannels.listModels, async (_e, provider, baseUrl?: string) => {
-    if (provider !== 'openai' && provider !== 'anthropic' && provider !== 'gemini' && provider !== 'compatible') {
-      throw new Error(`Unknown provider: ${String(provider)}`);
+    try {
+      if (provider !== 'openai' && provider !== 'anthropic' && provider !== 'gemini' && provider !== 'compatible') {
+        throw new Error(`Unknown provider: ${String(provider)}`);
+      }
+      const d = db();
+      const s = getSettings(d);
+      const adapter = getAdapter(provider);
+      const key = getSecret(d, apiKeyService(provider)) || '';
+      // Unsaved panel value wins, then stored, then the adapter default.
+      const base = resolveBase((typeof baseUrl === 'string' ? baseUrl : '') || s.baseUrl || '', adapter.defaultBaseUrl);
+      return await adapter.listModels(key, base);
+    } catch (e) {
+      throw asError(e);
     }
-    const d = db();
-    const s = getSettings(d);
-    const adapter = getAdapter(provider);
-    const key = getSecret(d, apiKeyService(provider)) || '';
-    return adapter.listModels(key, baseUrl || s.baseUrl || adapter.defaultBaseUrl);
   });
   ipcMain.handle(IpcChannels.resetProviderFixes, () => {
     resetParamCache();

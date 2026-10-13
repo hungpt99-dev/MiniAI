@@ -1,4 +1,5 @@
 import type { NormalizedRequest, ProviderAdapter, ToolTurn } from '../types';
+import { stripTrailingSlash } from '../base';
 import { capabilitiesFor } from './capabilities';
 import { parseError } from './errors';
 
@@ -9,7 +10,7 @@ export const anthropicAdapter: ProviderAdapter = {
   id: 'anthropic',
   label: 'Anthropic',
   defaultBaseUrl: BASE,
-  chatEndpoint: (b) => `${b || BASE}/v1/messages`,
+  chatEndpoint: (b) => `${stripTrailingSlash(b || BASE)}/v1/messages`,
   // why: direct-browser flag keeps the same headers in Electron + tests
   headers: (k) => ({ 'Content-Type': 'application/json', 'x-api-key': k, 'anthropic-version': VERSION, 'anthropic-dangerous-direct-browser-access': 'true' }),
   // Anthropic exposes no list-models endpoint — suggestions come from the model input.

@@ -1,11 +1,12 @@
 import type { NormalizedRequest, ProviderAdapter, ToolTurn } from '../types';
+import { stripTrailingSlash } from '../base';
 import { capabilitiesFor } from './capabilities';
 import { parseError } from './errors';
 
 const BASE = 'https://api.openai.com/v1';
 
 function listModels(apiKey: string, baseUrl?: string, signal?: AbortSignal, fetchFn: typeof fetch = fetch): Promise<string[]> {
-  const base = baseUrl || BASE;
+  const base = stripTrailingSlash(baseUrl || BASE);
   return fetchFn(`${base}/models`, { headers: { Authorization: `Bearer ${apiKey}` }, signal })
     .then((r) => (r.ok ? r.json().catch(() => undefined) : undefined))
     .then((j) => {
@@ -20,7 +21,7 @@ export const openaiAdapter: ProviderAdapter = {
   id: 'openai',
   label: 'OpenAI',
   defaultBaseUrl: BASE,
-  chatEndpoint: (b) => `${b || BASE}/chat/completions`,
+  chatEndpoint: (b) => `${stripTrailingSlash(b || BASE)}/chat/completions`,
   headers: (k) => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${k}` }),
   listModels,
   buildRequest(model, req: NormalizedRequest, baseUrl?: string) {

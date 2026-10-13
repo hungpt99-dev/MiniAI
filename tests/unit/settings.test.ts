@@ -28,6 +28,7 @@ describe('settings validation', () => {
     // why: app.js builds the patch inline (no DOM import); assert the source
     // clears baseUrl so a stale localhost URL never follows to other providers
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'renderer', 'app.js'), 'utf8');
-    expect(src).toMatch(/settingsProvider !== 'compatible'\) patch\.baseUrl = ''/);
+    expect(src).toContain("patch.baseUrl = $('set-baseurl').value.trim().replace(/\\/+$/, '') || '';");
+    expect(src).toContain("else patch.baseUrl = '';");
   });
 });

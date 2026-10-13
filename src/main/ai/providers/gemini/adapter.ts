@@ -1,4 +1,5 @@
 import type { NormalizedRequest, ProviderAdapter, ToolTurn } from '../types';
+import { stripTrailingSlash } from '../base';
 import { capabilitiesFor } from './capabilities';
 import { parseError } from './errors';
 
@@ -8,10 +9,10 @@ export const geminiAdapter: ProviderAdapter = {
   id: 'gemini',
   label: 'Gemini',
   defaultBaseUrl: BASE,
-  chatEndpoint: (b) => `${b || BASE}/v1beta/openai/chat/completions`,
+  chatEndpoint: (b) => `${stripTrailingSlash(b || BASE)}/v1beta/openai/chat/completions`,
   headers: (k) => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${k}` }),
   listModels(apiKey, baseUrl?: string, signal?: AbortSignal, fetchFn: typeof fetch = fetch): Promise<string[]> {
-    const base = baseUrl || BASE;
+    const base = stripTrailingSlash(baseUrl || BASE);
     return fetchFn(`${base}/v1beta/openai/models`, { headers: { Authorization: `Bearer ${apiKey}` }, signal })
       .then((r) => (r.ok ? r.json().catch(() => undefined) : undefined))
       .then((j) => {

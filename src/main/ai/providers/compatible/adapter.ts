@@ -1,4 +1,5 @@
 import type { NormalizedRequest, ProviderAdapter, ToolTurn } from '../types';
+import { stripTrailingSlash } from '../base';
 import { capabilitiesFor } from './capabilities';
 import { parseError } from './errors';
 
@@ -9,10 +10,10 @@ export const compatibleAdapter: ProviderAdapter = {
   id: 'compatible',
   label: 'OpenAI-compatible',
   defaultBaseUrl: BASE,
-  chatEndpoint: (b) => `${b || BASE}/chat/completions`,
+  chatEndpoint: (b) => `${stripTrailingSlash(b || BASE)}/chat/completions`,
   headers: (k) => ({ 'Content-Type': 'application/json', ...(k ? { Authorization: `Bearer ${k}` } : {}) }),
   listModels(apiKey, baseUrl?: string, signal?: AbortSignal, fetchFn: typeof fetch = fetch): Promise<string[]> {
-    const base = baseUrl || BASE;
+    const base = stripTrailingSlash(baseUrl || BASE);
     return fetchFn(`${base}/models`, { headers: (compatibleAdapter.headers(apiKey)) as HeadersInit, signal })
       .then((r) => (r.ok ? r.json().catch(() => undefined) : undefined))
       .then((j) => {
