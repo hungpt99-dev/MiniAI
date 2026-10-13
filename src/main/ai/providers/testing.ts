@@ -1,7 +1,7 @@
 import type { ProviderId } from '../../../shared/types';
 import { providerError, toProviderError, type ProviderError } from '../errors/provider-error';
 import { getAdapter } from './index';
-import { TEST_MAX_OUTPUT_TOKENS, TEST_TIMEOUT_MS } from './constants';
+import { TEST_MAX_OUTPUT_TOKENS, TEST_MAX_REASONING_TOKENS, TEST_TIMEOUT_MS } from './constants';
 import { fetchWithRetry } from './retry';
 
 export interface TestDetails {
@@ -52,9 +52,10 @@ export async function testConnectivity(
     const base = baseUrl || adapter.defaultBaseUrl;
     const models = await adapter.listModels(apiKey, base, t.signal, fetchFn).catch(() => [] as string[]);
     // Tiny completion: reasoning-aware limit/sampling handled by the adapter.
+    const budget = adapter.capabilitiesFor(model).reasoningAware ? TEST_MAX_REASONING_TOKENS : TEST_MAX_OUTPUT_TOKENS;
     const built = adapter.buildRequest(model, {
       messages: [{ role: 'user', content: 'Reply with exactly: ok' }],
-      maxOutputTokens: TEST_MAX_OUTPUT_TOKENS,
+      maxOutputTokens: budget,
       stream: false,
     }, base);
     // why: header placeholder swapped here so adapters stay fetch-free
@@ -76,7 +77,8 @@ export async function testConnectivity(
       const toolReq = adapter.buildRequest(model, {
         messages: [{ role: 'user', content: 'Call test_ping with {}' }],
         tools: [{ name: 'test_ping', description: 'Connectivity probe tool', inputSchema: { type: 'object', properties: {} } }],
-        maxOutputTokens: TEST_MAX_OUTPUT_TOKENS,
+        maxOutputTokens: budget,
+        reasoningEffort: 'none',
         stream: false,
       }, base);
       try {

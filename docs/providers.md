@@ -14,12 +14,16 @@ below is marked **UNVERIFIED**.
 
 ## Per-provider behavior
 
-- **OpenAI**: newer reasoning models (`o1`/`o3`/`gpt-5` family) use
+- **OpenAI**: newer reasoning models (`o1`/`o3`/`gpt-5`/`gpt-6` family) use
   `developer` instead of `system` ([docs](https://platform.openai.com/docs/api-reference/chat) 2026-10-13),
   want `max_completion_tokens`, and reject sampling params — the adapter's
   regex→caps table encodes this; unknown models get the conservative default
-  (`max_completion_tokens`, temperature sent only when set). Streaming sends
-  `stream_options: {include_usage: true}`.
+  (`max_completion_tokens`, temperature sent only when set). `gpt-6-luna` /
+  `gpt-6-sol` tool calls force `reasoning_effort: 'none'`; other models send
+  `reasoning_effort` only when tools are present and the caller sets it
+  ([GPT-6 Sol and Luna intro](https://openai.com/index/introducing-gpt-6-sol-and-luna/),
+  [October 2026 update PDF](https://cdn.openai.com/pdf/gpt-6-october.pdf) 2026-10-07).
+  Streaming sends `stream_options: {include_usage: true}`.
 - **Anthropic**: `max_tokens` is **required**; system prompt is top-level
   `system` (no `system` role in messages); only `user`/`assistant` roles;
   tools use `input_schema`, results come back as `tool_use` blocks and stream
@@ -67,8 +71,8 @@ a placeholder answer.
 ## Test button
 
 Settings → Test uses the **unsaved** panel values (key never logged):
-`listModels` (best-effort) → tiny completion (16 tokens, reasoning-aware) →
-trivial tool probe. Success shows `Works: <provider> <model> <ms> tools ok`;
+`listModels` (best-effort) → tiny completion (16 tokens, 128 for
+reasoning-aware models) → trivial tool probe (`reasoning_effort: 'none'`). Success shows `Works: <provider> <model> <ms> tools ok`;
 failure shows the friendly message + action. Disabled during the run; main
 aborts at 15 s. Model input suggests names from `listModels`.
 

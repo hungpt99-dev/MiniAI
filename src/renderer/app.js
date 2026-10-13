@@ -350,6 +350,7 @@ $('btn-save-settings').onclick = async () => {
     agentCwd: $('set-agentcwd').value.trim(),
   };
   if (settingsProvider === 'compatible' && $('set-baseurl').value.trim()) patch.baseUrl = $('set-baseurl').value.trim();
+  else if (settingsProvider !== 'compatible') patch.baseUrl = '';
   if (settingsProvider === 'compatible' && $('set-sendtemp')) patch.sendTemperature = $('set-sendtemp').checked;
   patch.agentStopHotkey = $('set-stophotkey').value.trim() || 'Ctrl+Alt+Esc';
   const mc = parseInt($('set-maxcalls').value, 10);
