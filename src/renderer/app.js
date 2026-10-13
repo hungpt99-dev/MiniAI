@@ -123,10 +123,18 @@ function addMsg(role, content) {
   const div = document.createElement('div');
   div.className = 'msg ' + role;
   if (role === 'user') {
-    // why: You label + 3-line clamp keeps tall pastes to one compact row; click toggles full text
-    div.innerHTML = '<span class="you-label">You</span><span class="you-prompt you-clamp"></span>';
-    div.querySelector('.you-prompt').textContent = content;
-    div.querySelector('.you-prompt').onclick = (e) => { e.currentTarget.classList.toggle('you-clamp'); };
+    // why: You label + 3-line clamp keeps tall pastes to one compact row; click or Enter/Space toggles full text
+    div.innerHTML = '<span class="you-label">You</span><span class="you-prompt you-clamp" tabindex="0" role="button" aria-expanded="false"></span>';
+    const yp = div.querySelector('.you-prompt');
+    yp.textContent = content;
+    const toggleYou = (el) => {
+      el.classList.toggle('you-clamp');
+      el.setAttribute('aria-expanded', String(!el.classList.contains('you-clamp')));
+    };
+    yp.onclick = (e) => toggleYou(e.currentTarget);
+    yp.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleYou(e.currentTarget); }
+    };
   } else {
     div.innerHTML = mdLite(content);
     decorateCode(div);
@@ -172,7 +180,8 @@ function decorateCode(root) {
       copyText((pre.querySelector('code') || pre).textContent || '');
       const label = btn.querySelector('span');
       if (label) label.textContent = 'Copied';
-      setTimeout(() => { if (label) label.textContent = 'Copy'; }, 1500);
+      clearTimeout(btn._copyT);
+      btn._copyT = setTimeout(() => { if (label) label.textContent = 'Copy'; }, 1500);
     };
     pre.appendChild(btn);
   });
@@ -1815,7 +1824,7 @@ function expandSteps() {
   syncSteps();
 }
 
-// why: steps show for any run rows — collapsed with a tool-only N-steps chevron, expanded on failure
+// why: steps show for any run rows — collapsed with a tool-only N-steps chevron, expanded on failure; no toggle until first tool
 function syncSteps() {
   const steps = $('agent-steps');
   if (!steps) return;
@@ -1828,6 +1837,11 @@ function syncSteps() {
     return;
   }
   steps.classList.remove('hidden');
+  if (!tools) {
+    if (head) head.remove();
+    steps.classList.remove('collapsed');
+    return;
+  }
   if (!head) {
     head = document.createElement('button');
     head.type = 'button';
