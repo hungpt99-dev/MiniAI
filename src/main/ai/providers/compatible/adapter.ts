@@ -2,6 +2,7 @@ import type { NormalizedRequest, ProviderAdapter, ToolTurn } from '../types';
 import { stripTrailingSlash } from '../base';
 import { capabilitiesFor } from './capabilities';
 import { parseError } from './errors';
+import { VisionNotSupportedError, assertVision, toOpenAIContent } from '../vision';
 
 const BASE = 'http://localhost:11434/v1';
 
@@ -25,12 +26,18 @@ export const compatibleAdapter: ProviderAdapter = {
   },
   buildRequest(model, req: NormalizedRequest, baseUrl?: string) {
     const caps = capabilitiesFor(model);
+    // Compatible image mode: Off blocks images locally; Auto (default) probes by sending.
+    if ((req.imageMode || 'auto') === 'off') {
+      let n = 0;
+      for (const m of req.messages) if (Array.isArray((m as { content?: unknown }).content)) n += ((m as { content: Array<{ type?: string }> }).content).filter((p) => p?.type === 'image').length;
+      if (n > 0) throw new VisionNotSupportedError(n);
+    } else assertVision(req, caps);
     const messages: Array<Record<string, unknown>> = [];
     for (const m of req.messages) {
       if (m.role === 'assistant' && m.toolCalls?.length) {
         messages.push({
           role: 'assistant',
-          content: m.content || null,
+          content: typeof m.content === 'string' ? (m.content || null) : toOpenAIContent(m.content),
           tool_calls: m.toolCalls.map((c) => ({
             id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.input ?? {}) },
           })),
@@ -38,7 +45,7 @@ export const compatibleAdapter: ProviderAdapter = {
       } else if (m.role === 'tool') {
         messages.push({ role: 'tool', tool_call_id: m.toolCallId, content: m.content });
       } else {
-        messages.push({ role: m.role, content: m.content });
+        messages.push({ role: m.role, content: typeof m.content === 'string' ? m.content : toOpenAIContent(m.content) });
       }
     }
     const body: Record<string, unknown> = {

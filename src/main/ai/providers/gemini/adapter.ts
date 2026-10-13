@@ -2,6 +2,7 @@ import type { NormalizedRequest, ProviderAdapter, ToolTurn } from '../types';
 import { stripTrailingSlash } from '../base';
 import { capabilitiesFor } from './capabilities';
 import { parseError } from './errors';
+import { assertVision, toOpenAIContent } from '../vision';
 
 const BASE = 'https://generativelanguage.googleapis.com';
 
@@ -24,12 +25,13 @@ export const geminiAdapter: ProviderAdapter = {
   },
   buildRequest(model, req: NormalizedRequest, baseUrl?: string) {
     const caps = capabilitiesFor(model);
+    assertVision(req, caps);
     const messages: Array<Record<string, unknown>> = [];
     for (const m of req.messages) {
       if (m.role === 'assistant' && m.toolCalls?.length) {
         messages.push({
           role: 'assistant',
-          content: m.content || null,
+          content: typeof m.content === 'string' ? (m.content || null) : toOpenAIContent(m.content),
           tool_calls: m.toolCalls.map((c) => ({
             id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.input ?? {}) },
           })),
@@ -37,7 +39,7 @@ export const geminiAdapter: ProviderAdapter = {
       } else if (m.role === 'tool') {
         messages.push({ role: 'tool', tool_call_id: m.toolCallId, content: m.content });
       } else {
-        messages.push({ role: m.role, content: m.content });
+        messages.push({ role: m.role, content: typeof m.content === 'string' ? m.content : toOpenAIContent(m.content) });
       }
     }
     const body: Record<string, unknown> = {

@@ -2,9 +2,16 @@ import type { ProviderId } from '../../../shared/types';
 import type { ProviderError } from '../errors/provider-error';
 
 /** Neutral chat content: no provider literals cross this boundary. */
+export type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; dataUrl: string; mimeType: string; width?: number; height?: number; bytes?: number }
+  | { type: 'file_ref'; name: string; mimeType: string; size: number; sha256: string; text: string };
+
+export type NormalizedContent = string | ContentPart[];
+
 export type NormalizedMessage =
-  | { role: 'system' | 'user'; content: string }
-  | { role: 'assistant'; content: string; toolCalls?: NormalizedToolCall[] }
+  | { role: 'system' | 'user'; content: NormalizedContent }
+  | { role: 'assistant'; content: NormalizedContent; toolCalls?: NormalizedToolCall[] }
   | { role: 'tool'; toolCallId: string; toolName: string; content: string };
 
 export interface NormalizedTool {
@@ -30,6 +37,8 @@ export interface NormalizedRequest {
   stream: boolean;
   reasoningEffort?: 'none' | 'low' | 'medium' | 'high';
   signal?: AbortSignal;
+  /** Compatible-only image mode (Auto probe by default). Other providers ignore it. */
+  imageMode?: 'auto' | 'on' | 'off';
 }
 
 export interface ToolTurn {
@@ -51,6 +60,15 @@ export interface ProviderCapabilities {
   streamUsage: boolean;
   supportsTools: boolean;
   reasoningAware: boolean;
+  /** Vision: image parts accepted, with per-model caps. */
+  supportsVision: boolean;
+  maxImages: number;
+  /** Max image bytes per image part. */
+  maxBytes: number;
+  /** Max image side in px (longest edge). */
+  maxSide: number;
+  /** Accepted image MIME types. */
+  supportedTypes: string[];
 }
 
 export interface BuiltRequest {

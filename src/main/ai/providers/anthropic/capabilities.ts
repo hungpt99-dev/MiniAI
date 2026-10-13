@@ -6,6 +6,8 @@ const DEFAULT: ProviderCapabilities = {
   supportsSystemRole: false, supportsDeveloperRole: false,
   topLevelSystem: true, streamUsage: false,
   supportsTools: true, reasoningAware: false,
+  supportsVision: true, maxImages: 5, maxBytes: 20 * 1024 * 1024,
+  maxSide: 2048, supportedTypes: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'],
 };
 
 // Anthropic rejects temperature+top_p together on some models —

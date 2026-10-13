@@ -62,6 +62,8 @@ export interface Settings {
   temperature?: number;
   /** Custom provider only: send temperature. Default true. */
   sendTemperature?: boolean;
+  /** Compatible-only: image support Auto (probe) / On / Off. Default Auto. */
+  compatibleImages?: 'auto' | 'on' | 'off';
   theme: 'light' | 'dark';
   hotkey: string;
   mode: Mode;

@@ -6,6 +6,8 @@ const DEFAULT: ProviderCapabilities = {
   supportsSystemRole: true, supportsDeveloperRole: false,
   topLevelSystem: false, streamUsage: false,
   supportsTools: true, reasoningAware: false,
+  supportsVision: true, maxImages: 5, maxBytes: 20 * 1024 * 1024,
+  maxSide: 2048, supportedTypes: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'],
 };
 
 // Servers vary wildly (Ollama, LM Studio, vLLM, proxies) — stay conservative:

@@ -3,12 +3,12 @@ import { fetchWithRetry } from './providers/retry';
 import { toProviderError } from './errors/provider-error';
 import type { ProviderId } from '../../shared/types';
 import type { Tool } from '../agent/types';
-import type { NormalizedMessage } from './providers/types';
+import type { ContentPart, NormalizedMessage } from './providers/types';
 
 /** Provider-agnostic conversation item with full tool fidelity (DB stays plain text). */
 export type AgentMsg =
-  | { role: 'system' | 'user'; content: string }
-  | { role: 'assistant'; content: string; toolCalls?: Array<{ id: string; name: string; input: unknown }> }
+  | { role: 'system' | 'user'; content: string | ContentPart[] }
+  | { role: 'assistant'; content: string | ContentPart[]; toolCalls?: Array<{ id: string; name: string; input: unknown }> }
   | { role: 'tool'; toolCallId: string; toolName: string; content: string };
 
 export interface RequestedCall {
@@ -30,6 +30,7 @@ export interface ToolChatOpts {
   tools: Tool[];
   signal?: AbortSignal;
   fetchFn?: typeof fetch;
+  imageMode?: 'auto' | 'on' | 'off';
 }
 
 function toNeutralMessages(messages: AgentMsg[]): NormalizedMessage[] {
@@ -52,6 +53,7 @@ export async function requestToolTurn(provider: ProviderId, opts: ToolChatOpts):
       messages: toNeutralMessages(opts.messages),
       tools: opts.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
       maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+      ...(opts.imageMode ? { imageMode: opts.imageMode } : {}),
       stream: false,
     }, opts.baseUrl || adapter.defaultBaseUrl);
     const res = await fetchWithRetry({

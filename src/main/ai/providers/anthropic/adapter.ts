@@ -2,6 +2,7 @@ import type { NormalizedRequest, ProviderAdapter, ToolTurn } from '../types';
 import { stripTrailingSlash } from '../base';
 import { capabilitiesFor } from './capabilities';
 import { parseError } from './errors';
+import { assertVision, toAnthropicContent } from '../vision';
 
 const BASE = 'https://api.anthropic.com';
 const VERSION = '2023-06-01';
@@ -16,19 +17,29 @@ export const anthropicAdapter: ProviderAdapter = {
   // Anthropic exposes no list-models endpoint — suggestions come from the model input.
   listModels: async () => [],
   buildRequest(model, req: NormalizedRequest, baseUrl?: string) {
-    const system = req.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+    const caps = capabilitiesFor(model);
+    assertVision(req, caps);
+    const systemParts: string[] = [];
+    for (const m of req.messages) {
+      if (m.role !== 'system') continue;
+      systemParts.push(typeof m.content === 'string' ? m.content : JSON.stringify(toAnthropicContent(m.content)));
+    }
+    const system = systemParts.join('\n');
     const messages: Array<Record<string, unknown>> = [];
     for (const m of req.messages) {
       if (m.role === 'system') continue;
       if (m.role === 'assistant' && m.toolCalls?.length) {
         const blocks: Array<Record<string, unknown>> = [];
-        if (m.content) blocks.push({ type: 'text', text: m.content });
+        const tc = typeof m.content === 'string' ? m.content : toAnthropicContent(m.content);
+        if (typeof tc === 'string') { if (tc) blocks.push({ type: 'text', text: tc }); }
+        else for (const b of tc as Array<Record<string, unknown>>) blocks.push(b);
         for (const c of m.toolCalls) blocks.push({ type: 'tool_use', id: c.id, name: c.name, input: c.input ?? {} });
         messages.push({ role: 'assistant', content: blocks });
       } else if (m.role === 'tool') {
         messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: m.toolCallId, content: m.content }] });
       } else {
-        messages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content });
+        const c = typeof m.content === 'string' ? m.content : toAnthropicContent(m.content);
+        messages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: c });
       }
     }
     const body: Record<string, unknown> = {

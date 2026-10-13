@@ -17,6 +17,7 @@ export const DEFAULT_SETTINGS: Settings = {
   model: 'gpt-4o-mini',
   temperature: 0.7,
   sendTemperature: true,
+  compatibleImages: 'auto',
   theme: 'light',
   hotkey: 'Alt+Space',
   mode: 'agent',
@@ -40,6 +41,7 @@ export function validateSettings(s: Partial<Settings>): string[] {
   if (s.hotkey !== undefined && (typeof s.hotkey !== 'string' || !HOTKEY_RE.test(s.hotkey))) errors.push('hotkey must match letters/digits joined by + (e.g. Alt+Space)');
   if (s.temperature !== undefined && (typeof s.temperature !== 'number' || s.temperature < 0 || s.temperature > 2)) errors.push('temperature must be 0..2');
   if (s.sendTemperature !== undefined && typeof s.sendTemperature !== 'boolean') errors.push('sendTemperature must be boolean');
+  if (s.compatibleImages !== undefined && s.compatibleImages !== 'auto' && s.compatibleImages !== 'on' && s.compatibleImages !== 'off') errors.push('compatibleImages must be auto, on or off');
   if (s.theme !== undefined && s.theme !== 'light' && s.theme !== 'dark') errors.push('theme must be light or dark');
   if (s.mode !== undefined && !MODES.includes(s.mode)) errors.push('mode must be chat or agent');
   if (s.modeHotkey !== undefined && (typeof s.modeHotkey !== 'string' || !HOTKEY_RE.test(s.modeHotkey))) errors.push('modeHotkey must match letters/digits joined by + (e.g. Alt+M)');

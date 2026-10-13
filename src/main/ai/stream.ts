@@ -3,17 +3,19 @@ import { fetchWithRetry } from './providers/retry';
 import { toProviderError } from './errors/provider-error';
 import type { ProviderId } from '../../shared/types';
 import type { ChatMessage } from '../../shared/types';
+import type { ContentPart } from './providers/types';
 
 /** Back-compat chat options; temperature maps to the neutral request field. */
 export interface ChatOptions {
   apiKey: string;
   model: string;
   baseUrl?: string;
-  messages: ChatMessage[];
+  messages: Array<Pick<ChatMessage, 'role'> & { content: string | ContentPart[]; id?: string; createdAt?: number }>;
   temperature?: number;
   signal?: AbortSignal;
   onToken?: (token: string) => void;
   fetchFn?: typeof fetch;
+  imageMode?: 'auto' | 'on' | 'off';
 }
 
 /** Parse SSE `data:` lines from a chunk, invoking cb for each JSON payload. Returns pending tail. */
@@ -40,6 +42,7 @@ export async function streamChat(provider: ProviderId, opts: ChatOptions): Promi
       messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
       maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
       ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
+      ...(opts.imageMode ? { imageMode: opts.imageMode } : {}),
       stream: true,
     }, opts.baseUrl || adapter.defaultBaseUrl);
     const res = await fetchWithRetry({

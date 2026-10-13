@@ -6,6 +6,8 @@ const DEFAULT: ProviderCapabilities = {
   supportsSystemRole: true, supportsDeveloperRole: false,
   topLevelSystem: false, streamUsage: true,
   supportsTools: true, reasoningAware: false,
+  supportsVision: true, maxImages: 5, maxBytes: 20 * 1024 * 1024,
+  maxSide: 2048, supportedTypes: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'],
 };
 
 // Thinking models use a reasoning budget on the native API; the OpenAI-compat

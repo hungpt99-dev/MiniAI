@@ -8,6 +8,8 @@ export interface RouteInput {
   cwd?: string;
   signal?: AbortSignal;
   onToken?: (token: string) => void;
+  /** Attachment metadata only (name/type/size) — bytes never route here. */
+  attachmentsMeta?: Array<{ name: string; type: string; size: number }>;
 }
 
 export interface RouterContext {
