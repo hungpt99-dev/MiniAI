@@ -3,6 +3,7 @@
 // window.close() destroys the target -> reconnect() after any close.
 const { execFile } = require('child_process');
 const fs = require('fs');
+const http = require('http');
 const ART = './artifacts-e2e';
 fs.mkdirSync(ART, { recursive: true });
 const results = [];
@@ -18,8 +19,19 @@ function py(code) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let id = 0;
 const VIS_PY = "from pywinauto.findwindows import find_elements\nprint('N:'+str(len(find_elements(title='MiniAI',top_level_only=True,backend='uia'))))";
-const HOTKEY_PY = "import sys; sys.argv=['x','show','%{SPACE}']; exec(open('e2e/hotkey_show.py').read())";
-const HIDE_PY = "import sys; sys.argv=['x','hide','%{SPACE}']; exec(open('e2e/hotkey_show.py').read())";
+const HOTKEY_FOR = (hk) => (/alt\+x/i.test(hk || '') ? '%x' : '%{SPACE}');
+let HOTKEY_PY = "import sys; sys.argv=['x','show','%{SPACE}']; exec(open('e2e/hotkey_show.py').read())";
+let HIDE_PY = "import sys; sys.argv=['x','hide','%{SPACE}']; exec(open('e2e/hotkey_show.py').read())";
+// Alt+Space is eaten by the OS on some hosts; main falls back to Alt+X and
+// reports the live key via getHotkeyStatus, so send the registered one.
+async function syncHotkey() {
+  try {
+    const hs = JSON.parse(await ev(`JSON.stringify(await window.nexio.getHotkeyStatus())`));
+    const k = HOTKEY_FOR(hs && hs.hotkey);
+    HOTKEY_PY = "import sys; sys.argv=['x','show','" + k + "']; exec(open('e2e/hotkey_show.py').read())";
+    HIDE_PY = "import sys; sys.argv=['x','hide','" + k + "']; exec(open('e2e/hotkey_show.py').read())";
+  } catch {}
+}
 const SHOT_PY = "import sys; sys.argv=['x','NAME']; exec(open('e2e/shots.py').read())";
 const ensureVisible = async () => {
   for (let i = 0; i < 3; i++) {
@@ -62,7 +74,7 @@ const send = (method, params = {}) => new Promise((resolve, reject) => {
   C.ws.send(JSON.stringify({ id: myId, method, params }));
 });
 const ev = async (expr) => {
-  const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true });
+  const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
   if (r.result?.exceptionDetails) throw new Error('eval: ' + JSON.stringify(r.result.exceptionDetails).slice(0, 300));
   return r.result.result.value;
 };
@@ -88,6 +100,7 @@ async function main() {
   await ev(`location.reload()`);
   await sleep(2500);
   await connect();
+  await syncHotkey();
   check('cdp-target-found', true);
   if (!(await py(VIS_PY)).includes('N:0')) { await py(HIDE_PY); await sleep(500); }
   check('popup-hidden-initially', (await py(VIS_PY)).includes('N:0'));
@@ -358,7 +371,6 @@ async function main() {
   await shot('10-final');
 
   // trash (sandboxed agent + fake tool-turn provider, no keys) + 401 + pill labels
-  const http = require('http');
   const SB = 'C:\\NexioTest';
   const trashFile = SB + '\\trash-me-2.txt';
   fs.mkdirSync(SB, { recursive: true });
@@ -376,31 +388,39 @@ async function main() {
   });
   await new Promise((r) => toolFake.listen(0, '127.0.0.1', r));
   const toolBase = 'http://127.0.0.1:' + toolFake.address().port + '/v1';
-  await ev(`window.__trashDone=null;window.__trash=null;(async()=>{try{`
-    + `const s0=await window.nexio.getSettings();`
-    + `window.__s0=JSON.stringify({provider:s0.provider,model:s0.model,baseUrl:s0.baseUrl||null,roots:s0.agentAllowedRoots||[],cwd:s0.agentCwd||'',rules:s0.agentAlwaysAllow||[]});`
-    + `await window.nexio.setSettings({provider:'compatible',model:'e2e-trash',baseUrl:${JSON.stringify(toolBase)},`
-    + `agentAllowedRoots:[${JSON.stringify(SB)}],agentCwd:${JSON.stringify(SB)},`
-    + `agentAlwaysAllow:[{scope:'tool-dir',tool:'fs_trash',dir:${JSON.stringify(SB)}}]});`
-    + `const c=await window.nexio.createConversation('e2e-trash');`
-    + `const r=await window.nexio.agentStart(c.id,${JSON.stringify('move ' + trashFile + ' to the trash')},{cwd:${JSON.stringify(SB)}});`
-    + `const off=window.nexio.onAgentEvent(({runId,event})=>{if(runId!==r.runId)return;`
-    + `if(event.type==='tool_result'){window.__trash=event.ok+' '+(event.output||'');}`
-    + `if(event.type==='done'||event.type==='error'||event.type==='stopped'){off();window.__trashDone=event.type;}});`
-    + `}catch(e){window.__trashDone='eval-error:'+(e&&e.message);}})()`);
-  for (let i = 0; i < 60 && !(await ev(`window.__trashDone`)); i++) await sleep(500);
-  const trashOut = await ev(`window.__trash||''`);
-  const trashDone = await ev(`window.__trashDone||''`);
-  await ev(`{const s0=JSON.parse(window.__s0||'null');if(s0)await window.nexio.setSettings({provider:s0.provider,model:s0.model,baseUrl:s0.baseUrl||'',agentAllowedRoots:s0.roots,agentCwd:s0.cwd,agentAlwaysAllow:s0.rules});}`);
-  toolFake.close();
+  let trashOut = '';
+  let trashDone = '';
+  try {
+    await ev(`window.__trashDone=null;window.__trash=null;(async()=>{try{`
+      + `const s0=await window.nexio.getSettings();`
+      + `window.__s0=JSON.stringify({provider:s0.provider,model:s0.model,baseUrl:(s0.baseUrl??null),roots:s0.agentAllowedRoots||[],cwd:s0.agentCwd||'',rules:s0.agentAlwaysAllow||[]});`
+      + `await window.nexio.setSettings({provider:'compatible',model:'e2e-trash',baseUrl:${JSON.stringify(toolBase)},`
+      + `agentAllowedRoots:[${JSON.stringify(SB)}],agentCwd:${JSON.stringify(SB)},`
+      + `agentAlwaysAllow:[{scope:'tool-dir',tool:'fs_trash',dir:${JSON.stringify(SB)}}]});`
+      + `const c=await window.nexio.createConversation('e2e-trash');`
+      + `const r=await window.nexio.agentStart(c.id,${JSON.stringify('move ' + trashFile + ' to the trash')},{cwd:${JSON.stringify(SB)}});`
+      + `const off=window.nexio.onAgentEvent(({runId,event})=>{if(runId!==r.runId)return;`
+      + `if(event.type==='tool_result'){window.__trash=event.ok+' '+(event.output||'');}`
+      + `if(event.type==='done'||event.type==='error'||event.type==='stopped'){off();window.__trashDone=event.type;}});`
+      + `}catch(e){window.__trashDone='eval-error:'+(e&&e.message);}})()`);
+    for (let i = 0; i < 60 && !(await ev(`window.__trashDone`)); i++) await sleep(500);
+    trashOut = await ev(`window.__trash||''`);
+    trashDone = await ev(`window.__trashDone||''`);
+  } finally {
+    try { await ev(`{const s0=JSON.parse(window.__s0||'null');if(s0)await window.nexio.setSettings({provider:s0.provider,model:s0.model,baseUrl:(s0.baseUrl??''),agentAllowedRoots:s0.roots,agentCwd:s0.cwd,agentAlwaysAllow:s0.rules});}`); } catch {}
+    await new Promise((r) => toolFake.close(r));
+  }
   check('trash-live-path', trashDone === 'done' && /true moved to trash/.test(trashOut) && !/staged at/.test(trashOut), `${trashDone} ${(trashOut || '').slice(0, 120)}`);
   check('trash-file-gone', !fs.existsSync(trashFile));
   const unauth = http.createServer((req, res) => { req.resume(); req.on('end', () => { res.writeHead(401); res.end('invalid key'); }); });
   await new Promise((r) => unauth.listen(0, '127.0.0.1', r));
   const unauthBase = 'http://127.0.0.1:' + unauth.address().port + '/v1';
-  await ev(`window.__tc=null;window.nexio.testConnectivity('compatible','e2e-model',${JSON.stringify(unauthBase)}).then(r=>{window.__tc=JSON.stringify(r)}).catch(e=>{window.__tc='err:'+e.message})`);
-  await sleep(2500);
-  unauth.close();
+  try {
+    await ev(`window.__tc=null;window.nexio.testConnectivity('compatible','e2e-model',${JSON.stringify(unauthBase)}).then(r=>{window.__tc=JSON.stringify(r)}).catch(e=>{window.__tc='err:'+e.message})`);
+    await sleep(2500);
+  } finally {
+    await new Promise((r) => unauth.close(r));
+  }
   const tc = await ev(`window.__tc||''`);
   check('conn-401-auth', tc.includes('"ok":false') && /auth|401/.test(tc), tc.slice(0, 120));
   check('pill-ask-do', await ev(`document.getElementById('tab-chat').textContent.trim()==='Ask'&&document.getElementById('tab-agent').textContent.trim()==='Do'`));
