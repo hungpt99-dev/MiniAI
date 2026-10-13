@@ -144,8 +144,8 @@ function addMsg(role, content) {
     decorateCode(div);
   }
   messagesEl.appendChild(div);
-  const view = $('view');
-  if (view) view.scrollTop = view.scrollHeight; // .view is the only scroller
+  const $viewEl = $('view');
+  if ($viewEl) $viewEl.scrollTop = $viewEl.scrollHeight; // .view is the only scroller
   // Background runs must not yank panels: only auto-switch when no run is active.
   // Explicit sends switch via sendInner/beginRun; extension errors keep legacy yank.
   if (view !== 'run' && !(typeof agentRunning === 'function' && agentRunning())) showView('run');
@@ -322,8 +322,8 @@ window.nexio.onStream((ev) => {
   assistantDiv.dataset.raw = (assistantDiv.dataset.raw || '') + ev.token;
   assistantDiv.innerHTML = mdLite(assistantDiv.dataset.raw);
   decorateCode(assistantDiv);
-  const view = $('view');
-  if (view) view.scrollTop = view.scrollHeight;
+  const $viewEl = $('view');
+  if ($viewEl) $viewEl.scrollTop = $viewEl.scrollHeight;
 });
 
 // launcher behavior: refocus composer when popup regains OS focus,
@@ -413,7 +413,7 @@ function defaultView() { return hasRun() ? 'run' : 'idle'; }
 function showView(name) {
   if (name == null) name = 'idle';
   if (name === 'messages') name = 'run'; // legacy alias
-  if (name !== 'run' && document.querySelector('#agent-steps .appr')) return; // never bury an undecided approval
+  if (name !== 'run' && document.querySelector('#agent-steps .appr')) { flashApproval(); return; } // never bury an undecided approval
   if (name !== 'idle' && name !== 'run' && (view === 'idle' || view === 'run')) returnTo = view;
   view = name;
   currentView = name === 'run' ? 'messages' : name === 'idle' ? null : name; // legacy alias
@@ -446,7 +446,6 @@ function assertSingleView() {
     if (vis.length !== expect) console.assert(false, 'single-view: expected ' + expect + ' visible, got ' + vis.join(','));
   } catch {}
 }
-function backTo() { showView(backTarget()); }
 function togglePanel(which) {
   if (view === which) showView(backTarget());
   else { showView(which); if (which === 'history') void refreshHistory(); }
@@ -794,7 +793,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (hasRun()) {
     e.stopPropagation();
-    if (document.querySelector('#agent-steps .appr')) { inputEl.focus(); return; } // never bury an undecided approval
+    if (document.querySelector('#agent-steps .appr')) { flashApproval(); inputEl.focus(); return; } // never bury an undecided approval
     messagesEl.innerHTML = '';
     assistantDiv = null;
     const stC = $('agent-steps'); if (stC) stC.innerHTML = '';
@@ -813,8 +812,8 @@ var agentCwd = '';
 function agentRunning() { return !!agentState; }
 
 function agentScroll() {
-  const view = $('view');
-  if (view) view.scrollTop = view.scrollHeight;
+  const $viewEl = $('view');
+  if ($viewEl) $viewEl.scrollTop = $viewEl.scrollHeight;
 }
 
 function syncAgentFooter() {
@@ -979,6 +978,8 @@ function handleAgentEvent(runId, ev) {
       if (ic) { ic.classList.remove('spin'); ic.innerHTML = stepSvg(ICO_WAIT); }
     }
     row.appendChild(buildApprovalCard(runId, ev));
+    expandSteps(); // a collapsed run would hide the card (collapsed hides .astep)
+    if (view !== 'run') showView('run'); // yank to run so Deny/Allow is seen; returnTo untouched
     agentScroll();
   } else if (ev.type === 'tool_result') {
     const row = st.rows.get(ev.id);
@@ -1929,6 +1930,15 @@ function openWorkflowForm(trigger, info) {
 if ($('btn-ext')) $('btn-ext').onclick = () => void openExtensions();
 if ($('btn-open-ext')) $('btn-open-ext').onclick = () => void openExtensions();
 /* --- Launcher (appended): result chips, undo, suggestions, run log, onboarding --- */
+// why: blocked view switches (approval guard) pulse the card so the no-op reads as feedback
+function flashApproval() {
+  const card = document.querySelector('#agent-steps .appr');
+  if (!card) return;
+  card.classList.remove('flash');
+  void card.offsetWidth; // restart the pulse when guards fire repeatedly
+  card.classList.add('flash');
+  setTimeout(() => card.classList.remove('flash'), 900);
+}
 function collapseSteps() {
   const steps = $('agent-steps');
   if (!steps || steps.querySelector('.appr')) return; // never bury an undecided approval
@@ -2081,8 +2091,8 @@ async function renderSuggest() {
     box.appendChild(d);
   }
   box.classList.remove('hidden');
-  const view = $('view');
-  if (view) view.classList.remove('hidden');
+  const $viewEl = $('view');
+  if ($viewEl) $viewEl.classList.remove('hidden');
   requestResize();
 }
 inputEl.addEventListener('input', () => { if (!inputEl.value) maybeSuggest(); else hideSuggest(); });

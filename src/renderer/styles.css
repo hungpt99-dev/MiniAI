@@ -253,6 +253,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .appr .scope-row { display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end; }
 .appr .scope-row button { background: var(--hover); border: 1px solid var(--border);
   color: var(--text-soft); border-radius: 8px; font-size: 12px; padding: 6px 10px; cursor: pointer; font-family: inherit; }
+/* blocked-switch feedback: approval guard pulses the card instead of navigating */
+.appr.flash { animation: apprflash .9s ease; }
+@keyframes apprflash { 0%, 100% { outline: 2px solid transparent; } 30% { outline: 2px solid var(--accent); } }
 /* footer agent bits */
 #fbtn-stop, #btn-stop { color: var(--danger); }
 #hints .fbtn.danger { color: var(--danger); }
