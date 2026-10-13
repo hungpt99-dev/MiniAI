@@ -41,5 +41,9 @@ export const IpcChannels = {
   undo: 'nexio:undo',
   reveal: 'nexio:reveal',
   runs: 'nexio:runs',
+  attachPick: 'nexio:attach-pick',
+  attachProcess: 'nexio:attach-process',
+  attachClassify: 'nexio:attach-classify',
+  attachClear: 'nexio:attach-clear',
 } as const;
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels];

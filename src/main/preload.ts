@@ -9,6 +9,7 @@ export interface SendOpts {
   requestId?: string;
   /** True when the user explicitly picked the mode pill (wins over intent routing). */
   explicit?: boolean;
+  attachments?: Array<{ name: string; mime?: string; size?: number; dataBase64?: string; path?: string }>;
 }
 
 const api = {
@@ -37,7 +38,7 @@ const api = {
     ipcRenderer.invoke(IpcChannels.agentRun, conversationId, content, opts || {}),
   cancel: (requestId?: string) => ipcRenderer.send(IpcChannels.chatCancel, requestId),
   resize: (contentHeight: number) => ipcRenderer.send(IpcChannels.resize, contentHeight),
-  agentStart: (conversationId: string, content: string, opts?: { cwd?: string }) =>
+  agentStart: (conversationId: string, content: string, opts?: { cwd?: string; attachments?: Array<{ name: string; mime?: string; size?: number; dataBase64?: string; path?: string }> }) =>
     ipcRenderer.invoke(IpcChannels.agentStart, conversationId, content, opts || {}) as Promise<{ runId: string }>,
   agentApprove: (runId: string, callId: string, decision: ApprovalDecision) =>
     ipcRenderer.invoke(IpcChannels.agentApprove, runId, callId, decision),
@@ -61,6 +62,12 @@ const api = {
     return () => ipcRenderer.removeListener(IpcChannels.ui, fn);
   },
   undo: (runId: string) => ipcRenderer.invoke(IpcChannels.undo, runId) as Promise<{ runId: string }>,
+  attachPick: () => ipcRenderer.invoke(IpcChannels.attachPick) as Promise<Array<{ path: string; name: string; size: number; mime: string; previewDataUrl?: string; verdict: string; reason?: string }>>,
+  attachProcess: (input: { runId: string; name: string; dataBase64: string }) =>
+    ipcRenderer.invoke(IpcChannels.attachProcess, input) as Promise<{ id: string; name: string; mime: string; size: number; kind: string; width?: number; height?: number; previewDataUrl?: string; sha256: string; error?: string }>,
+  attachClassify: (input: { path: string }) =>
+    ipcRenderer.invoke(IpcChannels.attachClassify, input) as Promise<{ verdict: string; reason?: string }>,
+  attachClear: (runId: string) => ipcRenderer.invoke(IpcChannels.attachClear, runId) as Promise<boolean>,
   reveal: (dir: string) => ipcRenderer.invoke(IpcChannels.reveal, dir) as Promise<boolean>,
   runs: () => ipcRenderer.invoke(IpcChannels.runs),
   onRouteStatus: (cb: (ev: { id: string; status: 'doing' | 'answering' }) => void) => {

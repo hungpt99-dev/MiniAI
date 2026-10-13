@@ -207,7 +207,33 @@ export async function pickFolder(
   });
 }
 
-/** Parent-modal file picker for extension files. Cancel resolves null, never rejects. */
+/** Parent-modal multi file picker for attachments. Cancel resolves [], never rejects. */
+export async function pickAttachFiles(win: BrowserWindow | null | undefined, maxCount = 5): Promise<string[]> {
+  return withDialogLock(win, async () => {
+    const lowered = lowerForDialog(win);
+    try {
+      const options: Electron.OpenDialogOptions = {
+        properties: ['openFile', 'multiSelections'],
+        ...(lastUsedDir ? { defaultPath: lastUsedDir } : {}),
+      };
+      const parent = dialogParent(win);
+      const r = parent
+        ? await dialog.showOpenDialog(parent, options)
+        : await dialog.showOpenDialog(options);
+      if (r.canceled) return [];
+      const picked = (r.filePaths || []).slice(0, Math.max(1, maxCount));
+      try {
+        if (picked[0]) lastUsedDir = path.dirname(picked[0]);
+      } catch { /* keep previous */ }
+      return picked;
+    } catch {
+      return [];
+    } finally {
+      restoreAfterDialog(win, lowered);
+      refocusPopup(win);
+    }
+  });
+}
 export async function pickFile(win: BrowserWindow | null | undefined): Promise<string | null> {
   return withDialogLock(win, async () => {
     const lowered = lowerForDialog(win);

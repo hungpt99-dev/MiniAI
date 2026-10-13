@@ -32,7 +32,13 @@ import { parseWorkflowDoc, runExtWorkflow } from './extensions/workflows';
 import type { ExtAction, ExtSourceInput } from '../shared/types';
 import type { SourceInput } from './extensions/sources';
 import { setPopupHeight, togglePopup, getPopup } from './popup';
-import { openExternalUrl, pickFile, pickFolder, revealPath } from './app/dialogs';
+import { openExternalUrl, pickAttachFiles, pickFile, pickFolder, revealPath, withDialogLock } from './app/dialogs';
+import { resolveDbPath } from './db/db';
+import { ATTACH_LIMITS, ATTACH_STRINGS, sniffMime, validateLimits } from '../shared/attachments';
+import { attachmentLogRecord, classifyAttachPath, decodeText, deleteRunAttachments, processImage, saveAttachment, sha256, sweepOldAttachments } from './attachments';
+import { registerRunAttachments } from './agent/tools/attachment_tools';
+import { VisionNotSupportedError } from './ai/providers/vision';
+import type { ContentPart } from './ai/providers/types';
 import type { ChatMessage, Mode, Settings } from '../shared/types';
 
 const aborters = new Map<string, AbortController>();
@@ -245,6 +251,7 @@ export interface SendOpts {
   requestId?: string;
   /** True when the user explicitly picked the mode pill (wins over intent routing). */
   explicit?: boolean;
+  attachments?: Array<{ name: string; mime?: string; size?: number; dataBase64?: string; path?: string }>;
 }
 
 /** One cheap model call for uncertain intents (heuristic runs first). */
@@ -262,6 +269,90 @@ async function classifyWithModel(
 
 function routeStatus(sender: Electron.WebContents, id: string, status: 'doing' | 'answering'): void {
   try { sender.send(IpcChannels.routeStatus, { id, status }); } catch { /* window gone */ }
+}
+
+function appBaseDir(): string {
+  try { return path.dirname(resolveDbPath()); }
+  catch { return os.tmpdir(); }
+}
+
+export interface PreparedAttachment {
+  part: ContentPart;
+  log: { name: string; type: string; size: number; sha256: string };
+  ref: { id: string; name: string; mime: string; size: number; sha256: string; path: string; kind: 'image' | 'file' | 'text' };
+}
+
+/**
+ * Validate + process staged attachments (magic bytes, limits, EXIF strip,
+ * 2048 resize, BOM, 200KB truncation). Rejections throw inline errors —
+ * never silent. Returns provider parts + log-safe records (never bytes).
+ */
+export function prepareAttachments(
+  runId: string,
+  staged: NonNullable<SendOpts['attachments']>,
+  cwd: string,
+  ctx: PolicyContext,
+): PreparedAttachment[] {
+  const lim = validateLimits(staged.map((a) => ({ size: a.size || (a.dataBase64 ? Buffer.byteLength(a.dataBase64, 'base64') : 0) })));
+  if (!lim.ok) throw new Error(lim.error || ATTACH_STRINGS.oversizeError);
+  const out: PreparedAttachment[] = [];
+  for (const a of staged) {
+    let bytes: Buffer;
+    let origName = a.name || 'file';
+    if (a.path) {
+      // Per-file path policy: outside roots = Allow once (this send grants it once);
+      // protected/symlink escape = refuse inline (Remove).
+      const verdict = classifyAttachPath(a.path, cwd, ctx);
+      if (verdict.verdict === 'deny') throw new Error(`Attachment refused: ${verdict.reason || 'blocked path'}`);
+      try { bytes = fs.readFileSync(verdict.real); }
+      catch { throw new Error(`Attachment unreadable: ${origName}`); }
+      origName = path.basename(verdict.real);
+    } else if (a.dataBase64) {
+      bytes = Buffer.from(a.dataBase64, 'base64');
+    } else throw new Error(`Attachment rejected: ${origName} (no data)`);
+    if (bytes.length > ATTACH_LIMITS.maxFileBytes) throw new Error(`${ATTACH_STRINGS.oversizeError}: ${origName} (max 20MB per file)`);
+    const u8 = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length);
+    const sniffed = sniffMime(u8, origName);
+    if (sniffed === 'exe' || sniffed === null) throw new Error(`Rejected ${origName}: executable or unknown content (type checked, not extension)`);
+    // Trust sniffed bytes over the claimed extension, except text stays text.
+    const mime = sniffed.startsWith('text/') && a.mime?.startsWith('text/') ? (a.mime as string) : sniffed;
+    if (mime.startsWith('image/')) {
+      const proc = processImage(bytes, mime);
+      const stored = saveAttachment(appBaseDir(), runId, origName, proc.mime, proc.bytes, { width: proc.width, height: proc.height, dataUrl: proc.dataUrl });
+      out.push({
+        part: { type: 'image', dataUrl: proc.dataUrl, mimeType: proc.mime, width: proc.width, height: proc.height, bytes: proc.bytes.length },
+        log: attachmentLogRecord(stored),
+        ref: { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, sha256: stored.sha256, path: stored.path, kind: 'image' },
+      });
+    } else if (mime.startsWith('text/') || mime.includes('markdown')) {
+      const { text, truncated } = decodeText(bytes);
+      const stored = saveAttachment(appBaseDir(), runId, origName, mime, Buffer.from(text, 'utf8'), { truncated });
+      out.push({
+        part: { type: 'file_ref', name: stored.name, mimeType: stored.mime, size: stored.size, sha256: stored.sha256, text },
+        log: attachmentLogRecord(stored),
+        ref: { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, sha256: stored.sha256, path: stored.path, kind: 'text' },
+      });
+    } else {
+      // PDFs and other files: file_ref text only (bytes never go to the model).
+      const stored = saveAttachment(appBaseDir(), runId, origName, mime, bytes);
+      const note = mime === 'application/pdf' ? '[PDF attached — text extraction is best-effort; open the file for full content]' : `[binary ${mime} attached — metadata only]`;
+      out.push({
+        part: { type: 'file_ref', name: stored.name, mimeType: stored.mime, size: stored.size, sha256: stored.sha256, text: note },
+        log: attachmentLogRecord(stored),
+        ref: { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, sha256: stored.sha256, path: stored.path, kind: 'file' },
+      });
+    }
+  }
+  return out;
+}
+
+/** Build the user content parts: instruction text + image/file_ref parts. */
+export function buildUserParts(text: string, prepared: PreparedAttachment[]): ContentPart[] {
+  const parts: ContentPart[] = [];
+  const body = text.trim() || (prepared.length ? ATTACH_STRINGS.defaultInstruction : '');
+  if (body) parts.push({ type: 'text', text: body });
+  for (const p of prepared) parts.push(p.part);
+  return parts;
 }
 
 /** Persist run history + push the run summary (outcome line, undo, folder). */
@@ -291,20 +382,39 @@ async function runSend(
   const mode: Mode = opts.mode || s.mode || 'agent';
   const sessionId = opts.sessionId || conversationId;
   const requestId = opts.requestId || `req-${Date.now()}-${++seq}`;
-  addMessage(d, conversationId, 'user', content);
+  const staged = opts.attachments || [];
+  const text = content.trim() || (staged.length ? ATTACH_STRINGS.defaultInstruction : '');
+  if (!text && !staged.length) return '';
+  addMessage(d, conversationId, 'user', text);
   const history = getMessages(d, conversationId);
   const key = getSecret(d, apiKeyService(s.provider)) || '';
   const aborter = new AbortController();
   aborters.set(requestId, aborter);
+  // Prepare attachments first: rejections throw inline errors, never silent.
+  const cwd0 = s.agentCwd || os.homedir();
+  let prepared: PreparedAttachment[] = [];
+  if (staged.length) {
+    // Ask temp files live under the conversation id so Clear / run delete
+    // removes them; agent runs re-key under their run id below.
+    prepared = prepareAttachments(conversationId, staged, cwd0, policyFor(s, cwd0));
+    registerRunAttachments(requestId, prepared.map((p) => p.ref));
+    try {
+      const wlog = createRunLog(undefined, requestId);
+      for (const p of prepared) appendLog(wlog.path, { runId: requestId, attachment: p.log });
+    } catch { /* logging never breaks the run */ }
+  }
+  const userParts = buildUserParts(text, prepared);
+  const hasImages = prepared.some((p) => p.part.type === 'image');
   // Intent routing: an explicit pill selection wins; otherwise classify.
   // act → built-in agent loop, answer/clarify → plain streamed response.
+  // Attachments skip clarify (empty+attach sends the default instruction).
   let effective = mode;
-  if (!opts.explicit && !content.trim().startsWith('/')) {
-    const intent = await classifyIntent(content, {
+  if (!opts.explicit && !text.trim().startsWith('/') && !staged.length) {
+    const intent = await classifyIntent(text, {
       askModel: (prompt) => classifyWithModel(s, key, prompt, aborter.signal),
     });
     if (intent === 'clarify') {
-      const q = clarifyQuestion(content);
+      const q = clarifyQuestion(text);
       routeStatus(sender, requestId, 'answering');
       addMessage(d, conversationId, 'assistant', q);
       sender.send(IpcChannels.chatStream, { token: q, done: false, conversationId, requestId });
@@ -322,32 +432,54 @@ async function runSend(
     agentRuns.set(runId, state);
     const cwd = s.agentCwd || os.homedir();
     try {
+      if (prepared.length) {
+        // Re-key refs under the agent run id for attachment_list/read.
+        registerRunAttachments(runId, prepared.map((p) => p.ref));
+      }
       const full = await runBuiltInAgent({
-        sender, d, s, key, content, history, cwd, runId,
-        controller: aborter, state, prompt: content,
+        sender, d, s, key, content: text, history, cwd, runId,
+        controller: aborter, state, prompt: text,
+        userParts: staged.length ? userParts : undefined,
+        attachMeta: prepared.length ? `Attached files: ${prepared.map((p) => p.ref.path).join('; ')}` : undefined,
+        imageMode: s.compatibleImages || 'auto',
       });
       if (full) addMessage(d, conversationId, 'assistant', full);
-      finishRun(d, sender, runId, 'agent', content, full, aborter.signal.aborted ? 'stopped' : 'done', cwd);
+      finishRun(d, sender, runId, 'agent', text, full, aborter.signal.aborted ? 'stopped' : 'done', cwd);
       sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
       return full;
     } catch (e) {
-      finishRun(d, sender, runId, 'agent', content, asError(e).message, 'error', cwd);
+      if (e instanceof VisionNotSupportedError) {
+        const notice = ATTACH_STRINGS.visionNotice;
+        addMessage(d, conversationId, 'assistant', notice);
+        sender.send(IpcChannels.chatStream, { token: notice, done: false, conversationId, requestId });
+        sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
+        finishRun(d, sender, runId, 'agent', text, notice, 'done', cwd);
+        return notice;
+      }
+      finishRun(d, sender, runId, 'agent', text, asError(e).message, 'error', cwd);
       throw asError(e);
     } finally {
       agentRuns.delete(runId);
       aborters.delete(requestId);
     }
   }
-  const frozen: RouteInput = { mode: effective, sessionId, requestId, prompt: content };
+  const frozen: RouteInput = {
+    mode: effective, sessionId, requestId, prompt: text,
+    ...(prepared.length ? { attachmentsMeta: prepared.map((p) => ({ name: p.log.name, type: p.log.type, size: p.log.size })) } : {}),
+  };
   try {
     const full = await routeRequest(
       { ...frozen, cwd: s.agentCwd, signal: aborter.signal, onToken: (t) => sender.send(IpcChannels.chatStream, { token: t, done: false, conversationId, requestId }) },
       {
         chat: async (input) => {
           let acc = '';
+          const msgs = staged.length
+            ? [...history, { id: 'attach', role: 'user' as const, content: userParts, createdAt: Date.now() }]
+            : history;
           await streamChat(s.provider, {
             apiKey: key, model: s.model, baseUrl: s.baseUrl, temperature: chatTemperature(s),
-            messages: history, signal: input.signal,
+            messages: msgs as Parameters<typeof streamChat>[1]['messages'],
+            signal: input.signal, imageMode: s.compatibleImages || 'auto',
             onToken: (t) => { acc += t; input.onToken?.(t); },
           });
           return acc;
@@ -358,10 +490,19 @@ async function runSend(
     sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
     return full;
   } catch (e) {
+    if (e instanceof VisionNotSupportedError || /vision-not-supported/.test(asError(e).message)) {
+      // Non-vision model: notice + one-click switch, bytes never sent, never silent.
+      const notice = ATTACH_STRINGS.visionNotice;
+      addMessage(d, conversationId, 'assistant', notice);
+      sender.send(IpcChannels.chatStream, { token: notice, done: false, conversationId, requestId });
+      sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
+      return notice;
+    }
     throw asError(e);
   } finally {
     aborters.delete(requestId);
   }
+  void hasImages;
 }
 
 /** Shared built-in agent execution (Send routing + explicit agentStart). */
@@ -369,6 +510,7 @@ async function runBuiltInAgent(o: {
   sender: Electron.WebContents; d: DatabaseSync; s: Settings; key: string;
   content: string; history: ChatMessage[]; cwd: string; runId: string;
   controller: AbortController; state: AgentRunState; prompt: string;
+  userParts?: ContentPart[]; attachMeta?: string; imageMode?: 'auto' | 'on' | 'off';
 }): Promise<string> {
   const { sender, d, s, key, content, history, cwd, runId, controller, state, prompt } = o;
   const emit = (event: AgentEvent) => {
@@ -401,6 +543,9 @@ async function runBuiltInAgent(o: {
     runId,
     waitForApproval: approvalWaiter(state),
     onPersistAlwaysRule: persistRule(d),
+    ...(o.userParts ? { userParts: o.userParts } : {}),
+    ...(o.attachMeta ? { attachMeta: o.attachMeta } : {}),
+    ...(s.compatibleImages || o.imageMode ? { imageMode: (o.imageMode || s.compatibleImages || 'auto') as 'auto' | 'on' | 'off' } : {}),
   });
 }
 
@@ -640,7 +785,7 @@ export function registerIpc(): void {
   ipcMain.handle(IpcChannels.listConversations, () => listConversations(db()));
   ipcMain.handle(IpcChannels.createConversation, (_e, title?: string) => createConversation(db(), title));
   ipcMain.handle(IpcChannels.getMessages, (_e, id: string) => getMessages(db(), id));
-  ipcMain.handle(IpcChannels.deleteConversation, (_e, id: string) => { deleteConversation(db(), id); return true; });
+  ipcMain.handle(IpcChannels.deleteConversation, (_e, id: string) => { deleteConversation(db(), id); try { deleteRunAttachments(appBaseDir(), id); } catch { /* best-effort */ } return true; });
   ipcMain.handle(IpcChannels.listTemplates, () => listTemplates(db()));
   ipcMain.handle(IpcChannels.upsertTemplate, (_e, t) => upsertTemplate(db(), t));
   ipcMain.handle(IpcChannels.listWorkflows, () => listWorkflows(db()));
@@ -763,10 +908,12 @@ export function registerIpc(): void {
 
   // Built-in computer-use agent: start returns a runId immediately; AgentEvents
   // stream back via the agentEvent push channel. Renderer never gets shell access.
-  ipcMain.handle(IpcChannels.agentStart, async (e, conversationId: string, content: string, opts: { cwd?: string } = {}) => {
+  ipcMain.handle(IpcChannels.agentStart, async (e, conversationId: string, content: string, opts: { cwd?: string; attachments?: SendOpts['attachments'] } = {}) => {
     const d = db();
     const s = getSettings(d);
-    addMessage(d, conversationId, 'user', content);
+    const staged = opts.attachments || [];
+    const text = content.trim() || (staged.length ? ATTACH_STRINGS.defaultInstruction : content);
+    addMessage(d, conversationId, 'user', text);
     const history = getMessages(d, conversationId);
     const key = getSecret(d, apiKeyService(s.provider)) || process.env[`${s.provider.toUpperCase()}_API_KEY`] || '';
     const controller = new AbortController();
@@ -781,15 +928,38 @@ export function registerIpc(): void {
       try {
         const cwd = opts.cwd || s.agentCwd || os.homedir();
         routeStatus(sender, runId, 'doing');
+        let userParts: ContentPart[] | undefined;
+        let attachMeta: string | undefined;
+        if (staged.length) {
+          const prepared = prepareAttachments(runId, staged, cwd, policyFor(s, cwd));
+          registerRunAttachments(runId, prepared.map((p) => p.ref));
+          try {
+            const wlog = createRunLog(undefined, runId);
+            for (const p of prepared) appendLog(wlog.path, { runId, attachment: p.log });
+          } catch { /* logging never breaks the run */ }
+          userParts = buildUserParts(text, prepared);
+          attachMeta = `Attached files: ${prepared.map((p) => p.ref.path).join('; ')}`;
+        }
         const full = await runBuiltInAgent({
-          sender, d, s, key, content, history, cwd, runId,
-          controller, state, prompt: content,
+          sender, d, s, key, content: text, history, cwd, runId,
+          controller, state, prompt: text,
+          ...(userParts ? { userParts } : {}),
+          ...(attachMeta ? { attachMeta } : {}),
+          imageMode: s.compatibleImages || 'auto',
         });
         if (full) addMessage(d, conversationId, 'assistant', full);
-        finishRun(d, sender, runId, 'agent', content, full, controller.signal.aborted ? 'stopped' : 'done', cwd);
+        finishRun(d, sender, runId, 'agent', text, full, controller.signal.aborted ? 'stopped' : 'done', cwd);
       } catch (e2) {
+        if (e2 instanceof VisionNotSupportedError) {
+          const notice = ATTACH_STRINGS.visionNotice;
+          addMessage(d, conversationId, 'assistant', notice);
+          emit({ type: 'text_delta', text: notice });
+          emit({ type: 'done', summary: notice });
+          finishRun(d, sender, runId, 'agent', text, notice, 'done', opts.cwd || s.agentCwd || os.homedir());
+          return;
+        }
         emit({ type: 'error', message: asError(e2).message.slice(0, 500) });
-        finishRun(d, sender, runId, 'agent', content, asError(e2).message, 'error', opts.cwd || s.agentCwd || os.homedir());
+        finishRun(d, sender, runId, 'agent', text, asError(e2).message, 'error', opts.cwd || s.agentCwd || os.homedir());
       } finally {
         agentRuns.delete(runId);
       }
@@ -1063,6 +1233,88 @@ export function registerIpc(): void {
     } catch (err) {
       throw asError(err);
     }
+  });
+
+  // ---------- Attachments ----------
+  try { sweepOldAttachments(appBaseDir()); } catch { /* best-effort orphan sweep */ }
+  ipcMain.handle(IpcChannels.attachPick, async () => {
+    // Paperclip picker: multi-select through the dialog lock (no blur-hide).
+    let picked: string[] = [];
+    try {
+      picked = await pickAttachFiles(getPopup(), ATTACH_LIMITS.maxCount);
+    } catch { picked = []; }
+    try {
+      const s = getSettings(db());
+      const cwd = s.agentCwd || os.homedir();
+      return picked.map((p) => {
+        let name = p.split(/[\\/]/).pop() || 'file';
+        let size = 0;
+        let mime = 'application/octet-stream';
+        let previewDataUrl: string | undefined;
+        try {
+          const st = fs.statSync(p);
+          size = st.size;
+          if (st.isFile() && size <= ATTACH_LIMITS.maxFileBytes) {
+            const fd = fs.openSync(p, 'r');
+            try {
+              const head = Buffer.alloc(Math.min(size, 8192));
+              const n = fs.readSync(fd, head, 0, head.length, 0);
+              const sniffed = sniffMime(new Uint8Array(head.buffer, head.byteOffset, n), name);
+              if (sniffed && sniffed !== 'exe') {
+                mime = sniffed;
+                if (mime.startsWith('image/')) {
+                  try {
+                    const full = fs.readFileSync(p);
+                    previewDataUrl = processImage(full, mime).dataUrl;
+                  } catch { /* chips-only fallback */ }
+                }
+              }
+            } finally { fs.closeSync(fd); }
+          }
+        } catch { /* keep defaults */ }
+        let verdict = 'allow';
+        let reason: string | undefined;
+        try {
+          const v = classifyAttachPath(p, cwd, policyFor(s, cwd));
+          verdict = v.verdict;
+          reason = v.reason;
+        } catch (e) { verdict = 'deny'; reason = (e as Error).message; }
+        return { path: p, name, size, mime, previewDataUrl, verdict, reason };
+      });
+    } catch { return []; }
+  });
+  ipcMain.handle(IpcChannels.attachProcess, async (_e, input: { runId: string; name: string; dataBase64: string }) => {
+    try {
+      const runId = String(input.runId || `run-${Date.now()}`);
+      const bytes = Buffer.from(input.dataBase64 || '', 'base64');
+      if (!bytes.length) throw new Error(`Rejected ${input.name}: empty file`);
+      if (bytes.length > ATTACH_LIMITS.maxFileBytes) throw new Error(`${ATTACH_STRINGS.oversizeError}: ${input.name} (max 20MB per file)`);
+      const u8 = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length);
+      const sniffed = sniffMime(u8, input.name);
+      if (sniffed === 'exe' || sniffed === null) throw new Error(`Rejected ${input.name}: executable or unknown content (type checked, not extension)`);
+      const mime = sniffed;
+      if (mime.startsWith('image/')) {
+        const proc = processImage(bytes, mime);
+        const stored = saveAttachment(appBaseDir(), runId, input.name, proc.mime, proc.bytes, { width: proc.width, height: proc.height, dataUrl: proc.dataUrl });
+        return { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, kind: 'image', width: stored.width, height: stored.height, previewDataUrl: stored.previewDataUrl, sha256: stored.sha256 };
+      }
+      const { text, truncated } = decodeText(bytes);
+      void truncated;
+      const stored = saveAttachment(appBaseDir(), runId, input.name, mime, Buffer.from(text, 'utf8'));
+      return { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, kind: stored.kind, sha256: stored.sha256 };
+    } catch (e) { throw asError(e); }
+  });
+  ipcMain.handle(IpcChannels.attachClassify, async (_e, input: { path: string }) => {
+    try {
+      const s = getSettings(db());
+      const cwd = s.agentCwd || os.homedir();
+      const v = classifyAttachPath(String(input.path || ''), cwd, policyFor(s, cwd));
+      return { verdict: v.verdict, reason: v.reason };
+    } catch (e) { throw asError(e); }
+  });
+  ipcMain.handle(IpcChannels.attachClear, async (_e, runId: string) => {
+    try { deleteRunAttachments(appBaseDir(), String(runId || '')); } catch { /* best-effort */ }
+    return true;
   });
 
   refreshStopHotkey();
