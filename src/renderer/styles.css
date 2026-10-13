@@ -6,7 +6,7 @@
 
 :root {
   --bg-page: #0F1013; --panel: #15161B; --surface: #1D1F26; --hover: #23262E;
-  --border: #2A2D36; --divider: #23262E; --selected: #262A33;
+  --border: #2A2D36; --divider: #23262E; --selected: #262A33; /* intentional: selected differs from hover per spec */
   --text: #ECEDEF; --text-body: #E3E5EA; --text-soft: #D8DAE0; --muted: #8B8F9A;
   --accent: #B8F26B; --on-accent: #0F1013;
   --danger: #FF8A80; --warn: #F2C96B;
@@ -138,8 +138,6 @@ body.show-tabkey #mode-hint { display: inline !important; }
 .set-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 #settings .set-head { margin-bottom: 0; }
 .set-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
-.set-sec { font-size: 13px; font-weight: 600; color: var(--text); margin: 8px 0 0; padding-top: 12px;
-  border-top: 1px solid var(--divider); }
 #agent-cwd svg { vertical-align: -2px; }
 .fld { display: block; margin-bottom: 14px; }
 .flab { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; font-weight: 500; }
@@ -154,9 +152,7 @@ body.show-tabkey #mode-hint { display: inline !important; }
 .seg button { border: 0; background: none; color: var(--muted); padding: 6px 4px; border-radius: 8px; font-size: 13px; cursor: pointer; font-family: inherit; }
 .seg .on { background: var(--border); color: var(--text); }
 .note { margin: -8px 0 14px; font-size: 12px; color: var(--muted); }
-.hotkey-row { display: flex; align-items: center; justify-content: space-between; background: #17181D;
-  border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; font-size: 14px; }
-#settings .row { display: flex; gap: 8px; align-items: center; }
+#settings .row { display: flex; gap: 8px; align-items: center; margin: 0; }
 #settings .save-row { margin-bottom: 0; }
 #settings .save-row .btn-primary { flex: 1; }
 #settings .test-row .btn { flex: none; width: 120px; }
@@ -235,7 +231,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 #btn-agent-add-root { background: var(--surface); border: 1px solid var(--border); color: var(--text-soft);
   border-radius: 10px; padding: 6px 12px; font-size: 13px; cursor: pointer; font-family: inherit; }
 /* switches: the native checkbox stays the control (role=switch), the track is paint only */
-.fld.check { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+.fld.check { display: flex; align-items: center; justify-content: space-between; gap: 16px; position: relative;
   padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
 .fld.check .switch-tx { min-width: 0; flex: 1; }
 .fld.check .flab { font-size: 14px; color: var(--text); margin: 0 0 2px; }
