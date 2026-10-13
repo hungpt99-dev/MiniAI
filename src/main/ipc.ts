@@ -269,7 +269,7 @@ function finishRun(
 ): void {
   const undoable = undoAvailable(runId);
   try {
-    recordRun({ runId, kind, prompt, outcome: oneLineOutcome(outcome), ts: Date.now(), status, undoable });
+    recordRun({ runId, kind, prompt, outcome: oneLineOutcome(outcome), ts: Date.now(), status, undoable, engine: 'builtin' });
   } catch { /* history must never break runs */ }
   try {
     sender.send(IpcChannels.runSummary, { runId, undoable, folder: undoable ? undoFolder(runId, cwd) : undefined });
