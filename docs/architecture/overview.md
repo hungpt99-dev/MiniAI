@@ -3,8 +3,8 @@
 ## Processes
 
 - **main** (`src/main/`): Electron main — IPC handlers, SQLite DB,
-  chat providers, agent runtimes, slash registry, secret/settings stores.
-- **shared** (`src/shared/`): IPC channel names, types, mode-utils.
+  chat providers, agent loop + runtimes, slash registry, secret/settings stores.
+- **shared** (`src/shared/`): IPC channel names, types, mode-utils, approval, focus.
   Must stay main+renderer safe (no Node/Electron imports).
 - **renderer** (`src/renderer/`): plain JS/CSS Spotlight popup (640 content
   width, auto-height 72–560, window==panel (no shadow, no pad), transparent frameless).
@@ -12,19 +12,87 @@
   panel height; main clamps and sizes the window. Bundled fonts only
   (`fonts/`, Geist + JetBrains Mono, OFL) — no remote links. Dark only.
 
+## Entry points
+
+- `src/main/main.ts` — `startup()`: single-instance lock, `getDb()`,
+  `seedBuiltins()`, `registerIpc()`, extension seed/autostart, popup + tray,
+  toggle hotkey. Stays in tray on window-all-closed.
+- `src/main/popup.ts` — frameless popup window, height clamp, blur-hide.
+- `src/main/tray.ts` — Show/Hide + Quit.
+- `src/main/preload.ts` — `window.nexio` bridge only; no direct Node access.
+
 ## IPC
 
 Renderer → preload → main handlers (`src/main/ipc.ts`), channels in
 `src/shared/ipc-channels.ts`. Keys never cross the bridge unmasked;
-`redact()` before any logging.
+`redact()` before any logging. Non-Error rejections normalize via `asError()`
+so the real cause (`auth: …`, `runtime-unavailable: …`) reaches the UI.
+Contract is pinned by `tests/unit/ipc-contract.test.ts` (prefix, uniqueness,
+required channels).
+
+- Chat: `send` (intent-routed), `chat` (direct stream), `chat-cancel`, `chat-stream` (push).
+- Do mode: `agentStart` → runId + `agentEvent` push, `agentApprove`, `agentStop`,
+  `agentLog`, `agentRun` (explicit agent send), `runtimeList`/`runtimeRefresh` (caps).
+- Data: settings, api-key, conversations/messages, templates, workflows,
+  slash, ext, runs/undo/reveal, platform/hotkey, route-status/run-summary/popup-shown.
+
+## Agent loop (built-in computer use)
+
+`src/main/agent/loop.ts` `runAgent()` runs fully in main: system prompt →
+`requestToolTurn` (`src/main/ai/tools-chat.ts`) → `executeToolCall()` per call
+→ repeat until text answer, limit, abort, or timeout. Every run appends
+redacted JSONL (`log.ts`). Renderer only renders `AgentEvent`s and resolves
+approvals over IPC; it never gets shell access.
+
+`Do` sends call `loop.ts` directly via `runBuiltInAgent()` in `ipc.ts`
+(approvals, ext tools, history/finishRun shared with `agentStart`).
 
 ## Router (no-fallback rule)
 
-Router freezes mode, runtime, session, and requestId at dispatch.
+`src/main/agent/router.ts` freezes mode, runtime, session, and requestId at
+dispatch. `chat` → chat fn; `agent` → external runtime adapter
+(`adapter.ts` + `opencode.ts` HTTP-SSE + `cli.ts` Claude/Codex CLI-JSONL,
+`router.test.ts` + `adapters.test.ts` mocked only — never live-verified).
 No silent fallback between providers or runtimes — failures surface
-with `{ok|failed|aborted}` instead of retrying elsewhere.
+as thrown errors instead of retrying elsewhere.
 
-## Platform adapter
+## Tools
+
+`src/main/agent/tools/registry.ts` (`ALL_TOOLS`, `TOOL_MAP`): `fs_list`,
+`fs_read`, `fs_write`, `fs_copy`, `fs_move`, `fs_trash`, `fs_search`,
+`app_open`, `apps_list`, `clipboard`, `clipboard_read`, `clipboard_write`,
+`shell_run`, `web_search`, `web_fetch`. MCP tools join the same registry as
+`mcp__server__tool`; `skill_load` surfaces enabled skills.
+
+## Permissions
+
+`src/main/agent/permissions.ts` + `src/main/platform/` (`win32.ts`/`darwin.ts`):
+`validateInput` (schema) → hooks (`PreToolUse`: block or force-approval only,
+never auto-approve) → path normalization (`normalizeAndResolve`) → `decidePolicy`
+(auto / approval-required / denied) → approval wait (excluded from run budget)
+→ run with tool timeout → truncate. Reads auto-run inside allowed folders;
+writes need approval; `shell_run` needs approval every time; deletes are
+trash-only. `shell_run` and MCP tools are never undoable.
+
+## Extensions
+
+`src/main/extensions/`: skills (progressive `skill_load`, `/<skill>` arms context),
+MCP (official SDK, stdio + Streamable HTTP/SSE, trust-gated), hooks
+(`PreToolUse`/`ApprovalRequested`/`PostToolUse`/`UserPromptSubmit`/`RunStopped`/`RunDone`,
+can only make permissions stricter), workflows (ext + legacy). One typed
+dispatch channel (`nexio:ext`). Everything installs OFF until reviewed.
+
+## Settings / storage
+
+SQLite `%APPDATA%/Nexio/nexio.db` (WAL), override `NEXIO_DATA_DIR`
+(`src/main/db/db.ts`). Legacy MiniAI paths (`.MiniAI` db files) are read
+in place, never moved. Tables: conversations, messages, templates, workflows,
+runs, secrets (safeStorage DPAPI/Keychain, XOR fallback warns only), settings
+(key/value JSON, `validateSettings` + `updateSettings`). Dev-only env fallback
+`${PROVIDER}_API_KEY`. `getSettings()` currently passes unknown/legacy rows
+through (see baseline test); MiniAI→Nexio migration is DB-path only.
+
+## Platform
 
 All OS differences live behind one interface (`src/main/platform/`:
 `win32.ts` + `darwin.ts`, chosen at startup). Shell execution, app listing,
