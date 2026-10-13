@@ -79,7 +79,7 @@ const shot = async (n) => {
   const r = await py(SHOT_PY.replace('NAME', n));
   if (!r.includes('saved')) throw new Error('shot-failed ' + n + ': ' + r);
 };
-const S = async () => JSON.parse(await ev(`JSON.stringify({active:(document.activeElement||{}).id||null,input:document.getElementById('input').value,ph:document.getElementById('input').placeholder,palHidden:document.getElementById('palette').classList.contains('hidden'),items:[...document.querySelectorAll('#palette .item')].map(e=>e.textContent.trim().slice(0,50)),pActive:[...document.querySelectorAll('#palette .item')].findIndex(e=>e.classList.contains('active')),msgs:[...document.querySelectorAll('#messages .msg')].map(e=>e.textContent.trim().slice(0,100)),mode:(document.querySelector('#modebar .tab.active')||{textContent:'NONE'}).textContent.trim(),rt:document.getElementById('runtime')?document.getElementById('runtime').textContent.trim():null,vis:['palette','messages','settings','history'].filter(id=>!document.getElementById(id).classList.contains('hidden')),noSelect:!document.querySelector('select')})`));
+const S = async () => JSON.parse(await ev(`JSON.stringify({active:(document.activeElement||{}).id||null,input:document.getElementById('input').value,ph:document.getElementById('input').placeholder,palHidden:document.getElementById('palette').classList.contains('hidden'),items:[...document.querySelectorAll('#palette .item')].map(e=>e.textContent.trim().slice(0,50)),pActive:[...document.querySelectorAll('#palette .item')].findIndex(e=>e.classList.contains('active')),msgs:[...document.querySelectorAll('#messages .msg')].map(e=>e.textContent.trim().slice(0,100)),mode:(document.querySelector('#modebar .tab.active')||{textContent:'NONE'}).textContent.trim(),vis:['palette','messages','settings','history'].filter(id=>!document.getElementById(id).classList.contains('hidden')),noSelect:!document.querySelector('select')})`));
 
 async function main() {
   await connect();
@@ -130,11 +130,9 @@ async function main() {
   await connect();
   s = await S();
   check('reshow-refocuses', s.active === 'input', s.active);
-  // normalize persisted mode/runtime: a previous run may have left agent mode
-  // (or runtime=claude), which inverts Tab counting for the checks below
+  // normalize persisted mode: a previous run may have left agent mode,
+  // which inverts Tab counting for the checks below
   if (s.mode.toLowerCase().includes('agent')) {
-    await ev(`{const b=document.getElementById('runtime'); let n=0; while(b.textContent.trim()!=='opencode'&&n++<5) b.click();}`);
-    await sleep(300);
     await key('Tab');
     s = await S();
   }
@@ -251,7 +249,7 @@ async function main() {
   check('tab-draft-roundtrip', s.input === before, s.input);
   check('placeholder-differs', s.ph !== phAgent, `chat='${s.ph}' agent='${phAgent}'`);
   await shot('07-agent-mode');
-  // agent palette lists runtime commands
+  // agent palette lists Do-mode commands
   await ev(`document.getElementById('input').value=''`);
   await key('Tab');
   await ev(`{const el=document.getElementById('input'); el.value=''; el.dispatchEvent(new Event('input',{bubbles:true}));}`);
@@ -343,15 +341,13 @@ async function main() {
   const lastMsg = s.msgs[s.msgs.length - 1] || '';
   check('workflow-fails-loudly', !/…$/.test(lastMsg) && /fail|error|output|status/i.test(lastMsg), lastMsg.slice(0, 200));
   await shot('14-workflow-fail');
-  // runtime selector switches routing context
+  // Do mode is built-in only: no runtime picker, Tab switches mode pills
   await key('Tab'); // to agent
-  await ev(`{const b=document.getElementById('runtime'); let n=0; while(b.textContent.trim()!=='claude'&&n++<5) b.click();}`);
   await sleep(400);
   s = await S();
-  check('runtime-switches', /claude/i.test(s.ph), s.ph);
-  check('runtime-button-label', s.rt === 'claude', s.rt);
+  check('agent-placeholder', /what do you want to do/i.test(s.ph), s.ph);
+  check('no-runtime-picker', await ev(`!document.getElementById('runtime')`));
   await key('Tab'); // back to chat
-  await ev(`{const b=document.getElementById('runtime'); let n=0; while(b.textContent.trim()!=='opencode'&&n++<5) b.click();}`);
   const msgCount = (await S()).msgs.length;
   // hide via hotkey toggle, reshow, history persists (same window, no destroy)
   await py(HIDE_PY);

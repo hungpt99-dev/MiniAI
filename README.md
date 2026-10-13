@@ -95,12 +95,11 @@ See [docs/architecture/local-agent.md](docs/architecture/local-agent.md).
 
 See [docs/architecture/extensions.md](docs/architecture/extensions.md).
 
-**Agent Mode (external runtimes: implemented, needs real-runtime verification)**
+**Do mode (built-in only, no external runtimes)**
 
-- Adapters exist for OpenCode (HTTP-SSE) and Claude / Codex (CLI-JSONL). Router never falls back silently. Sessions are tracked per runtime.
-- This is implemented but not live-verified: tests are mocked only, no real runtime has been connected. Do not treat it as done.
-
-See [docs/architecture/agent-runtime-adapters.md](docs/architecture/agent-runtime-adapters.md) and [docs/agents/compatibility.md](docs/agents/compatibility.md).
+- Do mode runs only the built-in tool-calling loop in the main process — no
+  external agent CLI, no runtime picker. Old `agentRuntime` / `agentBackend` /
+  `engine` settings fall back to built-in and are purged on read.
 
 ## When to use it
 
@@ -149,11 +148,9 @@ Setup details: [docs/development/setup.md](docs/development/setup.md). Testing d
 
 v0.1.0 pre-release / experimental.
 
-**Working:** popup / hotkey / tray, Ask + streaming + cancel, slash + templates, workflows, history, `Tab` switching, router.
+**Working:** popup / hotkey / tray, Ask + streaming + cancel, slash + templates, workflows, history, `Tab` switching, router, built-in Do loop.
 
-**Implemented, needs real-runtime verification:** Agent Mode adapters (OpenCode HTTP-SSE, Claude / Codex CLI-JSONL) versus live runtimes. Mocked tests only, no real runtime connected.
-
-**Planned:** live runtime verification, installer release, PNG icon.
+**Planned:** installer release, PNG icon.
 
 **Known issues:**
 

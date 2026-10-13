@@ -1,9 +1,9 @@
 # Docs
 
-- `product/implementation-status.md` — what is built, experimental, planned.
-- `architecture/overview.md` — main/shared/renderer, IPC, router rule.
-- `architecture/agent-runtime-adapters.md` — agent adapter table.
-- `development/setup.md` — Windows setup.
-- `development/testing.md` — typecheck + vitest.
-- `development/troubleshooting.md` — incl. SQLite/Electron blocker.
-- `agents/` — agent runtime notes; `AGENTS.md` (repo root) is canonical.
+- `product/implementation-status.md` â€” what is built, experimental, planned.
+- `architecture/overview.md` â€” main/shared/renderer, IPC, router rule.
+- `architecture/local-agent.md` â€” built-in Do loop, tools, approvals.
+- `development/setup.md` â€” Windows setup.
+- `development/testing.md` â€” typecheck + vitest.
+- `development/troubleshooting.md` â€” incl. SQLite/Electron blocker.
+- `agents/` â€” Do-loop notes; `AGENTS.md` (repo root) is canonical.

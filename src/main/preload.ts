@@ -1,11 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { IpcChannels } from '../shared/ipc-channels';
-import type { Mode, RuntimeId, Settings, ExtAction } from '../shared/types';
+import type { Mode, Settings, ExtAction } from '../shared/types';
 import type { AgentEvent, ApprovalDecision } from './agent/types';
 
 export interface SendOpts {
   mode?: Mode;
-  runtimeId?: RuntimeId;
   sessionId?: string;
   requestId?: string;
   /** True when the user explicitly picked the mode pill (wins over intent routing). */
@@ -33,8 +32,6 @@ const api = {
     ipcRenderer.invoke(IpcChannels.send, conversationId, content, opts || {}),
   agentRun: (conversationId: string, content: string, opts?: SendOpts) =>
     ipcRenderer.invoke(IpcChannels.agentRun, conversationId, content, opts || {}),
-  runtimeList: () => ipcRenderer.invoke(IpcChannels.runtimeList),
-  runtimeRefresh: () => ipcRenderer.invoke(IpcChannels.runtimeRefresh),
   cancel: (requestId?: string) => ipcRenderer.send(IpcChannels.chatCancel, requestId),
   resize: (contentHeight: number) => ipcRenderer.send(IpcChannels.resize, contentHeight),
   agentStart: (conversationId: string, content: string, opts?: { cwd?: string }) =>

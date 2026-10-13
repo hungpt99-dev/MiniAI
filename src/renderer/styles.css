@@ -65,9 +65,6 @@ body.mac { font-family: Geist, -apple-system, 'SF Pro Text', system-ui, sans-ser
 #modebar .tab { border: 0; background: none; color: var(--muted); border-radius: 999px;
   padding: 3px 10px; font-size: 12px; cursor: pointer; font-family: inherit; }
 #modebar .tab.active { background: var(--selected); color: var(--text); }
-#modebar #runtime { border: 0; background: none; color: var(--muted);
-  border-radius: 999px; font-size: 12px; padding: 3px 10px; font-family: inherit; cursor: pointer; }
-#modebar #runtime:hover { color: var(--text); }
 /* single Tab keycap: hover or composer-focused-and-empty only */
 #mode-hint { display: none; }
 #modebar:hover #mode-hint { display: inline !important; }

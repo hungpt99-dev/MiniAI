@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import os from 'node:os';
+import path from 'node:path';
 import { IpcChannels } from '../../src/shared/ipc-channels';
-import { openTestDb } from '../../src/main/db/db';
+import { openTestDb, resolveDbPath } from '../../src/main/db/db';
 import { getSettings } from '../../src/main/store/settings';
 
-// Phase 0 characterization: pin the IPC contract and legacy-settings
-// pass-through before the external-runtime removal changes them.
+// Phase 1: IPC contract without external runtimes; legacy runtime keys
+// migrate to the built-in fallback, MiniAI DB reuse untouched.
 describe('ipc contract', () => {
   it('channels share the nexio: prefix with no duplicates', () => {
     const vals = Object.values(IpcChannels);
@@ -18,16 +20,33 @@ describe('ipc contract', () => {
       expect(IpcChannels[k]).toBe(`nexio:${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`);
     }
   });
+  it('has no external-runtime channels', () => {
+    expect('runtimeList' in IpcChannels).toBe(false);
+    expect('runtimeRefresh' in IpcChannels).toBe(false);
+    expect(Object.values(IpcChannels).some((v) => v.includes('runtime'))).toBe(false);
+  });
 });
 
-describe('settings legacy pass-through', () => {
-  it('returns unknown/legacy rows as-is (pre-migration behavior)', () => {
+describe('settings runtime migration', () => {
+  it('drops removed runtime keys and purges their rows (builtin fallback)', () => {
     const db = openTestDb();
-    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('agentBackend', JSON.stringify('opencode'));
-    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('engine', JSON.stringify('codex'));
+    for (const [k, v] of [
+      ['agentRuntime', 'claude'], ['agentBackend', 'opencode'], ['engine', 'codex'],
+      ['opencodeBaseUrl', 'http://localhost:4096'], ['claudeBin', 'claude'], ['codexBin', 'codex'],
+    ]) {
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(k, JSON.stringify(v));
+    }
     const s = getSettings(db) as unknown as Record<string, unknown>;
-    expect(s.agentBackend).toBe('opencode');
-    expect(s.engine).toBe('codex');
+    for (const k of ['agentRuntime', 'agentBackend', 'engine', 'opencodeBaseUrl', 'claudeBin', 'codexBin']) {
+      expect(s[k]).toBeUndefined();
+    }
+    const left = db.prepare("SELECT key FROM settings WHERE key IN ('agentRuntime','agentBackend','engine','opencodeBaseUrl','claudeBin','codexBin')").all();
+    expect(left).toEqual([]);
+    expect(s.mode).toBe('agent');
     db.close();
+  });
+  it('resolveDbPath honors an explicit data dir (MiniAI reuse path untouched)', () => {
+    const dir = path.join(os.tmpdir(), 'nexio-mig');
+    expect(resolveDbPath(dir)).toBe(path.join(dir, 'nexio.db'));
   });
 });

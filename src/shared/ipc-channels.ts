@@ -4,8 +4,6 @@ export const IpcChannels = {
   chat: 'nexio:chat',
   send: 'nexio:send',
   agentRun: 'nexio:agent-run',
-  runtimeList: 'nexio:runtime-list',
-  runtimeRefresh: 'nexio:runtime-refresh',
   getSettings: 'nexio:get-settings',
   setSettings: 'nexio:set-settings',
   setApiKey: 'nexio:set-api-key',

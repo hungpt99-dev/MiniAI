@@ -17,7 +17,6 @@
       <div id="modebar" role="tablist" aria-label="Mode" class="hidden">
         <button id="tab-chat" role="tab" aria-selected="true" class="tab active">Ask</button>
         <button id="tab-agent" role="tab" aria-selected="false" class="tab">Do</button>
-        <button id="runtime" title="Agent runtime" class="hidden" aria-label="Agent runtime">opencode</button>
         <span id="mode-hint" title="Tab switches mode"><span class="k">Tab</span></span>
       </div>
     </header>
@@ -41,9 +40,6 @@
         <div class="note" id="enc-note">Encrypted on this device with Windows DPAPI.</div>
         <label class="fld"><span class="flab">Model</span><input id="set-model" class="mono" /></label>
         <label class="fld hidden" id="fld-baseurl"><span class="flab">Base URL</span><input id="set-baseurl" placeholder="optional" class="mono" /></label>
-        <label class="fld"><span class="flab">OpenCode URL</span><input id="set-opencode" placeholder="http://localhost:4096" class="mono" /></label>
-        <label class="fld"><span class="flab">Claude bin</span><input id="set-claudebin" placeholder="claude" class="mono" /></label>
-        <label class="fld"><span class="flab">Codex bin</span><input id="set-codexbin" placeholder="codex" class="mono" /></label>
         <label class="fld"><span class="flab">Agent cwd</span><input id="set-agentcwd" placeholder="optional" class="mono" /></label>
         <div class="fld"><span class="flab">Agent — allowed folders</span><ul id="agent-roots" class="agent-list"></ul><div class="row"><button id="btn-agent-add-root">Add folder</button></div></div>
         <div class="fld"><span class="flab">Agent — always-allow rules</span><ul id="agent-rules" class="agent-list"></ul></div>

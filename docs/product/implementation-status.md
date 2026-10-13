@@ -10,16 +10,12 @@ Verified from source; packaged-SQLite caveat in main README.
 | Secrets | safeStorage DPAPI + XOR fallback (dev `console.warn`), `redact()` |
 | Env fallback | `${PROVIDER}_API_KEY` in `ipc.ts` |
 | DB | `%APPDATA%/Nexio/nexio.db` or `NEXIO_DATA_DIR`, WAL mode |
-| Router | Freezes mode/runtime/session/requestId, no silent fallback |
+| Router | Freezes mode/session/requestId, no silent fallback; agent → built-in loop only |
 | Tab toggle | Palette/IME/focus guards + Alt+M |
 | Slash | Scope chat/agent/both with suggestions |
 | Workflows | prompt → transform → conditional → user-input → output |
 
-## Experimental
-
-| Area | Detail |
-|---|---|
-| Agent adapters | opencode HTTP SSE, claude/codex CLI JSONL (see agents docs) |
+| Do loop | Built-in tool loop in main, approvals, redacted JSONL + runs.jsonl |
 
 ## Planned / known gaps
 

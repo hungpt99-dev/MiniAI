@@ -1,7 +1,6 @@
 export type ProviderId = 'openai' | 'anthropic' | 'gemini' | 'compatible';
 
 export type Mode = 'chat' | 'agent';
-export type RuntimeId = 'opencode' | 'claude' | 'codex';
 export type SlashScope = 'chat' | 'agent' | 'all';
 
 export interface ChatMessage {
@@ -64,11 +63,7 @@ export interface Settings {
   theme: 'light' | 'dark';
   hotkey: string;
   mode: Mode;
-  agentRuntime: RuntimeId;
   modeHotkey: string;
-  opencodeBaseUrl?: string;
-  claudeBin?: string;
-  codexBin?: string;
   agentCwd?: string;
   agentAllowedRoots?: string[];
   agentAlwaysAllow?: AgentAlwaysRule[];

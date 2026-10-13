@@ -67,7 +67,7 @@ export const PROVIDER_DEFS: Record<ProviderId, ProviderDef> = {
 };
 
 export function mapHttpError(status: number, bodyText: string): NexioError {
-  if (status === 401 || status === 403) return { code: 'auth', message: `Authentication failed (${status})` };
+  if (status === 401 || status === 403) return { code: 'auth', message: `Authentication failed (${status}) — open Settings and check your API key` };
   if (status === 429) return { code: 'rate-limit', message: 'Rate limited (429)' };
   if (status === 404 || status === 400) {
     if (/model/i.test(bodyText)) return { code: 'model', message: `Model error (${status}): ${bodyText.slice(0, 200)}` };

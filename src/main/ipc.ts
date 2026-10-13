@@ -30,10 +30,7 @@ import { parseWorkflowDoc, runExtWorkflow } from './extensions/workflows';
 import type { ExtAction, ExtSourceInput } from '../shared/types';
 import type { SourceInput } from './extensions/sources';
 import { setPopupHeight, togglePopup } from './popup';
-import { createOpencodeAdapter } from './agent/opencode';
-import { createClaudeAdapter, createCodexAdapter } from './agent/cli';
-import type { AgentRuntimeAdapter } from './agent/adapter';
-import type { ChatMessage, Mode, RuntimeId, Settings } from '../shared/types';
+import type { ChatMessage, Mode, Settings } from '../shared/types';
 
 const aborters = new Map<string, AbortController>();
 let seq = 0;
@@ -171,7 +168,7 @@ export function platformInfo(): {
 }
 
 // IPC serializes non-Error rejections as "[object Object]" — normalize at the boundary
-// so the real cause (e.g. `auth: ...`, `runtime-unavailable: ...`) reaches the UI.
+// so the real cause (e.g. `auth: ...`) reaches the UI.
 function asError(e: unknown): Error {
   if (e instanceof Error) return e;
   const o = e as { code?: string; message?: string };
@@ -239,17 +236,8 @@ function extSlashEntries(): { skills: SlashEntry[]; workflows: SlashEntry[]; mcp
   }
 }
 
-function buildAgents(s: Settings): Partial<Record<RuntimeId, AgentRuntimeAdapter>> {
-  return {
-    opencode: createOpencodeAdapter({ baseUrl: s.opencodeBaseUrl || '' }),
-    claude: createClaudeAdapter(s.claudeBin || '', undefined, s.agentCwd),
-    codex: createCodexAdapter(s.codexBin || '', undefined, s.agentCwd),
-  };
-}
-
 export interface SendOpts {
   mode?: Mode;
-  runtimeId?: RuntimeId;
   sessionId?: string;
   requestId?: string;
   /** True when the user explicitly picked the mode pill (wins over intent routing). */
@@ -295,10 +283,9 @@ async function runSend(
   opts: SendOpts = {},
 ): Promise<string> {
   const d = db();
-  // Freeze mode/runtime/sessionId/requestId at send time.
+  // Freeze mode/sessionId/requestId at send time.
   const s = getSettings(d);
   const mode: Mode = opts.mode || s.mode || 'agent';
-  const runtimeId: RuntimeId = opts.runtimeId || s.agentRuntime || 'opencode';
   const sessionId = opts.sessionId || conversationId;
   const requestId = opts.requestId || `req-${Date.now()}-${++seq}`;
   addMessage(d, conversationId, 'user', content);
@@ -348,7 +335,7 @@ async function runSend(
       aborters.delete(requestId);
     }
   }
-  const frozen: RouteInput = { mode: effective, runtimeId, sessionId, requestId, prompt: content };
+  const frozen: RouteInput = { mode: effective, sessionId, requestId, prompt: content };
   try {
     const full = await routeRequest(
       { ...frozen, cwd: s.agentCwd, signal: aborter.signal, onToken: (t) => sender.send(IpcChannels.chatStream, { token: t, done: false, conversationId, requestId }) },
@@ -362,7 +349,6 @@ async function runSend(
           });
           return acc;
         },
-        agents: buildAgents(s),
       },
     );
     addMessage(d, conversationId, 'assistant', full);
@@ -734,13 +720,6 @@ export function registerIpc(): void {
   ipcMain.handle(IpcChannels.agentRun, (e, conversationId: string, content: string, opts: SendOpts = {}) =>
     runSend(e.sender, conversationId, content, { ...opts, mode: 'agent', explicit: true }),
   );
-
-  const capsOf = () => {
-    const s = getSettings(db());
-    return Promise.all(Object.values(buildAgents(s)).map((a) => a!.caps()));
-  };
-  ipcMain.handle(IpcChannels.runtimeList, () => capsOf());
-  ipcMain.handle(IpcChannels.runtimeRefresh, () => capsOf());
 
   // Built-in computer-use agent: start returns a runId immediately; AgentEvents
   // stream back via the agentEvent push channel. Renderer never gets shell access.

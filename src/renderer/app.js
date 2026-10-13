@@ -3,7 +3,7 @@
 const $ = (id) => document.getElementById(id);
 const messagesEl = $('messages'), inputEl = $('input'), paletteEl = $('palette');
 let convId = null, paletteItems = [], paletteActive = 0, assistantDiv = null;
-let mode = 'chat', runtime = 'opencode', reqSeq = 0;
+let mode = 'chat', reqSeq = 0;
 let settingsProvider = 'openai';
 // True once the user explicitly picks a pill this session (wins over intent routing).
 let modeExplicitSession = false;
@@ -31,9 +31,6 @@ function updateModeUI() {
   $('tab-chat').setAttribute('aria-selected', String(isChat));
   $('tab-agent').classList.toggle('active', !isChat);
   $('tab-agent').setAttribute('aria-selected', String(!isChat));
-  const rt = $('runtime');
-  rt.textContent = runtime;
-  rt.classList.toggle('hidden', isChat);
   const chip = $('agent-cwd');
   if (chip) chip.classList.toggle('hidden', isChat);
   inputEl.placeholder = isChat ? 'Ask anything…' : 'What do you want to do?';
@@ -179,7 +176,7 @@ async function sendInner() {
       const id = await ensureConv();
       assistantDiv = addMsg('assistant', '…');
       try {
-        await window.nexio.send(id, text, { mode, runtimeId: runtime, sessionId: id, requestId: `r${Date.now()}-${++reqSeq}`, explicit: modeExplicitSession });
+        await window.nexio.send(id, text, { mode, sessionId: id, requestId: `r${Date.now()}-${++reqSeq}`, explicit: modeExplicitSession });
       } catch (e) {
         assistantDiv.innerHTML = mdLite(errText(e));
         inputEl.value = text; // keep unsent input after failures
@@ -196,7 +193,7 @@ async function sendInner() {
   assistantDiv = addMsg('assistant', '…');
   try {
     const requestId = `r${Date.now()}-${++reqSeq}`;
-    await window.nexio.send(id, text, { mode, runtimeId: runtime, sessionId: id, requestId, explicit: modeExplicitSession });
+    await window.nexio.send(id, text, { mode, sessionId: id, requestId, explicit: modeExplicitSession });
   } catch (e) {
     assistantDiv.innerHTML = mdLite(errText(e));
     inputEl.value = text; // keep unsent input after failures
@@ -290,13 +287,6 @@ document.addEventListener('click', (e) => { if (!paletteEl.contains(e.target) &&
 $('btn-send').onclick = () => void send();
 $('tab-chat').onclick = () => selectMode('chat');
 $('tab-agent').onclick = () => selectMode('agent');
-const RUNTIMES = ['opencode', 'claude', 'codex'];
-// why: single compact cycle button replaces the native runtime select (same persist semantics)
-$('runtime').onclick = () => {
-  runtime = RUNTIMES[(RUNTIMES.indexOf(runtime) + 1) % RUNTIMES.length];
-  updateModeUI();
-  if (window.nexio?.setSettings) void window.nexio.setSettings({ agentRuntime: runtime }).catch(() => {});
-};
 document.addEventListener('keydown', (e) => {
   if (e.altKey && (e.key === 'm' || e.key === 'M')) { e.preventDefault(); selectMode(mode === 'chat' ? 'agent' : 'chat'); }
   else if (e.altKey && e.key === '1') { e.preventDefault(); selectMode('chat'); }
@@ -331,8 +321,7 @@ $('btn-settings').onclick = async () => {
   paintProv();
   $('set-model').value = s.model;
   $('set-baseurl').value = s.baseUrl || '';
-  $('set-opencode').value = s.opencodeBaseUrl || ''; $('set-claudebin').value = s.claudeBin || '';
-  $('set-codexbin').value = s.codexBin || ''; $('set-agentcwd').value = s.agentCwd || '';
+  $('set-agentcwd').value = s.agentCwd || '';
   $('set-stophotkey').value = s.agentStopHotkey || 'Ctrl+Alt+Esc';
   $('set-maxcalls').value = s.agentMaxCalls || 25;
   $('set-reqapprove').checked = s.requireApprovalForWrites !== false;
@@ -352,9 +341,6 @@ $('btn-save-settings').onclick = async () => {
   const patch = {
     provider: settingsProvider,
     model: $('set-model').value,
-    opencodeBaseUrl: $('set-opencode').value.trim(),
-    claudeBin: $('set-claudebin').value.trim(),
-    codexBin: $('set-codexbin').value.trim(),
     agentCwd: $('set-agentcwd').value.trim(),
   };
   if (settingsProvider === 'compatible' && $('set-baseurl').value.trim()) patch.baseUrl = $('set-baseurl').value.trim();
@@ -410,14 +396,6 @@ async function refreshHistory() {
     const s = await window.nexio.getSettings();
     document.documentElement.dataset.theme = 'dark'; // dark-only UI; stored theme untouched
     mode = s.mode === 'agent' ? 'agent' : 'chat';
-    runtime = s.agentRuntime || 'opencode';
-    try {
-      const caps = await window.nexio.runtimeList?.();
-      if (Array.isArray(caps)) {
-        const cur = caps.find((c) => c.id === runtime);
-        if (cur && !cur.available) $('runtime').title = `Agent runtime: ${runtime} (unavailable)`;
-      }
-    } catch { /* runtime list optional */ }
     updateModeUI();
     try {
       if (window.nexio.isEncryptionAvailable && !(await window.nexio.isEncryptionAvailable())) {
