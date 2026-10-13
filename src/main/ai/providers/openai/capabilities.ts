@@ -13,7 +13,7 @@ const DEFAULT: ProviderCapabilities = {
 // Reasoning models reject sampling params and want the completion limit.
 // why: data-driven table keeps model knowledge out of request code
 const TABLE: CapRow[] = [
-  { match: /\bo1\b|\bo3\b|gpt-5|o[34](-mini)?\b/i, caps: { limitParam: 'max_completion_tokens', supportsTemperature: false, supportsTopP: false, reasoningAware: true } },
+  { match: /\bo1\b|\bo3\b|gpt-5|gpt-6|o[34](-mini)?\b/i, caps: { limitParam: 'max_completion_tokens', supportsTemperature: false, supportsTopP: false, reasoningAware: true } },
 ];
 
 export function capabilitiesFor(model: string): ProviderCapabilities {

@@ -28,6 +28,7 @@ export interface NormalizedRequest {
   topP?: number;
   stop?: string[];
   stream: boolean;
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high';
   signal?: AbortSignal;
 }
 
