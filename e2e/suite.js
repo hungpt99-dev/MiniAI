@@ -357,6 +357,54 @@ async function main() {
   check('toggle-keeps-history', s.msgs.length === msgCount, `before=${msgCount} after=${s.msgs.length}`);
   await shot('10-final');
 
+  // trash (sandboxed agent + fake tool-turn provider, no keys) + 401 + pill labels
+  const http = require('http');
+  const SB = 'C:\\NexioTest';
+  const trashFile = SB + '\\trash-me-2.txt';
+  fs.mkdirSync(SB, { recursive: true });
+  fs.writeFileSync(trashFile, 'trash-me');
+  let turnN = 0;
+  const toolFake = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      const msg = turnN++ === 0
+        ? { content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'fs_trash', arguments: JSON.stringify({ path: trashFile }) } }] }
+        : { content: 'trashed it' };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ choices: [{ message: msg }] }));
+    });
+  });
+  await new Promise((r) => toolFake.listen(0, '127.0.0.1', r));
+  const toolBase = 'http://127.0.0.1:' + toolFake.address().port + '/v1';
+  await ev(`window.__trashDone=null;window.__trash=null;(async()=>{try{`
+    + `const s0=await window.nexio.getSettings();`
+    + `window.__s0=JSON.stringify({provider:s0.provider,model:s0.model,baseUrl:s0.baseUrl||null,roots:s0.agentAllowedRoots||[],cwd:s0.agentCwd||'',rules:s0.agentAlwaysAllow||[]});`
+    + `await window.nexio.setSettings({provider:'compatible',model:'e2e-trash',baseUrl:${JSON.stringify(toolBase)},`
+    + `agentAllowedRoots:[${JSON.stringify(SB)}],agentCwd:${JSON.stringify(SB)},`
+    + `agentAlwaysAllow:[{scope:'tool-dir',tool:'fs_trash',dir:${JSON.stringify(SB)}}]});`
+    + `const c=await window.nexio.createConversation('e2e-trash');`
+    + `const r=await window.nexio.agentStart(c.id,${JSON.stringify('move ' + trashFile + ' to the trash')},{cwd:${JSON.stringify(SB)}});`
+    + `const off=window.nexio.onAgentEvent(({runId,event})=>{if(runId!==r.runId)return;`
+    + `if(event.type==='tool_result'){window.__trash=event.ok+' '+(event.output||'');}`
+    + `if(event.type==='done'||event.type==='error'||event.type==='stopped'){off();window.__trashDone=event.type;}});`
+    + `}catch(e){window.__trashDone='eval-error:'+(e&&e.message);}})()`);
+  for (let i = 0; i < 60 && !(await ev(`window.__trashDone`)); i++) await sleep(500);
+  const trashOut = await ev(`window.__trash||''`);
+  const trashDone = await ev(`window.__trashDone||''`);
+  await ev(`{const s0=JSON.parse(window.__s0||'null');if(s0)await window.nexio.setSettings({provider:s0.provider,model:s0.model,baseUrl:s0.baseUrl||'',agentAllowedRoots:s0.roots,agentCwd:s0.cwd,agentAlwaysAllow:s0.rules});}`);
+  toolFake.close();
+  check('trash-live-path', trashDone === 'done' && /true moved to trash/.test(trashOut) && !/staged at/.test(trashOut), `${trashDone} ${(trashOut || '').slice(0, 120)}`);
+  check('trash-file-gone', !fs.existsSync(trashFile));
+  const unauth = http.createServer((req, res) => { req.resume(); req.on('end', () => { res.writeHead(401); res.end('invalid key'); }); });
+  await new Promise((r) => unauth.listen(0, '127.0.0.1', r));
+  const unauthBase = 'http://127.0.0.1:' + unauth.address().port + '/v1';
+  await ev(`window.__tc=null;window.nexio.testConnectivity('compatible','e2e-model',${JSON.stringify(unauthBase)}).then(r=>{window.__tc=JSON.stringify(r)}).catch(e=>{window.__tc='err:'+e.message})`);
+  await sleep(2500);
+  unauth.close();
+  const tc = await ev(`window.__tc||''`);
+  check('conn-401-auth', tc.includes('"ok":false') && /auth|401/.test(tc), tc.slice(0, 120));
+  check('pill-ask-do', await ev(`document.getElementById('tab-chat').textContent.trim()==='Ask'&&document.getElementById('tab-agent').textContent.trim()==='Do'`));
+
   const fails = results.filter((r) => !r.pass);
   console.log(`DONE ${results.length - fails.length}/${results.length} passed`);
   C.ws.close();
