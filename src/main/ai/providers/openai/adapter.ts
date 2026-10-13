@@ -57,9 +57,8 @@ export const openaiAdapter: ProviderAdapter = {
         type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema },
       }));
       body.tool_choice = 'auto';
-      // why: gpt-6 luna/sol tool calls fail unless reasoning is off; other
-      // models send effort only when the caller sets it with tools present
-      if (/gpt-6-(luna|sol)/i.test(model)) body.reasoning_effort = 'none';
+      // why: gpt-6 family tool calls fail unless reasoning is off
+      if (/gpt-6/i.test(model)) body.reasoning_effort = 'none';
       else if (req.reasoningEffort) body.reasoning_effort = req.reasoningEffort;
     }
     return { url: openaiAdapter.chatEndpoint(baseUrl), headers: openaiAdapter.headers(''), body };

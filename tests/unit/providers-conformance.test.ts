@@ -139,10 +139,10 @@ describe('adapter specifics', () => {
       expect(body.top_p).toBeUndefined();
     }
   });
-  it('openai: reasoning_effort none forced for gpt-6 luna/sol tool calls only', () => {
+  it('openai: reasoning_effort none forced for gpt-6 tool calls only', () => {
     const a = PROVIDER_ADAPTERS.openai;
     const tools = [{ name: 't', description: 'd', inputSchema: { type: 'object' } }];
-    for (const m of ['gpt-6-luna', 'gpt-6-sol']) {
+    for (const m of ['gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6.1-luna', 'gpt-6']) {
       const withTools = a.buildRequest(m, {
         messages: [{ role: 'user', content: 'go' }], tools, maxOutputTokens: 128, stream: false,
       }).body as Record<string, unknown>;
@@ -151,7 +151,7 @@ describe('adapter specifics', () => {
         messages: [{ role: 'user', content: 'go' }], maxOutputTokens: 128, stream: false,
       }).body as Record<string, unknown>;
       expect(noTools.reasoning_effort).toBeUndefined();
-      // Explicit effort is overridden for luna/sol tool calls.
+      // Explicit effort is overridden for gpt-6 tool calls.
       const forced = a.buildRequest(m, {
         messages: [{ role: 'user', content: 'go' }], tools, maxOutputTokens: 128,
         reasoningEffort: 'high', stream: false,

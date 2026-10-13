@@ -63,19 +63,21 @@ describe('testConnectivity flow', () => {
     }
   });
   it('tool probe sends reasoning_effort none (mocked, no keys)', async () => {
-    const bodies: Array<Record<string, unknown>> = [];
-    const fetchFn = (async (_url: unknown, init: unknown) => {
-      const raw = (init as { body: string }).body;
-      if (raw) bodies.push(JSON.parse(raw) as Record<string, unknown>);
-      if (String(_url).endsWith('/models')) return okJson({ data: [] });
-      return okJson({ choices: [{ message: { content: 'ok' } }] });
-    }) as unknown as typeof fetch;
-    const r = await testConnectivity('openai', 'k', 'gpt-6-luna', undefined, fetchFn);
-    expect(r.ok).toBe(true);
-    expect(bodies[1].reasoning_effort).toBe('none');
-    // Tiny completion carries no tools and no reasoning_effort.
-    expect(bodies[0].reasoning_effort).toBeUndefined();
-    expect(bodies[0].tools).toBeUndefined();
+    for (const model of ['gpt-6.1-sol', 'gpt-6.1-luna']) {
+      const bodies: Array<Record<string, unknown>> = [];
+      const fetchFn = (async (_url: unknown, init: unknown) => {
+        const raw = (init as { body: string }).body;
+        if (raw) bodies.push(JSON.parse(raw) as Record<string, unknown>);
+        if (String(_url).endsWith('/models')) return okJson({ data: [] });
+        return okJson({ choices: [{ message: { content: 'ok' } }] });
+      }) as unknown as typeof fetch;
+      const r = await testConnectivity('openai', 'k', model, undefined, fetchFn);
+      expect(r.ok).toBe(true);
+      expect(bodies[1].reasoning_effort).toBe('none');
+      // Tiny completion carries no tools and no reasoning_effort.
+      expect(bodies[0].reasoning_effort).toBeUndefined();
+      expect(bodies[0].tools).toBeUndefined();
+    }
   });
   it('keeps network mapping: fetch failure surfaces kind network', async () => {
     const down = (async () => { throw new TypeError('fetch failed'); }) as unknown as typeof fetch;
