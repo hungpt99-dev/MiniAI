@@ -18,6 +18,7 @@ import {
   getLastUsedDir,
   openExternalUrl,
   openTargetGuarded,
+  pickAttachFiles,
   pickFile,
   pickFolder,
   resetDialogLock,
@@ -195,6 +196,36 @@ describe('pickFolder / pickFile', () => {
     expect(setTop.mock.calls[0]).toEqual([false]);
     expect(setTop.mock.calls[setTop.mock.calls.length - 1]).toEqual([true]);
     expect(win.setVisibleOnAllWorkspaces).toHaveBeenCalledWith(true, { visibleOnFullScreen: true });
+    await flush();
+  });
+});
+
+describe('pickAttachFiles', () => {
+  it('cancel resolves [] and never rejects (stubbed none)', async () => {
+    showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+    await expect(pickAttachFiles(mockWin())).resolves.toEqual([]);
+    await expect(pickAttachFiles(null)).resolves.toEqual([]);
+    await flush();
+  });
+  it('returns every pick (multi) under one dialog lock', async () => {
+    const files = ['C:\\pics\\a.png', 'C:\\pics\\b.pdf', 'C:\\pics\\c.txt'];
+    let seen = -1;
+    showOpenDialog.mockImplementation(async () => {
+      seen = getDialogLockCount();
+      return { canceled: false, filePaths: files };
+    });
+    await expect(pickAttachFiles(mockWin())).resolves.toEqual(files);
+    expect(dialogOpts().properties).toContain('multiSelections');
+    expect(seen).toBe(1);
+    expect(getDialogLockCount()).toBe(0);
+  });
+  it('remembers metadata (lastUsedDir) and seeds the next open', async () => {
+    showOpenDialog.mockResolvedValue({ canceled: false, filePaths: ['C:\\pics\\a.png'] });
+    await pickAttachFiles(mockWin());
+    expect(getLastUsedDir()).toBe('C:\\pics');
+    showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+    await pickAttachFiles(mockWin());
+    expect(dialogOpts().defaultPath).toBe('C:\\pics');
     await flush();
   });
 });
