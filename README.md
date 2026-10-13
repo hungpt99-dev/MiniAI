@@ -1,3 +1,4 @@
+<!-- Banner spans the full README width on purpose: width="100%", no max-width cap. -->
 <img src="assets/banner.svg" width="100%" alt="Nexio — a new way to interact with your computer." />
 
 # Nexio
@@ -172,7 +173,7 @@ v0.1.0 pre-release / experimental.
 
 - Packaged app fails to open SQLite: Electron 33 bundles Node 20.18.x, but `node:sqlite` needs 22.5+. Dev and tests on Node >= 22.5 work.
 
-**Screenshots wanted:** brand assets ship in `assets/` (icon, banner, social preview); no app screenshots exist yet. Contributions welcome for: popup, slash palette, workflow run.
+**Screenshots wanted:** brand assets ship in `assets/` (icon, banner, social preview); no app screenshots exist yet. Contributions welcome for: popup, slash palette, workflow run. GitHub social preview is a manual upload (no automation): Repository Settings > General > Social preview > Upload `assets/social-preview.png` (1280x640, <1MB).
 
 Details: [docs/product/implementation-status.md](docs/product/implementation-status.md).
 

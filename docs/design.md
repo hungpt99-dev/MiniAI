@@ -24,7 +24,8 @@ Dark-background brand only — there is no light variant.
 
 - Source vectors: `assets/icon.svg` (512, `viewBox 0 0 512 512`),
   `assets/banner.svg` (1280x320), `assets/social-preview.svg` (1280x640).
-  C2PA metadata is stripped from the committed copies.
+  C2PA metadata is stripped from the committed copies. Source of truth is
+  `design/*.svg`: edit those first, then run `npm run assets` to regenerate.
 - Construction: rounded square `rx 112`, N path `stroke-width 42`,
   dot `r 26`, accent `#B8F26B` on `#15161B`.
 - Generated files (`npm run assets`, verified by `npm run assets:check`):
@@ -39,6 +40,9 @@ Dark-background brand only — there is no light variant.
   the inner artwork, 12% clear space around the tile in layouts, 16px minimum size.
 - Don'ts: no light-background variant, no gradients, no shadow, no recoloring
   the accent, no square Template icons.
+- GitHub social preview is a manual upload (no automation):
+  Repository Settings > General > Social preview > Upload
+  `assets/social-preview.png` (1280x640, <1MB).
 
 ## Attachments tray
 
