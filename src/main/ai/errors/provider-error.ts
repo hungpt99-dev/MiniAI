@@ -73,7 +73,11 @@ export function providerError(kind: ProviderErrorKind, technical = '', status?: 
 /** Generic HTTP fallback when an adapter cannot parse the body. */
 export function httpError(status: number, bodyText: string): ProviderError {
   if (status === 401 || status === 403) return providerError(status === 401 ? 'auth' : 'forbidden', bodyText, status);
-  if (status === 404) return providerError('model_not_found', bodyText, status);
+  // why: bare 404s are usually a wrong base URL, not a wrong model
+  if (status === 404) {
+    if (/model|not found|no such|unknown|does not exist/i.test(bodyText || '')) return providerError('model_not_found', bodyText, status);
+    return providerError('network', bodyText || '404 Not Found — check base URL', status);
+  }
   if (status === 429) return providerError('rate_limited', bodyText, status);
   if (status >= 500) return providerError('overloaded', bodyText, status);
   if (status === 400 || status === 422) return providerError('bad_request', bodyText, status);

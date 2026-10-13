@@ -18,12 +18,13 @@ export interface TestResult {
   details?: TestDetails;
 }
 
-function withTimeout(signal?: AbortSignal, ms = TEST_TIMEOUT_MS): { signal: AbortSignal; done: () => void } {
+function withTimeout(signal?: AbortSignal, ms = TEST_TIMEOUT_MS): { signal: AbortSignal; done: () => void; timedOut: () => boolean } {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(new Error('timeout')), ms);
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctrl.abort(new Error('timeout')); }, ms);
   const onAbort = () => ctrl.abort(signal?.reason);
   signal?.addEventListener('abort', onAbort, { once: true });
-  return { signal: ctrl.signal, done: () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); } };
+  return { signal: ctrl.signal, done: () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); }, timedOut: () => timedOut };
 }
 
 /**
@@ -49,7 +50,7 @@ export async function testConnectivity(
     if (!model?.trim()) return { ok: false, error: providerError('bad_request', 'no model entered') };
     const adapter = getAdapter(provider);
     const base = baseUrl || adapter.defaultBaseUrl;
-    const models = await adapter.listModels(apiKey || 'test', base, t.signal, fetchFn).catch(() => [] as string[]);
+    const models = await adapter.listModels(apiKey, base, t.signal, fetchFn).catch(() => [] as string[]);
     // Tiny completion: reasoning-aware limit/sampling handled by the adapter.
     const built = adapter.buildRequest(model, {
       messages: [{ role: 'user', content: 'Reply with exactly: ok' }],
@@ -91,6 +92,7 @@ export async function testConnectivity(
     }
     return { ok: true, details: { provider, model, ms: Date.now() - start, toolsOk, modelsListed: models.length } };
   } catch (e) {
+    if (t.timedOut() && !parentSignal?.aborted) return { ok: false, error: providerError('timeout', 'test timed out') };
     return { ok: false, error: toProviderError(e) };
   } finally {
     t.done();

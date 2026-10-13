@@ -167,6 +167,61 @@ describe('retry', () => {
     resetParamCache();
     expect(getCachedFix('openai', a.defaultBaseUrl, 'm')).toBeUndefined();
   });
+  it('swaps max_tokens to max_completion_tokens on 400 and succeeds', async () => {
+    resetParamCache();
+    const a = PROVIDER_ADAPTERS.openai;
+    const bodies: Array<Record<string, unknown>> = [];
+    let calls = 0;
+    const fetchFn = (async (_u: unknown, init: unknown) => {
+      calls++;
+      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+      bodies.push(body);
+      if (calls === 1) return new Response("unsupported parameter 'max_tokens', use 'max_completion_tokens'", { status: 400 });
+      return okJson({ choices: [{ message: { content: 'ok' } }] });
+    }) as unknown as typeof fetch;
+    const res = await fetchWithRetry({
+      adapter: a, model: 'swap-m', baseUrl: a.defaultBaseUrl, apiKey: 'k',
+      body: { model: 'swap-m', max_tokens: 16, stream: false }, fetchFn, streaming: false, debugLabel: 't',
+    });
+    expect(res.ok).toBe(true);
+    expect(calls).toBe(2);
+    expect(bodies[1]).toMatchObject({ max_completion_tokens: 16 });
+    expect(bodies[1].max_tokens).toBeUndefined();
+    expect(getCachedFix('openai', a.defaultBaseUrl, 'swap-m')).toMatchObject({ swapLimit: 'max_completion_tokens' });
+    resetParamCache();
+  });
+  it('stops after one param retry when the second attempt also 400s', async () => {
+    resetParamCache();
+    const a = PROVIDER_ADAPTERS.openai;
+    let calls = 0;
+    const fetchFn = (async () => {
+      calls++;
+      return new Response("unsupported parameter 'temperature'", { status: 400 });
+    }) as unknown as typeof fetch;
+    const res = await fetchWithRetry({
+      adapter: a, model: 'twice-m', baseUrl: a.defaultBaseUrl, apiKey: 'k',
+      body: { model: 'twice-m', temperature: 1, stream: false }, fetchFn, streaming: false, debugLabel: 't',
+    });
+    expect(res.status).toBe(400);
+    expect(calls).toBe(2);
+    resetParamCache();
+  });
+  it('never treats 401/429 as param errors (no retry)', async () => {
+    expect(detectParamFix(401, 'invalid api key', { model: 'm' })).toBeUndefined();
+    expect(detectParamFix(429, 'rate limit exceeded', { model: 'm' })).toBeUndefined();
+    const a = PROVIDER_ADAPTERS.openai;
+    let calls = 0;
+    const fetchFn = (async () => {
+      calls++;
+      return new Response('invalid api key', { status: 401 });
+    }) as unknown as typeof fetch;
+    const res = await fetchWithRetry({
+      adapter: a, model: 'gate-m', baseUrl: a.defaultBaseUrl, apiKey: 'k',
+      body: { model: 'gate-m' }, fetchFn, streaming: true, debugLabel: 't',
+    });
+    expect(res.status).toBe(401);
+    expect(calls).toBe(1);
+  });
   it('backs off on 429 for non-streaming only (Retry-After honored), streaming throws through', async () => {
     const a = PROVIDER_ADAPTERS.openai;
     let n = 0;

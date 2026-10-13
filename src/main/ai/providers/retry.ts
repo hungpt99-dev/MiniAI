@@ -31,6 +31,8 @@ export function resetParamCache(): void {
 
 const LIMIT_PARAMS = ['max_tokens', 'max_completion_tokens'];
 const DROPPABLE = ['temperature', 'top_p', 'top_k', 'stop', 'stream_options', 'response_format', 'reasoning', 'reasoning_effort', 'stop_sequences', 'tool_choice'];
+// Unnamed 400s retry only the safest extras — dropping tool_choice/response_format would silently break tool calls.
+const SAFE_FALLBACK_DROP = ['temperature', 'top_p', 'stream_options'];
 
 /**
  * Detect an unsupported-param fix from a 400/422 body. Returns undefined when
@@ -51,9 +53,9 @@ export function detectParamFix(status: number, bodyText: string, sentBody: Recor
     if (hasMaxTokens) fix.swapLimit = 'max_completion_tokens';
     else if (hasMaxCompletion) fix.swapLimit = 'max_tokens';
   }
-  // Param-shaped error but no named param: drop the riskiest optional extras once.
+  // Param-shaped error but no named param: retry only safe extras, else give up (no blind cache).
   if (!fix.drop?.length && !fix.swapLimit) {
-    const present = DROPPABLE.filter((p) => p in sentBody);
+    const present = SAFE_FALLBACK_DROP.filter((p) => p in sentBody);
     if (present.length) fix.drop = present;
     else return undefined;
   }

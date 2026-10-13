@@ -3,7 +3,7 @@ import { fetchWithRetry } from './providers/retry';
 import { toProviderError } from './errors/provider-error';
 import type { ProviderId } from '../../shared/types';
 import type { Tool } from '../agent/types';
-import type { NormalizedToolCall } from './providers/types';
+import type { NormalizedMessage } from './providers/types';
 
 /** Provider-agnostic conversation item with full tool fidelity (DB stays plain text). */
 export type AgentMsg =
@@ -31,8 +31,6 @@ export interface ToolChatOpts {
   signal?: AbortSignal;
   fetchFn?: typeof fetch;
 }
-
-import type { NormalizedMessage } from './providers/types';
 
 function toNeutralMessages(messages: AgentMsg[]): NormalizedMessage[] {
   return messages.map((m) => {
@@ -68,7 +66,7 @@ export async function requestToolTurn(provider: ProviderId, opts: ToolChatOpts):
     }
     const json = await res.json().catch(() => undefined);
     const turn = adapter.parseResponse(json);
-    return { text: turn.text, calls: turn.calls as NormalizedToolCall[] as RequestedCall[] };
+    return { text: turn.text, calls: turn.calls };
   } catch (e) {
     throw toProviderError(e);
   }

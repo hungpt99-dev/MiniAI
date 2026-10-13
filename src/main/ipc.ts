@@ -605,10 +605,13 @@ export function registerIpc(): void {
     return testConnectivity(provider, key, model, baseUrl);
   });
   ipcMain.handle(IpcChannels.listModels, async (_e, provider, baseUrl?: string) => {
+    if (provider !== 'openai' && provider !== 'anthropic' && provider !== 'gemini' && provider !== 'compatible') {
+      throw new Error(`Unknown provider: ${String(provider)}`);
+    }
     const d = db();
     const s = getSettings(d);
-    const adapter = getAdapter(provider as Settings['provider']);
-    const key = getSecret(d, apiKeyService(provider as string)) || '';
+    const adapter = getAdapter(provider);
+    const key = getSecret(d, apiKeyService(provider)) || '';
     return adapter.listModels(key, baseUrl || s.baseUrl || adapter.defaultBaseUrl);
   });
   ipcMain.handle(IpcChannels.resetProviderFixes, () => {

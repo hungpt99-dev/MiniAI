@@ -31,7 +31,8 @@ export async function streamChat(provider: ProviderId, opts: ChatOptions): Promi
   const adapter = getAdapter(provider);
   const fetchFn = opts.fetchFn || fetch;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(new Error('timeout')), CHAT_TIMEOUT_MS);
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctrl.abort(new Error('timeout')); }, CHAT_TIMEOUT_MS);
   const onAbort = () => ctrl.abort();
   opts.signal?.addEventListener('abort', onAbort, { once: true });
   try {
@@ -66,6 +67,7 @@ export async function streamChat(provider: ProviderId, opts: ChatOptions): Promi
     let sawPayload = false;
     for (;;) {
       if (opts.signal?.aborted) throw toProviderError({ kind: 'aborted', message: 'Aborted' });
+      if (timedOut || ctrl.signal.aborted) throw toProviderError({ kind: 'timeout', message: 'Request timed out' });
       const { done, value } = await reader.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true });
@@ -82,6 +84,7 @@ export async function streamChat(provider: ProviderId, opts: ChatOptions): Promi
     if (!sawPayload) throw toProviderError({ kind: 'unknown', message: 'Empty response from provider' });
     return full;
   } catch (e) {
+    if (!opts.signal?.aborted && (timedOut || ctrl.signal.aborted)) throw toProviderError({ kind: 'timeout', message: 'Request timed out' });
     throw toProviderError(e);
   } finally {
     clearTimeout(timer);
