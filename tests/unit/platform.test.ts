@@ -70,8 +70,11 @@ describe('path normalization per adapter', () => {
     expect(normalizeAndResolve(nfd2, '/tmp', darwinAdapter)).toBe('/tmp/báo cáo 2026.txt');
   });
   it('expands ~ on darwin; literal dirname on win32', () => {
-    const home = process.env.HOME || '/tmp';
-    expect(normalizeAndResolve('~/a.txt', '/tmp', darwinAdapter)).toBe(`${home}/a.txt`.normalize('NFC'));
+    // ~ reads the host home dir, so the darwin half needs a POSIX host.
+    if (process.platform !== 'win32') {
+      const home = process.env.HOME || '/tmp';
+      expect(normalizeAndResolve('~/a.txt', '/tmp', darwinAdapter)).toBe(`${home}/a.txt`.normalize('NFC'));
+    }
     expect(normalizeAndResolve('~/a.txt', 'C:\\w', win32Adapter)).toBe('C:\\w\\~\\a.txt');
   });
   it('rejects UNC/device forms on both adapters', () => {
@@ -82,7 +85,10 @@ describe('path normalization per adapter', () => {
   });
   it('compares case-insensitively on win32 and darwin, sensitively elsewhere', () => {
     expect(isInsideRoots('C:\\USERS\\A\\f.txt', ['c:\\users\\a'], win32Adapter)).toBe(true);
-    expect(isInsideRoots('/Users/A/F.txt', ['/users/a'], darwinAdapter)).toBe(true);
+    // Posix fixtures resolve through the host FS, so the darwin half needs a POSIX host.
+    if (process.platform !== 'win32') {
+      expect(isInsideRoots('/Users/A/F.txt', ['/users/a'], darwinAdapter)).toBe(true);
+    }
   });
 });
 
@@ -96,6 +102,7 @@ describe('protected paths per adapter', () => {
     expect(isPathAllowed('C:\\Users\\a\\doc.txt', ctx, win32Adapter)).toBe(true);
   });
   it('darwin blocks system dirs, keychains, mail, cloud secrets and browser profiles', () => {
+    if (process.platform === 'win32') return; // posix protected paths need a POSIX host
     const ctx = ctxFor(['/Users/a']);
     for (const p of ['/System/x', '/Library/x', '/usr/bin/x', '/private/x', '/etc/hosts',
       '/Users/a/Library/Keychains/x', '/Users/a/Library/Mail/x', '/Users/a/Library/Messages/x',
@@ -106,6 +113,7 @@ describe('protected paths per adapter', () => {
     expect(isPathAllowed('/Users/a/Documents/x', ctx, darwinAdapter)).toBe(true);
   });
   it('darwin /Applications is write-blocked but readable', () => {
+    if (process.platform === 'win32') return; // write-protected posix paths need a POSIX host
     const ctx = ctxFor(['/']);
     expect(decidePolicy('fs_read', 'read', { path: '/Applications/App.app' }, ctx, '/', darwinAdapter).action).not.toBe('denied');
     expect(decidePolicy('fs_write', 'write', { path: '/Applications/x' }, ctx, '/', darwinAdapter))
@@ -118,6 +126,7 @@ describe('protected paths per adapter', () => {
     expect(isPathAllowed('/etc/hosts', dctx, darwinAdapter)).toBe(true);
   });
   it('darwin rejects foreign volumes unless allowed', () => {
+    if (process.platform === 'win32') return; // /Volumes fixtures need a POSIX host
     const ctx = ctxFor(['/Users/a']);
     expect(isPathAllowed('/Volumes/USB/x', ctx, darwinAdapter)).toBe(false);
     const allowed: PolicyContext = { ...ctxFor(['/Volumes/USB']), explicitRoots: [] };
@@ -134,6 +143,7 @@ describe('permission matrix runs on both adapters', () => {
       expect(d.action).toBe('approval-required');
     });
     it(`read inside roots is auto on ${a.key}`, () => {
+      if (a.key === 'darwin' && process.platform === 'win32') return; // posix fixtures need a POSIX host
       const root = a.key === 'win32' ? 'C:\\work' : '/work';
       const ctx = ctxFor([root]);
       const d = decidePolicy('fs_read', 'read', { path: a.key === 'win32' ? 'C:\\work\\a.txt' : '/work/a.txt' }, ctx, root, a);
