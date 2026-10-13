@@ -1,3 +1,5 @@
+<img src="assets/banner.svg" width="100%" alt="Nexio — a new way to interact with your computer." />
+
 # Nexio
 
 A new way to interact with your computer.
@@ -164,14 +166,13 @@ v0.1.0 pre-release / experimental.
 
 **Working:** popup / hotkey / tray, Ask + streaming + cancel, slash + templates, workflows, history, `Tab` switching, router, built-in Do loop.
 
-**Planned:** installer release, PNG icon.
+**Planned:** installer release.
 
 **Known issues:**
 
 - Packaged app fails to open SQLite: Electron 33 bundles Node 20.18.x, but `node:sqlite` needs 22.5+. Dev and tests on Node >= 22.5 work.
-- Tray icon missing until PNG ships (`assets/icon.svg` is a placeholder).
 
-**Screenshots wanted:** no screenshots exist yet (`assets/` has only the `icon.svg` placeholder). Contributions welcome for: popup, slash palette, workflow run.
+**Screenshots wanted:** brand assets ship in `assets/` (icon, banner, social preview); no app screenshots exist yet. Contributions welcome for: popup, slash palette, workflow run.
 
 Details: [docs/product/implementation-status.md](docs/product/implementation-status.md).
 

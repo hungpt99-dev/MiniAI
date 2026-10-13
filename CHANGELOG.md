@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Brand assets (full spec): `design/*.svg` promoted to `assets/` C2PA-free
+  (icon 512 `r112`/`stroke42`/`dot26`, banner 1280x320, social 1280x640);
+  `npm run assets` renders icon.png 1024, `assets/icons/` 16–1024, `icon.ico`
+  16–256, `icon.icns` (macOS `iconutil`, PNG fallback + note elsewhere),
+  banner 2560x640, social 1280x640 (<1MB), docs `icon-128.png`, tray
+  16/20/24/32 plus black-only `Nexio-Template` 18/36px; `npm run assets:check`
+  verifies dims/format/monochrome/size, `tests/unit/assets.test.ts` fails on
+  missing refs; installer wired (`win.ico`, `mac.icns`, `linux` dir, NSIS/DMG
+  icons), window `icon.png`, SVG favicon, README banner; CI runs assets first.
+
 - Attachments (full spec): composer tray (paste `Ctrl/Cmd+V`, drag-drop with
   "Drop to attach", paperclip multi-picker through the dialog lock, in-panel
   preview, `Backspace`/live-region a11y); main-side magic-byte typing, 5 /

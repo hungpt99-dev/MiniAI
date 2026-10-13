@@ -22,4 +22,4 @@ Verified from source; packaged-SQLite caveat in main README.
 | Area | Detail |
 |---|---|
 | Packaged SQLite | Electron 33 bundles Node 20; `node:sqlite` needs 22.5+ — packaged app fails to open DB. Documented, not fixed. |
-| Tray icon | `assets/icon.svg` placeholder, needs PNG. |
+| Tray icon | `assets/icon.png` + `assets/tray/` sizes; macOS `Nexio-Template` pair. |

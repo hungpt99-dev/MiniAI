@@ -16,6 +16,30 @@ macOS differences (conventions only, no redesign):
   dark/light/high-contrast setting are respected on both OSes.
 - Resize animation and the 560px cap behave the same.
 
+## Brand
+
+![Nexio icon](images/icon-128.png)
+
+Dark-background brand only — there is no light variant.
+
+- Source vectors: `assets/icon.svg` (512, `viewBox 0 0 512 512`),
+  `assets/banner.svg` (1280x320), `assets/social-preview.svg` (1280x640).
+  C2PA metadata is stripped from the committed copies.
+- Construction: rounded square `rx 112`, N path `stroke-width 42`,
+  dot `r 26`, accent `#B8F26B` on `#15161B`.
+- Generated files (`npm run assets`, verified by `npm run assets:check`):
+  `assets/icon.png` (1024), `assets/icons/icon-{16,24,32,48,64,128,256,512,1024}.png`,
+  `assets/icon.ico` (16–256), `assets/icon.icns` (macOS `iconutil` only),
+  `assets/banner.png` (2560x640), `assets/social-preview.png` (1280x640, <1MB),
+  `assets/tray/tray-{16,20,24,32}.png`, `docs/images/icon-128.png`.
+- Template tray icons (`assets/Nexio-Template*.png`, 18/36px): black-only N + dot,
+  no rounded square; filenames must end in `Template` or macOS will not treat
+  them as templates (`setTemplateImage`). Stroke stays readable at 18px.
+- Rules: transparent outside the rounded square (no halo), 4% safe margin for
+  the inner artwork, 12% clear space around the tile in layouts, 16px minimum size.
+- Don'ts: no light-background variant, no gradients, no shadow, no recoloring
+  the accent, no square Template icons.
+
 ## Attachments tray
 
 - Tray sits under the composer (`0 22px 12px`, flex, `gap 8px`, wraps to

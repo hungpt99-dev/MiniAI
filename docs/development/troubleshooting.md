@@ -3,7 +3,7 @@
 - Hotkey taken: change `hotkey` in settings.
 - Window hides on blur by design; click tray to reshow.
 - 401 → wrong key; 429 → rate limit; 60 s timeout; model error → name.
-- No icon: `assets/icon.svg` is a placeholder, replace with PNG.
+- Missing icons: run `npm run assets`, then `npm run assets:check`.
 
 ## Providers
 
