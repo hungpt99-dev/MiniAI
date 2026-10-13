@@ -8,8 +8,6 @@ export interface RouteInput {
   cwd?: string;
   signal?: AbortSignal;
   onToken?: (token: string) => void;
-  /** Attachment metadata only (name/type/size) — bytes never route here. */
-  attachmentsMeta?: Array<{ name: string; type: string; size: number }>;
 }
 
 export interface RouterContext {
@@ -23,9 +21,9 @@ export interface RouterContext {
  * ipc (runBuiltInAgent) â€” never an external runtime, never a fallback.
  */
 export async function routeRequest(input: RouteInput, ctx: RouterContext): Promise<string> {
-  const { mode, sessionId, requestId, prompt, cwd, signal, onToken, attachmentsMeta } = { ...input };
+  const { mode, sessionId, requestId, prompt, cwd, signal, onToken } = { ...input };
   void sessionId;
   void requestId;
-  if (mode === 'chat') return ctx.chat({ mode, sessionId, requestId, prompt, cwd, signal, onToken, ...(attachmentsMeta ? { attachmentsMeta } : {}) });
+  if (mode === 'chat') return ctx.chat({ mode, sessionId, requestId, prompt, cwd, signal, onToken });
   throw new Error('agent-direct: Do mode runs the built-in loop (see runBuiltInAgent in ipc)');
 }

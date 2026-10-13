@@ -290,7 +290,7 @@ export interface PreparedAttachment {
  * errors — never silent. Returns provider parts + log-safe records (never bytes).
  */
 export function prepareAttachments(
-  runId: string,
+  scopeId: string,
   staged: NonNullable<SendOpts['attachments']>,
   cwd: string,
   ctx: PolicyContext,
@@ -310,6 +310,8 @@ export function prepareAttachments(
       catch { throw new Error(`Attachment unreadable: ${origName}`); }
       origName = path.basename(verdict.real);
     } else if (a.dataBase64) {
+      // Pre-cap the base64 payload before decoding so oversize input never allocates.
+      if (a.dataBase64.length > Math.ceil(ATTACH_LIMITS.maxFileBytes * 4 / 3) + 64) throw new Error(`${ATTACH_STRINGS.oversizeError}: ${origName} (max 20MB per file)`);
       bytes = Buffer.from(a.dataBase64, 'base64');
     } else throw new Error(`Attachment rejected: ${origName} (no data)`);
     if (bytes.length > ATTACH_LIMITS.maxFileBytes) throw new Error(`${ATTACH_STRINGS.oversizeError}: ${origName} (max 20MB per file)`);
@@ -320,7 +322,7 @@ export function prepareAttachments(
     const mime = resolveAttachMime(sniffed, a.mime, origName);
     if (mime.startsWith('image/')) {
       const proc = processImage(bytes, mime);
-      const stored = saveAttachment(appBaseDir(), runId, origName, proc.mime, proc.bytes, { width: proc.width, height: proc.height, dataUrl: proc.dataUrl });
+      const stored = saveAttachment(appBaseDir(), scopeId, origName, proc.mime, proc.bytes, { width: proc.width, height: proc.height, dataUrl: proc.dataUrl });
       out.push({
         part: { type: 'image', dataUrl: proc.dataUrl, mimeType: proc.mime, width: proc.width, height: proc.height, bytes: proc.bytes.length },
         log: attachmentLogRecord(stored),
@@ -328,7 +330,7 @@ export function prepareAttachments(
       });
     } else if (mime.startsWith('text/') || mime.includes('markdown')) {
       const { text, truncated } = decodeText(bytes);
-      const stored = saveAttachment(appBaseDir(), runId, origName, mime, Buffer.from(text, 'utf8'), { truncated });
+      const stored = saveAttachment(appBaseDir(), scopeId, origName, mime, Buffer.from(text, 'utf8'), { truncated });
       out.push({
         part: { type: 'file_ref', name: stored.name, mimeType: stored.mime, size: stored.size, sha256: stored.sha256, text },
         log: attachmentLogRecord(stored),
@@ -336,7 +338,7 @@ export function prepareAttachments(
       });
     } else {
       // PDFs and other files: file_ref text only (bytes never go to the model).
-      const stored = saveAttachment(appBaseDir(), runId, origName, mime, bytes);
+      const stored = saveAttachment(appBaseDir(), scopeId, origName, mime, bytes);
       const note = mime === 'application/pdf' ? '[PDF attached — text extraction is best-effort; open the file for full content]' : `[binary ${mime} attached — metadata only]`;
       out.push({
         part: { type: 'file_ref', name: stored.name, mimeType: stored.mime, size: stored.size, sha256: stored.sha256, text: note },
@@ -400,14 +402,12 @@ async function runSend(
     // Ask temp files live under the conversation id so Clear / run delete
     // removes them; agent runs re-key under their run id below.
     prepared = prepareAttachments(conversationId, staged, cwd0, policyFor(s, cwd0));
-    registerRunAttachments(requestId, prepared.map((p) => p.ref));
     try {
       const wlog = createRunLog(undefined, requestId);
       for (const p of prepared) appendLog(wlog.path, { runId: requestId, attachment: p.log });
     } catch { /* logging never breaks the run */ }
   }
   const userParts = buildUserParts(text, prepared);
-  const hasImages = prepared.some((p) => p.part.type === 'image');
   // Intent routing: an explicit pill selection wins; otherwise classify.
   // act → built-in agent loop, answer/clarify → plain streamed response.
   // Attachments skip clarify (empty+attach sends the default instruction).
@@ -468,7 +468,6 @@ async function runSend(
   }
   const frozen: RouteInput = {
     mode: effective, sessionId, requestId, prompt: text,
-    ...(prepared.length ? { attachmentsMeta: prepared.map((p) => ({ name: p.log.name, type: p.log.type, size: p.log.size })) } : {}),
   };
   try {
     const full = await routeRequest(
@@ -505,7 +504,6 @@ async function runSend(
   } finally {
     aborters.delete(requestId);
   }
-  void hasImages;
 }
 
 /** Shared built-in agent execution (Send routing + explicit agentStart). */

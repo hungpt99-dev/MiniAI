@@ -64,8 +64,8 @@ export function isImageMime(mime: string): boolean {
 /** Renamed executables reject even when the extension claims image/text. */
 export function validateMagic(buf: Uint8Array, filename: string): { ok: boolean; mime: string | null; error?: string } {
   const mime = sniffMime(buf, filename);
-  if (mime === 'exe') return { ok: false, mime, error: `Rejected ${filename}: executable content detected` };
-  if (!mime) return { ok: false, mime, error: `Rejected ${filename}: unknown file type` };
+  if (mime === 'exe') return { ok: false, mime, error: `Rejected ${filename}: executable or unknown content (type checked, not extension)` };
+  if (!mime) return { ok: false, mime, error: `Rejected ${filename}: executable or unknown content (type checked, not extension)` };
   return { ok: true, mime };
 }
 
