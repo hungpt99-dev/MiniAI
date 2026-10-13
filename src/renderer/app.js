@@ -364,7 +364,7 @@ $('btn-save-settings').onclick = async () => {
   if (sug.length) patch.suggestions = sug;
   suggestCache = null;
   await window.nexio.setSettings(patch);
-  if ($('set-apikey').value) await window.nexio.setApiKey(patch.provider, $('set-apikey').value);
+  { const k = $('set-apikey').value.trim(); if (k) await window.nexio.setApiKey(patch.provider, k); }
   $('set-apikey').value = '';
   currentStopHotkey = $('set-stophotkey').value.trim() || 'Ctrl+Alt+Esc';
   void refreshHotkeyStatus();
@@ -1917,7 +1917,7 @@ function renderOnboard() {
     $('ob-next').onclick = async () => {
       try {
         await window.nexio.setSettings({ provider: prov });
-        if ($('ob-key').value) await window.nexio.setApiKey(prov, $('ob-key').value);
+        { const k = $('ob-key').value.trim(); if (k) await window.nexio.setApiKey(prov, k); }
       } catch (e) { $('ob-status').textContent = errText(e); return; }
       obStep = 1;
       renderOnboard();

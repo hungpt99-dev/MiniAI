@@ -620,8 +620,12 @@ export function registerIpc(): void {
       const s = getSettings(d);
       const adapter = getAdapter(provider);
       const key = getSecret(d, apiKeyService(provider)) || '';
-      // Unsaved panel value wins, then stored, then the adapter default.
-      const base = resolveBase((typeof baseUrl === 'string' ? baseUrl : '') || s.baseUrl || '', adapter.defaultBaseUrl);
+      // Unsaved panel value wins; stored baseUrl applies to compatible only
+      // (other providers ignore it so stale localhost never leaks into suggestions).
+      const unsaved = typeof baseUrl === 'string' ? baseUrl : '';
+      const base = provider === 'compatible'
+        ? resolveBase(unsaved || s.baseUrl || '', adapter.defaultBaseUrl)
+        : resolveBase(unsaved, adapter.defaultBaseUrl);
       return await adapter.listModels(key, base);
     } catch (e) {
       throw asError(e);

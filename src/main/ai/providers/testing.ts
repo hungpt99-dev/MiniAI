@@ -55,6 +55,7 @@ export async function testConnectivity(
     if (!cleanModel) return { ok: false, error: providerError('bad_request', 'no model entered') };
     const adapter = getAdapter(provider);
     const base = resolveBase(baseUrl, adapter.defaultBaseUrl);
+    // why: real adapters swallow list failures into [] so this catch only fires for throwing fakes
     let listError: string | undefined;
     const models = await adapter.listModels(key, base, t.signal, fetchFn).catch((e: unknown) => {
       listError = e instanceof Error ? e.message : String(e);

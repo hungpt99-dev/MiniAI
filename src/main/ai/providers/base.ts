@@ -1,6 +1,6 @@
 /** Strip trailing slashes so `${base}/models` never becomes `//models`. */
 export function stripTrailingSlash(u: string): string {
-  return u.replace(/\/+$/, '');
+  return u.trim().replace(/\/+$/, '');
 }
 
 /** Trim + strip slashes; empty input falls back (stale/blank never wins). */
