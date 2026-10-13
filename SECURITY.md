@@ -42,6 +42,26 @@
 - Same rule on Windows: `C:\Windows`, Program Files, Program Files (x86),
   ProgramData, `.ssh`, browser profiles. UNC/device paths stay rejected.
 
+## Attachments
+
+- File types are sniffed by magic bytes, never the extension; renamed
+  executables and unknown binaries are rejected inline (never silent).
+- Limits: max 5 files, 20MB per file, 200KB text truncation, 50MB total.
+- Images are re-encoded via Electron `nativeImage` (no extra dependency):
+  EXIF is stripped, orientation applied, longest edge capped at 2048px.
+  Text is decoded with UTF-8/UTF-16 BOM handling.
+- Attached paths go through the same realpath + allowed/protected policy as
+  agent tools: outside-root files need per-file "Allow once", protected or
+  symlink-escaping paths are refused ("Remove"). Attachment reads never grant
+  permission; writes still need approval with the exact path.
+- Attachment content is untrusted data (delimited, system-prompt rule, and
+  "Requested after reading \<name\>" on follow-up approvals). Tray text shows
+  "Attachment text may contain secrets — confirm before sharing."
+- Temp files live in `<data>/attachments/<runId>` with safe names and are
+  deleted on run delete/Clear, plus a 7-day orphan sweep. Run logs keep
+  name/type/size/SHA256 only — never bytes. First use shows
+  "Attachments stay on this computer … (localhost processing)".
+
 ## Reporting a vulnerability
 
 Report via GitHub private security advisory. Do not open a public GitHub Issue.

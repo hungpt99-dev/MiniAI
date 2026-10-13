@@ -68,6 +68,29 @@ friendly message + user action; technical detail is redacted and truncated to
 500 chars for the log/Details view. A failed run stops with the error — never
 a placeholder answer.
 
+## Attachments (vision + file refs)
+
+Neutral requests carry `text` / `image` / `file_ref` parts
+(`src/main/ai/providers/types.ts`, `vision.ts`):
+
+| Provider | Mapping (verified in `tests/unit/attachments.test.ts`) | Caps |
+|---|---|---|
+| OpenAI | `text` blocks + `image_url: {url: dataUrl}`; `file_ref` → text only | vision on vision models, 5 imgs / 20MB / 2048px / png·jpeg·gif·webp ([Vision docs](https://platform.openai.com/docs/guides/vision) 2026-10-13) |
+| Anthropic | `text` + `image/source base64` blocks; `file_ref` → text only; system stays top-level | same caps ([Vision docs](https://docs.anthropic.com/en/docs/build-with-claude/vision) 2026-10-13) |
+| Gemini | OpenAI-compat shape, same as OpenAI | same caps ([Vision docs](https://ai.google.dev/gemini-api/docs/vision) 2026-10-13 — endpoint mapping **UNVERIFIED** beyond the compat path) |
+| Compatible | OpenAI-compat shape; `compatibleImages` setting: `auto` (probe, default) / `on` / `off` | same caps; local vision support is server-dependent ([Ollama vision models](https://ollama.com/blog/vision-models) — per-server support **UNVERIFIED**) |
+
+Rules:
+
+- Oversize/overcount throws inline (never silent). Non-vision models throw
+  `VisionNotSupportedError` **before** any request is built, so image bytes
+  are never sent and never fail silently — the UI shows
+  "This model does not support images. Switch model to send images — image
+  bytes were not sent." with a one-click "Switch model" that recovers once.
+- `file_ref` parts are text only (metadata + truncated text); bytes never
+  cross the provider boundary. Streaming, tools and usage reporting are
+  unchanged (string messages behave exactly as before).
+
 ## Test button
 
 Settings → Test uses the **unsaved** panel values (key never logged):

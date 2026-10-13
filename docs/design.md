@@ -15,3 +15,18 @@ macOS differences (conventions only, no redesign):
 - Native `<select>` stays banned. `prefers-reduced-motion` and the OS
   dark/light/high-contrast setting are respected on both OSes.
 - Resize animation and the 560px cap behave the same.
+
+## Attachments tray
+
+- Tray sits under the composer (`0 22px 12px`, flex, `gap 8px`, wraps to
+  2 rows max with scroll). Images show 56×56 thumbs (`r10`, bordered, cover);
+  files show surface chips (`r10`, `6×10`, 13px name + file SVG + 12px muted
+  size) with an 18px remove button (hover/focus states).
+- Dragging files over the panel shows a dashed accent outline with
+  "Drop to attach"; drops outside the panel are swallowed so the popup never
+  navigates. Paste handles text-only / image-only / files-only / mixed.
+- Clicking a thumb/chip opens an in-panel preview (Esc closes it first, focus
+  returns to the prior element). The tray is a labelled list with a live
+  region; `Backspace` removes the focused (or last) chip.
+- Ask history shows 160px thumbs/chips with a "Delete attachments" menu.
+  Vision-failure notices carry a one-click "Switch model" button.

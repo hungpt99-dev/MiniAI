@@ -14,6 +14,7 @@ Settings live in the app SQLite DB (`getSettings`/`updateSettings` in
 | `requireApprovalForWrites` | `true` | Cannot disable approval for `shell_run`. |
 | `agentMaxCalls` | `25` | 1–100 tool calls per run. |
 | `sendTemperature` | `true` | Custom provider only: send `temperature`. Off for strict local servers. |
+| `compatibleImages` | `auto` | Custom provider only: image support `auto` (probe) / `on` / `off`. Off holds images back with the non-vision notice. |
 | `suggestions` | 4 builtins | Up to 8 starter-suggestion lines. |
 | `onboarded` | `false` | First-run onboarding flag. |
 
