@@ -111,6 +111,7 @@ async function send() {
 }
 
 async function sendInner() {
+  if (inputEl.disabled) return; // settings/onboard own the composer; Esc/Back re-enables
   const text = inputEl.value.trim();
   if (!text) return;
   if (agentRunning()) return; // one run at a time; Stop first
@@ -228,6 +229,7 @@ inputEl.addEventListener('input', () => {
   clearTimeout(paletteTimer);
   paletteTimer = setTimeout(async () => {
     const v = inputEl.value;
+    if (inputEl.disabled) return hidePalette(); // no slash palette while a panel owns the composer
     if (!/^\/[A-Za-z0-9_-]*$/.test(v)) return hidePalette(); // single-line slash token only
     paletteItems = await window.nexio.slashQuery(v, mode);
     if (!paletteItems.length) return hidePalette();
@@ -305,8 +307,10 @@ function showView(name) {
   if ($('view')) $('view').classList.toggle('hidden', !name);
   const wasDisabled = inputEl.disabled;
   inputEl.disabled = name === 'settings' || name === 'onboard';
-  if (name === 'settings') inputEl.placeholder = 'Settings';
-  else if (wasDisabled) updateModeUI(); // restores mode placeholder
+  if (name === 'settings') {
+    inputEl.placeholder = 'Settings';
+    hidePalette(); hideSuggest(); // clear /c: no slash palette or suggestions behind settings
+  } else if (wasDisabled) updateModeUI(); // restores mode placeholder
   syncChrome();
   requestResize();
 }
@@ -361,12 +365,16 @@ $('btn-save-settings').onclick = async () => {
   void refreshHotkeyStatus();
   void loadPlatform(); // re-read toggle/stop labels (hotkeys may have changed)
   $('settings-status').textContent = 'Saved';
+  $('settings-status').classList.remove('ok', 'err');
   setTimeout(() => ($('settings-status').textContent = ''), 1500);
 };
 $('btn-test-conn').onclick = async () => {
   $('settings-status').textContent = 'Testing…';
+  $('settings-status').classList.remove('ok', 'err');
   const r = await window.nexio.testConnectivity(settingsProvider, $('set-model').value, $('set-baseurl').value || undefined);
   $('settings-status').textContent = r.ok ? 'OK' : ('Fail: ' + (r.error?.code || '') + ' ' + (r.error?.message || ''));
+  $('settings-status').classList.toggle('ok', !!r.ok);
+  $('settings-status').classList.toggle('err', !r.ok);
 };
 $('btn-new').onclick = () => void newChat();
 async function newChat() {
@@ -606,13 +614,14 @@ function paintChip() {
   const chip = $('agent-cwd');
   if (!chip) return;
   const label = agentCwd ? agentCwd.split(/[\\/]/).filter(Boolean).slice(-2).join('/') : 'home';
-  chip.textContent = '📁 ' + label;
+  chip.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>';
+  chip.appendChild(document.createTextNode(' ' + label));
   chip.title = agentCwd || 'Working folder (default: home) — click to change';
 }
 
 function finalizeSpinners(except) {
   document.querySelectorAll('#agent-steps .ic.spin').forEach((el) => {
-    if (el !== except) { el.classList.remove('spin'); el.textContent = '✓'; }
+    if (el !== except) { el.classList.remove('spin'); el.innerHTML = stepSvg(ICO_OK); }
   });
 }
 
@@ -626,11 +635,19 @@ function addAgentRow(kind, html) {
   return row;
 }
 
+// why: stroke icons keep the renderer emoji-free; same 14px box as the old glyphs
+const ICO_OK = '<path d="M5 12l5 5 9-11"/>';
+const ICO_FAIL = '<path d="M6 6l12 12M18 6L6 18"/>';
+const ICO_WAIT = '<path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/>';
+function stepSvg(path) {
+  return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+}
+
 function iconFor(state) {
   if (state === 'run') return '<span class="ic spin" aria-hidden="true"></span>';
-  if (state === 'ok') return '<span class="ic" aria-hidden="true">✓</span>';
-  if (state === 'fail') return '<span class="ic" aria-hidden="true">✗</span>';
-  if (state === 'wait') return '<span class="ic" aria-hidden="true">⛨</span>';
+  if (state === 'ok') return `<span class="ic" aria-hidden="true">${stepSvg(ICO_OK)}</span>`;
+  if (state === 'fail') return `<span class="ic" aria-hidden="true">${stepSvg(ICO_FAIL)}</span>`;
+  if (state === 'wait') return `<span class="ic" aria-hidden="true">${stepSvg(ICO_WAIT)}</span>`;
   return '<span class="ic" aria-hidden="true">•</span>';
 }
 
@@ -735,7 +752,7 @@ function handleAgentEvent(runId, ev) {
       st.rows.set(ev.id, row);
     } else {
       const ic = row.querySelector('.ic');
-      if (ic) { ic.classList.remove('spin'); ic.textContent = '⛨'; }
+      if (ic) { ic.classList.remove('spin'); ic.innerHTML = stepSvg(ICO_WAIT); }
     }
     row.appendChild(buildApprovalCard(runId, ev));
     agentScroll();
@@ -744,7 +761,7 @@ function handleAgentEvent(runId, ev) {
     const dur = fmtDur(ev.durationMs);
     if (row) {
       const ic = row.querySelector('.ic');
-      if (ic) { ic.classList.remove('spin'); ic.textContent = ev.ok ? '✓' : '✗'; }
+      if (ic) { ic.classList.remove('spin'); ic.innerHTML = stepSvg(ev.ok ? ICO_OK : ICO_FAIL); }
       const d = row.querySelector('.dur');
       if (d && dur) d.textContent = dur;
       const tx = row.querySelector('.tx');
@@ -1061,7 +1078,7 @@ async function refreshExtensions() {
   try {
     extData = await extCall({ action: 'list' });
   } catch (e) {
-    box.innerHTML = `<div class="set-head"><h3>Extensions</h3><button id="btn-ext-back" aria-label="Back">←</button></div>` +
+    box.innerHTML = `<div class="set-head"><h3>Extensions</h3><button id="btn-ext-back" class="btn-icon" aria-label="Back" title="Back (Esc)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button></div>` +
       `<div class="msg assistant">${esc(errText(e))}</div>`;
     $('btn-ext-back').onclick = () => { showView(defaultView()); inputEl.focus(); };
     syncChrome(); requestResize();
@@ -1083,7 +1100,7 @@ function dotFor(status) {
 function renderExtensions() {
   const box = $('extensions');
   const tabs = [['skills', 'Skills'], ['mcp', 'MCP'], ['hooks', 'Hooks'], ['workflows', 'Workflows']];
-  let html = `<div class="set-head"><h3>Extensions</h3><button id="btn-ext-back" aria-label="Back" title="Back (Esc)">←</button></div>` +
+  let html = `<div class="set-head"><h3>Extensions</h3><button id="btn-ext-back" class="btn-icon" aria-label="Back" title="Back (Esc)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button></div>` +
     `<div class="seg ext-tabs" role="group" aria-label="Extension kind">` +
     tabs.map(([k, lb]) => `<button data-tab="${k}" class="${k === extTab ? 'on' : ''}">${lb}</button>`).join('') +
     `</div><div id="ext-body"></div>` +
@@ -1549,10 +1566,30 @@ function openWorkflowForm(trigger, info) {
     const span = document.createElement('span');
     span.className = 'flab';
     span.textContent = (inp.label || inp.name) + (inp.required ? ' *' : '');
+    if (inp.type === 'boolean') {
+      lab.classList.add('check');
+      const tx = document.createElement('span');
+      tx.className = 'switch-tx';
+      tx.appendChild(span);
+      lab.appendChild(tx);
+      const field = document.createElement('input');
+      field.type = 'checkbox';
+      field.dataset.name = inp.name;
+      field.setAttribute('role', 'switch');
+      lab.appendChild(field);
+      const track = document.createElement('span');
+      track.className = 'switch-track';
+      track.setAttribute('aria-hidden', 'true');
+      const knob = document.createElement('span');
+      knob.className = 'switch-knob';
+      track.appendChild(knob);
+      lab.appendChild(track);
+      form.appendChild(lab);
+      return;
+    }
     lab.appendChild(span);
     let field;
     if (inp.type === 'text') { field = document.createElement('textarea'); field.rows = 3; }
-    else if (inp.type === 'boolean') { field = document.createElement('input'); field.type = 'checkbox'; }
     else { field = document.createElement('input'); field.type = inp.type === 'number' ? 'number' : 'text'; }
     field.dataset.name = inp.name;
     if (inp.default) field.value = inp.default;

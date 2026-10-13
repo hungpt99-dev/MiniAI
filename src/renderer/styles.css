@@ -6,7 +6,7 @@
 
 :root {
   --bg-page: #0F1013; --panel: #15161B; --surface: #1D1F26; --hover: #23262E;
-  --border: #2A2D36; --divider: #23262E; --selected: #2A2D36;
+  --border: #2A2D36; --divider: #23262E; --selected: #262A33;
   --text: #ECEDEF; --text-body: #E3E5EA; --text-soft: #D8DAE0; --muted: #8B8F9A;
   --accent: #B8F26B; --on-accent: #0F1013;
   --danger: #FF8A80; --warn: #F2C96B;
@@ -18,17 +18,32 @@ body { font: 15px/1.55 Geist, 'Segoe UI', system-ui, sans-serif; color: var(--te
 body.mac { font-family: Geist, -apple-system, 'SF Pro Text', system-ui, sans-serif; }
 #app { padding: 0; background: transparent; }
 .panel { width: 640px; background: var(--panel); border: 1px solid var(--border); border-radius: 22px;
-  position: relative; display: flex; flex-direction: column; }
-/* NOTE: no overflow:hidden on .panel — rounded corners stay clean because
-   all children are transparent/inset. */
+  position: relative; display: flex; flex-direction: column; overflow: hidden; }
+/* why: single opaque panel clips inner rows to the 22px radius; .view stays the only scroller */
 .hidden { display: none !important; }
+
+/* buttons: one reset + shared variants (segmented pills and footer icon buttons keep their own rules) */
+button { font: inherit; }
+.btn { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text-soft);
+  border-radius: 10px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+.btn:hover { background: var(--hover); }
+.btn-primary { min-height: 44px; width: 100%; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent); border: 0; color: var(--on-accent); font-weight: 600;
+  border-radius: 12px; font-size: 14px; cursor: pointer; }
+.btn-icon { width: 36px; height: 36px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid transparent; color: var(--muted);
+  border-radius: 10px; cursor: pointer; padding: 0; }
+.btn-icon:hover { background: var(--hover); color: var(--text); }
+.btn svg, .btn-icon svg { width: 18px; height: 18px; flex: none; }
 
 /* bar */
 .bar { min-height: 72px; padding: 0 22px; display: flex; align-items: center; gap: 14px; flex: none; }
 /* single-panel flow: bar + view + footer; .view is the ONLY scroller (cap 560 via main clamp) */
-.view { flex: 1; min-height: 0; overflow-y: auto; border-top: 1px solid var(--divider);
+.view { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; border-top: 1px solid var(--divider);
   /* why: cap the single scroller so the 560-clamped window never clips content */
   max-height: 420px; }
+.view > * { box-sizing: border-box; max-width: 100%; min-width: 0; }
 .bar.multiline { align-items: flex-start; padding: 18px 22px; }
 .bar.multiline #search-icon { margin-top: 3px; }
 .bar.multiline #modebar { align-self: flex-start; }
@@ -38,7 +53,7 @@ body.mac { font-family: Geist, -apple-system, 'SF Pro Text', system-ui, sans-ser
   white-space: pre-wrap; overflow-wrap: anywhere; }
 #input::placeholder { color: var(--muted); }
 #input.scroll { padding-right: 8px; } /* why: keep text clear of the slim thumb */
-#input:disabled { opacity: .4; }
+#input:disabled { opacity: .5; }
 /* slim hover-only scrollbars: transparent until hover, 4px visible pill via content-box clip */
 .scroll::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
 .scroll::-webkit-scrollbar-track { background: transparent; }
@@ -111,16 +126,21 @@ body.show-tabkey #mode-hint { display: inline !important; }
   cursor: pointer; font-size: 13px; line-height: 1; padding: 0; font-family: inherit; }
 #hints .fbtn:hover { background: var(--hover); color: var(--text-soft); }
 #hints .fbtn.send { color: var(--accent); }
+#hints .fbtn svg { width: 18px; height: 18px; display: block; }
 
 /* in-flow view sections: static, no own border/radius/bg/shadow */
 #settings, #history { position: static; background: none; border: 0; border-radius: 0;
   padding: 16px 22px 20px; }
+/* form stack: flex column carries the rhythm, so rows/notes carry no own margins */
+#settings { display: flex; flex-direction: column; gap: 18px; }
+#settings .fld { margin-bottom: 0; }
+#settings .note { margin: 0; }
 .set-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+#settings .set-head { margin-bottom: 0; }
 .set-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
-#btn-settings-back, #btn-history-back { flex: none; width: 28px; height: 28px; display: inline-flex;
-  align-items: center; justify-content: center; border: 1px solid var(--border); background: var(--surface);
-  color: var(--muted); border-radius: 8px; cursor: pointer; font-size: 14px; line-height: 1; padding: 0; font-family: inherit; }
-#btn-settings-back:hover, #btn-history-back:hover { background: var(--hover); color: var(--text-soft); }
+.set-sec { font-size: 13px; font-weight: 600; color: var(--text); margin: 8px 0 0; padding-top: 12px;
+  border-top: 1px solid var(--divider); }
+#agent-cwd svg { vertical-align: -2px; }
 .fld { display: block; margin-bottom: 14px; }
 .flab { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; font-weight: 500; }
 #settings input { width: 100%; background: var(--surface); border: 1px solid var(--border);
@@ -128,7 +148,7 @@ body.show-tabkey #mode-hint { display: inline !important; }
 #settings input.mono { font-family: 'JetBrains Mono', monospace; font-size: 13px; }
 #settings input:focus { border-color: var(--accent); outline: none; }
 #settings textarea { width: 100%; background: var(--surface); border: 1px solid var(--border);
-  border-radius: 12px; padding: 10px 14px; font-size: 13px; color: var(--text); outline: 0; font-family: inherit; resize: vertical; }
+  border-radius: 12px; padding: 10px 14px; font-size: 13px; color: var(--text); outline: 0; font-family: inherit; resize: none; }
 #settings textarea:focus { border-color: var(--accent); outline: none; }
 .seg { display: grid; grid-template-columns: repeat(4, 1fr); background: #1A1C22; border-radius: 10px; padding: 3px; gap: 2px; }
 .seg button { border: 0; background: none; color: var(--muted); padding: 6px 4px; border-radius: 8px; font-size: 13px; cursor: pointer; font-family: inherit; }
@@ -137,17 +157,17 @@ body.show-tabkey #mode-hint { display: inline !important; }
 .hotkey-row { display: flex; align-items: center; justify-content: space-between; background: #17181D;
   border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; font-size: 14px; }
 #settings .row { display: flex; gap: 8px; align-items: center; }
-#settings .save-row { margin-bottom: 8px; }
-#btn-save-settings { height: 40px; width: 100%; flex: 1; border: 0; border-radius: 12px; background: var(--accent);
-  color: var(--on-accent); font-weight: 600; cursor: pointer; font-size: 14px; font-family: inherit; }
-#btn-test-conn, #btn-new { background: var(--surface); border: 1px solid var(--border); color: var(--text-soft);
-  border-radius: 10px; padding: 6px 12px; font-size: 13px; cursor: pointer; font-family: inherit; }
+#settings .save-row { margin-bottom: 0; }
+#settings .save-row .btn-primary { flex: 1; }
+#settings .test-row .btn { flex: none; width: 120px; }
 #settings-status { font-size: 12px; color: var(--muted); }
+#settings-status.ok { color: var(--accent); }
+#settings-status.err { color: var(--danger); }
 #history-list { list-style: none; padding: 0; margin: 8px 0 0; }
 #history-list li { padding: 9px 14px; border-radius: 12px; cursor: pointer; color: var(--text-soft); }
 #history-list li:hover { background: var(--hover); }
 
-button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 
 /* --- Agent mode --- */
@@ -214,8 +234,21 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .agent-list li button:hover { color: var(--danger); }
 #btn-agent-add-root { background: var(--surface); border: 1px solid var(--border); color: var(--text-soft);
   border-radius: 10px; padding: 6px 12px; font-size: 13px; cursor: pointer; font-family: inherit; }
-.fld.check { display: flex; gap: 10px; align-items: center; }
-.fld.check input { width: auto; }
+/* switches: the native checkbox stays the control (role=switch), the track is paint only */
+.fld.check { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.fld.check .switch-tx { min-width: 0; flex: 1; }
+.fld.check .flab { font-size: 14px; color: var(--text); margin: 0 0 2px; }
+.fld.check .switch-desc { display: block; font-size: 12px; color: var(--muted); }
+.fld.check input[type="checkbox"], #settings .fld.check input[type="checkbox"] { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+.switch-track { flex: none; width: 36px; height: 20px; box-sizing: border-box; border-radius: 999px;
+  border: 1px solid var(--border); position: relative; transition: background-color 120ms, border-color 120ms; }
+.switch-knob { position: absolute; top: 1px; left: 1px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--muted); transition: transform 120ms, background-color 120ms; }
+.fld.check input:checked + .switch-track { background: var(--accent); border-color: var(--accent); }
+.fld.check input:checked + .switch-track .switch-knob { transform: translateX(16px); background: var(--on-accent); }
+.fld.check input:focus-visible + .switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.astep .ic svg { display: block; }
 .appr .mcpsrv { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--warn);
   border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; }
 /* --- Extensions view (same tokens, single panel) --- */
@@ -317,7 +350,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 #onboard input:focus { border-color: var(--accent); outline: none; }
 #ob-status { font-size: 12px; color: var(--muted); }
 .ob-steps { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
-#set-suggest { width: 100%; resize: vertical; }
+#set-suggest { width: 100%; resize: none; }
 .linklike { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 13px; padding: 6px 0; font-family: inherit; }
 .linklike:hover { color: var(--text-soft); }
 #onboard .primary, #ob-next.primary, #ob-done.primary { background: var(--accent); color: var(--on-accent); font-weight: 600; }
