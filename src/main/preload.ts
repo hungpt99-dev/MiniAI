@@ -16,8 +16,11 @@ const api = {
   setSettings: (patch: Partial<Settings>) => ipcRenderer.invoke(IpcChannels.setSettings, patch),
   setApiKey: (provider: string, key: string) => ipcRenderer.invoke(IpcChannels.setApiKey, provider, key),
   isEncryptionAvailable: (): Promise<boolean> => ipcRenderer.invoke(IpcChannels.isEncryptionAvailable),
-  testConnectivity: (provider: string, model: string, baseUrl?: string) =>
-    ipcRenderer.invoke(IpcChannels.testConnectivity, provider, model, baseUrl),
+  testConnectivity: (provider: string, model: string, baseUrl?: string, apiKey?: string) =>
+    ipcRenderer.invoke(IpcChannels.testConnectivity, provider, model, baseUrl, apiKey),
+  listModels: (provider: string, baseUrl?: string) =>
+    ipcRenderer.invoke(IpcChannels.listModels, provider, baseUrl),
+  resetProviderFixes: () => ipcRenderer.invoke(IpcChannels.resetProviderFixes),
   listConversations: () => ipcRenderer.invoke(IpcChannels.listConversations),
   createConversation: (title?: string) => ipcRenderer.invoke(IpcChannels.createConversation, title),
   getMessages: (id: string) => ipcRenderer.invoke(IpcChannels.getMessages, id),

@@ -325,6 +325,8 @@ $('btn-settings').onclick = async () => {
   paintProv();
   $('set-model').value = s.model;
   $('set-baseurl').value = s.baseUrl || '';
+  if ($('set-sendtemp')) $('set-sendtemp').checked = s.sendTemperature !== false;
+  void refreshModelSuggestions();
   $('set-agentcwd').value = s.agentCwd || '';
   $('set-stophotkey').value = s.agentStopHotkey || 'Ctrl+Alt+Esc';
   $('set-maxcalls').value = s.agentMaxCalls || 25;
@@ -348,6 +350,7 @@ $('btn-save-settings').onclick = async () => {
     agentCwd: $('set-agentcwd').value.trim(),
   };
   if (settingsProvider === 'compatible' && $('set-baseurl').value.trim()) patch.baseUrl = $('set-baseurl').value.trim();
+  if (settingsProvider === 'compatible' && $('set-sendtemp')) patch.sendTemperature = $('set-sendtemp').checked;
   patch.agentStopHotkey = $('set-stophotkey').value.trim() || 'Ctrl+Alt+Esc';
   const mc = parseInt($('set-maxcalls').value, 10);
   if (Number.isFinite(mc)) patch.agentMaxCalls = Math.min(100, Math.max(1, mc));
@@ -369,13 +372,71 @@ $('btn-save-settings').onclick = async () => {
   setTimeout(() => ($('settings-status').textContent = ''), 1500);
 };
 $('btn-test-conn').onclick = async () => {
-  $('settings-status').textContent = 'Testing…';
-  $('settings-status').classList.remove('ok', 'err');
-  const r = await window.nexio.testConnectivity(settingsProvider, $('set-model').value, $('set-baseurl').value || undefined);
-  $('settings-status').textContent = r.ok ? 'OK' : ('Fail: ' + (r.error?.code || '') + ' ' + (r.error?.message || ''));
-  $('settings-status').classList.toggle('ok', !!r.ok);
-  $('settings-status').classList.toggle('err', !r.ok);
+  const btn = $('btn-test-conn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const status = $('settings-status');
+  status.textContent = 'Testing… (15s max)';
+  status.classList.remove('ok', 'err');
+  // Main aborts at 15s; this timer only re-enables the UI if invoke never settles.
+  const timer = setTimeout(() => {
+    status.textContent = 'Test timed out after 15s — check base URL and network.';
+    status.classList.add('err');
+    btn.disabled = false;
+  }, 16000);
+  try {
+    // Unsaved panel values go straight through; the key field is never logged.
+    const r = await window.nexio.testConnectivity(
+      settingsProvider, $('set-model').value.trim(),
+      $('set-baseurl').value.trim() || undefined, $('set-apikey').value);
+    clearTimeout(timer);
+    if (r.ok) {
+      const d = r.details || {};
+      status.textContent = `Works: ${d.provider || settingsProvider} ${d.model || ''} ${d.ms || 0}ms tools ${d.toolsOk === false ? 'fallback' : 'ok'}`;
+      status.classList.add('ok');
+    } else {
+      const act = r.error && r.error.action ? ` — ${testAction(r.error.action)}` : '';
+      status.textContent = `Fail: ${(r.error && r.error.message) || 'unknown'}${act}`;
+      status.classList.add('err');
+    }
+  } catch (e) {
+    clearTimeout(timer);
+    status.textContent = errText(e);
+    status.classList.add('err');
+  } finally {
+    clearTimeout(timer);
+    btn.disabled = false;
+  }
 };
+function testAction(a) {
+  if (a === 'check-key') return 'check the API key';
+  if (a === 'check-model') return 'check the model name';
+  if (a === 'shorten') return 'shorten the conversation';
+  if (a === 'retry-later') return 'wait and retry';
+  if (a === 'reset-fixes') return 'try Reset fixes';
+  if (a === 'check-base-url') return 'check the base URL';
+  return '';
+}
+if ($('btn-reset-fixes')) $('btn-reset-fixes').onclick = async () => {
+  try { await window.nexio.resetProviderFixes(); } catch { /* best-effort */ }
+  const status = $('settings-status');
+  status.textContent = 'Provider fixes cleared.';
+  status.classList.remove('ok', 'err');
+};
+// Model suggestions from listModels (best-effort, Anthropic has no listing).
+async function refreshModelSuggestions() {
+  const dl = $('model-list');
+  if (!dl || !window.nexio.listModels) return;
+  try {
+    const models = await window.nexio.listModels(settingsProvider, $('set-baseurl').value.trim() || undefined);
+    dl.innerHTML = '';
+    for (const m of (models || []).slice(0, 100)) {
+      const o = document.createElement('option');
+      o.value = m;
+      dl.appendChild(o);
+    }
+  } catch { /* suggestions never block settings */ }
+}
 $('btn-new').onclick = () => void newChat();
 async function newChat() {
   const c = await window.nexio.createConversation('New chat');
@@ -552,11 +613,13 @@ function paintProv() {
   if (seg) seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.prov === settingsProvider));
   const fb = $('fld-baseurl');
   if (fb) fb.classList.toggle('hidden', settingsProvider !== 'compatible');
+  const st = $('fld-sendtemp');
+  if (st) st.classList.toggle('hidden', settingsProvider !== 'compatible');
 }
 (function () {
   const seg = $('set-prov-seg');
   if (!seg) return;
-  seg.querySelectorAll('button').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); settingsProvider = b.dataset.prov; paintProv(); }));
+  seg.querySelectorAll('button').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); settingsProvider = b.dataset.prov; paintProv(); void refreshModelSuggestions(); }));
   paintProv();
 })();
 // Esc: results showing -> collapse + clear; second Esc hides (capture runs before core closer)

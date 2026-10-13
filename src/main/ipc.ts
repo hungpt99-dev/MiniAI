@@ -9,7 +9,8 @@ import { setSecret, getSecret, apiKeyService, isEncryptionAvailable } from './st
 import { createConversation, listConversations, addMessage, getMessages, deleteConversation } from './db/conversations';
 import { listTemplates, upsertTemplate, listWorkflows, render } from './db/templates';
 import { streamChat } from './ai/stream';
-import { testConnectivity } from './ai/providers';
+import { testConnectivity, resetParamCache } from './ai/providers';
+import { getAdapter } from './ai/providers/index';
 import { buildRegistry, querySlash, resolveSlash, type SlashEntry } from './slash/registry';
 import { runWorkflow } from './workflow/engine';
 import { routeRequest, type RouteInput } from './agent/router';
@@ -343,7 +344,7 @@ async function runSend(
         chat: async (input) => {
           let acc = '';
           await streamChat(s.provider, {
-            apiKey: key, model: s.model, baseUrl: s.baseUrl, temperature: s.temperature,
+            apiKey: key, model: s.model, baseUrl: s.baseUrl, temperature: chatTemperature(s),
             messages: history, signal: input.signal,
             onToken: (t) => { acc += t; input.onToken?.(t); },
           });
@@ -577,6 +578,12 @@ async function runExtWorkflowRun(
   return { runId };
 }
 
+/** Custom provider with the temperature toggle off sends no sampling param. */
+function chatTemperature(s: Settings): number | undefined {
+  if (s.provider === 'compatible' && s.sendTemperature === false) return undefined;
+  return s.temperature;
+}
+
 export function registerIpc(): void {
   ipcMain.handle(IpcChannels.getSettings, () => getSettings(db()));
   ipcMain.handle(IpcChannels.setSettings, (_e, patch: Partial<Settings>) => {
@@ -592,9 +599,21 @@ export function registerIpc(): void {
     return true;
   });
   ipcMain.handle(IpcChannels.isEncryptionAvailable, () => isEncryptionAvailable());
-  ipcMain.handle(IpcChannels.testConnectivity, async (_e, provider, model: string, baseUrl?: string) => {
-    const key = getSecret(db(), apiKeyService(provider as string)) || '';
+  ipcMain.handle(IpcChannels.testConnectivity, async (_e, provider, model: string, baseUrl?: string, apiKey?: string) => {
+    // Unsaved settings-panel values win; stored key is the fallback. Never logged.
+    const key = (typeof apiKey === 'string' && apiKey) || getSecret(db(), apiKeyService(provider as string)) || '';
     return testConnectivity(provider, key, model, baseUrl);
+  });
+  ipcMain.handle(IpcChannels.listModels, async (_e, provider, baseUrl?: string) => {
+    const d = db();
+    const s = getSettings(d);
+    const adapter = getAdapter(provider as Settings['provider']);
+    const key = getSecret(d, apiKeyService(provider as string)) || '';
+    return adapter.listModels(key, baseUrl || s.baseUrl || adapter.defaultBaseUrl);
+  });
+  ipcMain.handle(IpcChannels.resetProviderFixes, () => {
+    resetParamCache();
+    return true;
   });
 
   ipcMain.handle(IpcChannels.listConversations, () => listConversations(db()));
@@ -699,7 +718,7 @@ export function registerIpc(): void {
     try {
       let full = '';
       await streamChat(s.provider, {
-        apiKey: key, model: s.model, baseUrl: s.baseUrl, temperature: s.temperature,
+        apiKey: key, model: s.model, baseUrl: s.baseUrl, temperature: chatTemperature(s),
         messages, signal: aborter.signal,
         onToken: (t) => { full += t; sender.send(IpcChannels.chatStream, { token: t, done: false, conversationId, requestId }); },
       });

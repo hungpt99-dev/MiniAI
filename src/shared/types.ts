@@ -60,6 +60,8 @@ export interface Settings {
   model: string;
   baseUrl?: string;
   temperature?: number;
+  /** Custom provider only: send temperature. Default true. */
+  sendTemperature?: boolean;
   theme: 'light' | 'dark';
   hotkey: string;
   mode: Mode;

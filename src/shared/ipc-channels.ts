@@ -9,6 +9,8 @@ export const IpcChannels = {
   setApiKey: 'nexio:set-api-key',
   isEncryptionAvailable: 'nexio:is-encryption-available',
   testConnectivity: 'nexio:test-connectivity',
+  listModels: 'nexio:list-models',
+  resetProviderFixes: 'nexio:reset-provider-fixes',
   listConversations: 'nexio:list-conversations',
   getMessages: 'nexio:get-messages',
   createConversation: 'nexio:create-conversation',

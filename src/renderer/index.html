@@ -38,8 +38,9 @@
         </div></div>
         <label class="fld"><span class="flab">API key</span><input id="set-apikey" type="password" placeholder="sk-…" class="mono" /></label>
         <div class="note" id="enc-note">Encrypted on this device with Windows DPAPI.</div>
-        <label class="fld"><span class="flab">Model</span><input id="set-model" class="mono" /></label>
+        <label class="fld"><span class="flab">Model</span><input id="set-model" class="mono" list="model-list" autocomplete="off" /><datalist id="model-list"></datalist></label>
         <label class="fld hidden" id="fld-baseurl"><span class="flab">Base URL</span><input id="set-baseurl" placeholder="optional" class="mono" /></label>
+        <label class="fld check hidden" id="fld-sendtemp"><span class="switch-tx"><span class="flab">Send temperature (Custom)</span><span class="switch-desc">Off for strict local servers</span></span><input id="set-sendtemp" type="checkbox" role="switch" /></label>
         <label class="fld"><span class="flab">Agent cwd</span><input id="set-agentcwd" placeholder="optional" class="mono" /></label>
         <div class="fld"><span class="flab">Agent — allowed folders</span><ul id="agent-roots" class="agent-list"></ul><div class="row"><button id="btn-agent-add-root">Add folder</button></div></div>
         <div class="fld"><span class="flab">Agent — always-allow rules</span><ul id="agent-rules" class="agent-list"></ul></div>
@@ -62,6 +63,7 @@
         </div>
         <div class="row test-row">
           <button id="btn-test-conn" class="btn">Test</button>
+          <button id="btn-reset-fixes" class="btn" title="Clear learned provider parameter fixes">Reset fixes</button>
           <span id="settings-status" role="status"></span>
         </div>
       </aside>
