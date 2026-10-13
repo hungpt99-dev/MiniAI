@@ -13,6 +13,7 @@ import { fsMoveTool } from './fs_move';
 import { fsCopyTool } from './fs_copy';
 import { fsTrashTool } from './fs_trash';
 import { shellRunTool } from './shell_run';
+import { attachmentListTool, attachmentReadTool } from './attachment_tools';
 
 export const ALL_TOOLS: Tool[] = [
   fsSearchTool,
@@ -29,6 +30,8 @@ export const ALL_TOOLS: Tool[] = [
   fsCopyTool,
   fsTrashTool,
   shellRunTool,
+  attachmentListTool,
+  attachmentReadTool,
 ];
 
 export const TOOL_MAP: Map<string, Tool> = new Map(ALL_TOOLS.map((t) => [t.name, t]));
