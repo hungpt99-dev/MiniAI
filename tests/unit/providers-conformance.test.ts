@@ -124,7 +124,7 @@ describe('adapter specifics', () => {
   });
   it('openai: gpt-6 is reasoning-aware with completion limit, no sampling', () => {
     const a = PROVIDER_ADAPTERS.openai;
-    for (const m of ['gpt-6-sol', 'gpt-6-luna', 'gpt-6']) {
+    for (const m of ['gpt-6-sol', 'gpt-6-luna', 'gpt-6', 'gpt-5.6-luna', 'gpt-5.6-sol']) {
       const caps = a.capabilitiesFor(m);
       expect(caps.reasoningAware).toBe(true);
       expect(caps.limitParam).toBe('max_completion_tokens');
@@ -139,10 +139,10 @@ describe('adapter specifics', () => {
       expect(body.top_p).toBeUndefined();
     }
   });
-  it('openai: reasoning_effort none forced for gpt-6 tool calls only', () => {
+  it('openai: reasoning_effort none forced for o1/o3/gpt-5/gpt-6 tool calls only', () => {
     const a = PROVIDER_ADAPTERS.openai;
     const tools = [{ name: 't', description: 'd', inputSchema: { type: 'object' } }];
-    for (const m of ['gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6.1-luna', 'gpt-6']) {
+    for (const m of ['gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6.1-luna', 'gpt-6', 'gpt-5.6-luna', 'gpt-5.6-sol', 'o1', 'o3-mini']) {
       const withTools = a.buildRequest(m, {
         messages: [{ role: 'user', content: 'go' }], tools, maxOutputTokens: 128, stream: false,
       }).body as Record<string, unknown>;
@@ -151,19 +151,19 @@ describe('adapter specifics', () => {
         messages: [{ role: 'user', content: 'go' }], maxOutputTokens: 128, stream: false,
       }).body as Record<string, unknown>;
       expect(noTools.reasoning_effort).toBeUndefined();
-      // Explicit effort is overridden for gpt-6 tool calls.
+      // Explicit effort is overridden for forced-model tool calls.
       const forced = a.buildRequest(m, {
         messages: [{ role: 'user', content: 'go' }], tools, maxOutputTokens: 128,
         reasoningEffort: 'high', stream: false,
       }).body as Record<string, unknown>;
       expect(forced.reasoning_effort).toBe('none');
     }
-    // Other reasoning models send effort only when tools + effort are both set.
-    const o3 = a.buildRequest('o3-mini', {
+    // Caller-set effort passes through only for plain models; forced models override to none.
+    const plainEffort = a.buildRequest('gpt-4o', {
       messages: [{ role: 'user', content: 'go' }], tools, maxOutputTokens: 16,
       reasoningEffort: 'low', stream: false,
     }).body as Record<string, unknown>;
-    expect(o3.reasoning_effort).toBe('low');
+    expect(plainEffort.reasoning_effort).toBe('low');
     const o3NoTools = a.buildRequest('o3-mini', {
       messages: [{ role: 'user', content: 'go' }], maxOutputTokens: 16,
       reasoningEffort: 'low', stream: false,

@@ -57,8 +57,8 @@ export const openaiAdapter: ProviderAdapter = {
         type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema },
       }));
       body.tool_choice = 'auto';
-      // why: gpt-6 family tool calls fail unless reasoning is off
-      if (/gpt-6/i.test(model)) body.reasoning_effort = 'none';
+      // why: o1/o3/gpt-5/gpt-6 tool calls fail unless reasoning is off
+      if (/\bo1\b|\bo3\b|gpt-5|gpt-6|o[34](-mini)?\b/i.test(model)) body.reasoning_effort = 'none';
       else if (req.reasoningEffort) body.reasoning_effort = req.reasoningEffort;
     }
     return { url: openaiAdapter.chatEndpoint(baseUrl), headers: openaiAdapter.headers(''), body };

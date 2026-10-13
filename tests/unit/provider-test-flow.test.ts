@@ -63,7 +63,7 @@ describe('testConnectivity flow', () => {
     }
   });
   it('tool probe sends reasoning_effort none (mocked, no keys)', async () => {
-    for (const model of ['gpt-6.1-sol', 'gpt-6.1-luna']) {
+    for (const model of ['gpt-6.1-sol', 'gpt-6.1-luna', 'gpt-5.6-luna', 'gpt-5.6-sol', 'o1', 'o3-mini']) {
       const bodies: Array<Record<string, unknown>> = [];
       const fetchFn = (async (_url: unknown, init: unknown) => {
         const raw = (init as { body: string }).body;
