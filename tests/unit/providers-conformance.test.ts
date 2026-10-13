@@ -122,6 +122,58 @@ describe('adapter specifics', () => {
     expect(JSON.stringify(body)).toContain('developer');
     expect(body.max_completion_tokens).toBe(16);
   });
+  it('openai: gpt-6 is reasoning-aware with completion limit, no sampling', () => {
+    const a = PROVIDER_ADAPTERS.openai;
+    for (const m of ['gpt-6-sol', 'gpt-6-luna', 'gpt-6']) {
+      const caps = a.capabilitiesFor(m);
+      expect(caps.reasoningAware).toBe(true);
+      expect(caps.limitParam).toBe('max_completion_tokens');
+      expect(caps.supportsTemperature).toBe(false);
+      expect(caps.supportsTopP).toBe(false);
+      const body = a.buildRequest(m, {
+        messages: [{ role: 'user', content: 'hi' }], maxOutputTokens: 128,
+        temperature: 0.7, topP: 0.9, stream: false,
+      }).body as Record<string, unknown>;
+      expect(body.max_completion_tokens).toBe(128);
+      expect(body.temperature).toBeUndefined();
+      expect(body.top_p).toBeUndefined();
+    }
+  });
+  it('openai: reasoning_effort none forced for gpt-6 luna/sol tool calls only', () => {
+    const a = PROVIDER_ADAPTERS.openai;
+    const tools = [{ name: 't', description: 'd', inputSchema: { type: 'object' } }];
+    for (const m of ['gpt-6-luna', 'gpt-6-sol']) {
+      const withTools = a.buildRequest(m, {
+        messages: [{ role: 'user', content: 'go' }], tools, maxOutputTokens: 128, stream: false,
+      }).body as Record<string, unknown>;
+      expect(withTools.reasoning_effort).toBe('none');
+      const noTools = a.buildRequest(m, {
+        messages: [{ role: 'user', content: 'go' }], maxOutputTokens: 128, stream: false,
+      }).body as Record<string, unknown>;
+      expect(noTools.reasoning_effort).toBeUndefined();
+      // Explicit effort is overridden for luna/sol tool calls.
+      const forced = a.buildRequest(m, {
+        messages: [{ role: 'user', content: 'go' }], tools, maxOutputTokens: 128,
+        reasoningEffort: 'high', stream: false,
+      }).body as Record<string, unknown>;
+      expect(forced.reasoning_effort).toBe('none');
+    }
+    // Other reasoning models send effort only when tools + effort are both set.
+    const o3 = a.buildRequest('o3-mini', {
+      messages: [{ role: 'user', content: 'go' }], tools, maxOutputTokens: 16,
+      reasoningEffort: 'low', stream: false,
+    }).body as Record<string, unknown>;
+    expect(o3.reasoning_effort).toBe('low');
+    const o3NoTools = a.buildRequest('o3-mini', {
+      messages: [{ role: 'user', content: 'go' }], maxOutputTokens: 16,
+      reasoningEffort: 'low', stream: false,
+    }).body as Record<string, unknown>;
+    expect(o3NoTools.reasoning_effort).toBeUndefined();
+    const plain = a.buildRequest('gpt-4o', {
+      messages: [{ role: 'user', content: 'go' }], tools, maxOutputTokens: 16, stream: false,
+    }).body as Record<string, unknown>;
+    expect(plain.reasoning_effort).toBeUndefined();
+  });
   it('gemini: uses the OpenAI-compat chat endpoint', () => {
     expect(PROVIDER_ADAPTERS.gemini.chatEndpoint()).toContain('/chat/completions');
   });

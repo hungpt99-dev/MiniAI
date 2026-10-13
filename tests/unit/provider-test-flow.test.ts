@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { testConnectivity } from '../../src/main/ai/providers/testing';
+import { TEST_MAX_OUTPUT_TOKENS, TEST_MAX_REASONING_TOKENS } from '../../src/main/ai/providers/constants';
 
 function okJson(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -40,5 +41,43 @@ describe('testConnectivity flow', () => {
     expect(r.ok).toBe(false);
     expect(r.error?.kind).toBe('model_not_found');
     expect(r.details).toBeUndefined();
+  });
+  it('uses a reasoning-aware budget: 128 for reasoning models, 16 otherwise', async () => {
+    for (const [model, want] of [['gpt-6-sol', TEST_MAX_REASONING_TOKENS], ['gpt-4o', TEST_MAX_OUTPUT_TOKENS]] as const) {
+      const bodies: Array<Record<string, unknown>> = [];
+      const fetchFn = (async (_url: unknown, init: unknown) => {
+        const raw = (init as { body: string }).body;
+        if (raw) bodies.push(JSON.parse(raw) as Record<string, unknown>);
+        const url = String(_url);
+        if (url.endsWith('/models')) return okJson({ data: [] });
+        return okJson({ choices: [{ message: { content: 'ok' } }] });
+      }) as unknown as typeof fetch;
+      const r = await testConnectivity('openai', 'k', model, undefined, fetchFn);
+      expect(r.ok).toBe(true);
+      // bodies[0] = tiny completion, bodies[1] = tool probe
+      expect(bodies[0].max_completion_tokens).toBe(want);
+      expect(bodies[1].max_completion_tokens).toBe(want);
+    }
+  });
+  it('tool probe sends reasoning_effort none (mocked, no keys)', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const fetchFn = (async (_url: unknown, init: unknown) => {
+      const raw = (init as { body: string }).body;
+      if (raw) bodies.push(JSON.parse(raw) as Record<string, unknown>);
+      if (String(_url).endsWith('/models')) return okJson({ data: [] });
+      return okJson({ choices: [{ message: { content: 'ok' } }] });
+    }) as unknown as typeof fetch;
+    const r = await testConnectivity('openai', 'k', 'gpt-6-luna', undefined, fetchFn);
+    expect(r.ok).toBe(true);
+    expect(bodies[1].reasoning_effort).toBe('none');
+    // Tiny completion carries no tools and no reasoning_effort.
+    expect(bodies[0].reasoning_effort).toBeUndefined();
+    expect(bodies[0].tools).toBeUndefined();
+  });
+  it('keeps network mapping: fetch failure surfaces kind network', async () => {
+    const down = (async () => { throw new TypeError('fetch failed'); }) as unknown as typeof fetch;
+    const r = await testConnectivity('openai', 'k', 'gpt-6-sol', undefined, down);
+    expect(r.ok).toBe(false);
+    expect(r.error?.kind).toBe('network');
   });
 });

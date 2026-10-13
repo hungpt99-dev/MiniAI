@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { validateSettings, DEFAULT_SETTINGS } from '../../src/main/store/settings';
 import { openTestDb } from '../../src/main/db/db';
 import { updateSettings, getSettings } from '../../src/main/store/settings';
@@ -21,5 +23,11 @@ describe('settings validation', () => {
     expect(s.theme).toBe('dark');
     expect(() => updateSettings(db, { model: '' })).toThrow();
     db.close();
+  });
+  it('renderer save clears stale custom baseUrl when leaving compatible', () => {
+    // why: app.js builds the patch inline (no DOM import); assert the source
+    // clears baseUrl so a stale localhost URL never follows to other providers
+    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'renderer', 'app.js'), 'utf8');
+    expect(src).toMatch(/settingsProvider !== 'compatible'\) patch\.baseUrl = ''/);
   });
 });
