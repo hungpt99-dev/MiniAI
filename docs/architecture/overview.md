@@ -31,6 +31,9 @@ Contract is pinned by `tests/unit/ipc-contract.test.ts` (prefix, uniqueness,
 required channels, no runtime channels).
 
 - Chat: `send` (intent-routed), `chat` (direct stream), `chat-cancel`, `chat-stream` (push).
+- Providers: `test-connectivity` (unsaved panel values: listModels + tiny
+  completion + tool probe), `list-models` (model suggestions),
+  `reset-provider-fixes` (clear the 30-day param-fix cache).
 - Do mode: `agentStart` â†’ runId + `agentEvent` push, `agentApprove`, `agentStop`,
   `agentLog`, `agentRun` (explicit agent send). All Do runs execute the built-in
   loop; the run log records builtin/workflow runs only.
@@ -39,8 +42,9 @@ required channels, no runtime channels).
 
 ## Agent loop (built-in computer use)
 
-`src/main/agent/loop.ts` `runAgent()` runs fully in main: system prompt â†’
-`requestToolTurn` (`src/main/ai/tools-chat.ts`) â†’ `executeToolCall()` per call
+`src/main/agent/loop.ts` `runAgent()` runs fully in main: system prompt, then
+`requestToolTurn` (`src/main/ai/tools-chat.ts`, neutral messages + tools shaped
+per provider by `src/main/ai/providers/<id>/` adapters), then `executeToolCall()` per call
 â†’ repeat until text answer, limit, abort, or timeout. Every run appends
 redacted JSONL (`log.ts`). Renderer only renders `AgentEvent`s and resolves
 approvals over IPC; it never gets shell access.
