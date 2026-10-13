@@ -41,6 +41,7 @@ describe('suggest component: idle-only gate across every non-empty dimension', (
     expect(src).toContain('window.attachPendingCount');
     expect(src).toContain('window.clearAttachTray');
     expect(slice(src, 'function isEmptyUI()', '// Fail visibly')).toContain('attachPending()');
+    expect(slice(src, 'function syncChrome()', '// why: keep artboard')).toContain('attachPending()');
     const add = slice(src, 'function addEntries(list)', 'function readFiles(');
     expect(add).toContain('hideSuggest');
   });
@@ -54,8 +55,8 @@ describe('suggest component: idle-only gate across every non-empty dimension', (
     expect(render()).toContain("paletteEl.classList.contains('hidden')");
     expect(slice(appJs(), 'renderPalette = function', 'const _hidePalette')).toContain('hideSuggest');
   });
-  it('settings/ext/history: panels block, showView hides off idle, assert counts suggest', () => {
-    expect(maybe()).toContain("view === 'settings'");
+  it('settings/ext/history: panels block via idle gate, showView hides off idle, assert counts suggest', () => {
+    expect(maybe()).toContain("view !== 'idle'"); // idle gate covers all panels (no per-view list)
     expect(slice(appJs(), 'function showView(name)', '// dev-only')).toContain("if (name !== 'idle') hideSuggest()");
     expect(slice(appJs(), 'function assertSingleView()', 'function togglePanel')).toContain("'suggest'");
   });
@@ -77,6 +78,7 @@ describe('suggest component: idle-only gate across every non-empty dimension', (
     const r = render();
     expect(r).toContain('inputEl.value = text');
     expect(r).toContain('inputEl.focus()');
+    expect(r).toContain('syncChrome()');
     for (const s of ['void send(', 'startAgentRun', 'nexio.send', 'agentStart']) expect(r).not.toContain(s);
   });
 });
@@ -90,9 +92,7 @@ describe('view store: isEmpty across new/Esc/typing/clear', () => {
     expect(isEmpty({ ...empty, attachCount: 1 })).toBe(false);
     expect(isEmpty({ ...empty, inputEmpty: false })).toBe(false);
   });
-  it('isEmpty reuses shouldShowPlanning (active + zero-tool never reads empty)', () => {
-    const src = read('src/shared/view.ts');
-    expect(src.slice(src.indexOf('export function isEmpty'))).toContain('shouldShowPlanning');
+  it('isEmpty covers planning-only via active (no shouldShowPlanning reuse needed)', () => {
     expect(shouldShowPlanning(true, 0)).toBe(true);
     expect(isEmpty({ ...empty, active: true })).toBe(false);
   });

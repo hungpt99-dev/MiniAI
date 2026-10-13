@@ -661,7 +661,7 @@ function syncChrome() {
   const panelOpen = view === 'settings' || view === 'history' || view === 'extensions' || view === 'onboard';
   const agentActive = (typeof agentRunning === 'function' && agentRunning()) ||
     ($('agent-steps') && $('agent-steps').children.length > 0);
-  const idle = !inputEl.value && !hasMsgs && !palOpen && !panelOpen && !agentActive;
+  const idle = !inputEl.value && !hasMsgs && !palOpen && !panelOpen && !agentActive && attachPending() === 0;
   if ($('panel')) $('panel').classList.toggle('has-results', hasMsgs || palOpen);
   if ($('hotkey-hint')) $('hotkey-hint').classList.toggle('hidden', !idle);
   if ($('modebar')) $('modebar').classList.toggle('hidden', idle);
@@ -2105,7 +2105,6 @@ function maybeSuggest() {
   hideSuggest(); // unmount stale first (bumps suggestSeq)
   if (view !== 'idle' || !isEmptyUI()) return; // idle + fresh composer only
   if (!paletteEl.classList.contains('hidden')) return; // slash palette wins
-  if (view === 'settings' || view === 'history' || view === 'extensions' || view === 'onboard' || view === 'palette' || view === 'run') return; // panels win
   const seq = ++suggestSeq;
   suggestTimer = setTimeout(() => void renderSuggest(seq), 1000);
 }
@@ -2129,6 +2128,7 @@ async function renderSuggest(seq) {
       hideSuggest();
       grow();
       inputEl.focus();
+      syncChrome();
     };
     box.appendChild(d);
   }
