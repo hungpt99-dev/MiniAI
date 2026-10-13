@@ -45,12 +45,6 @@ function grow() {
   requestResize();
 }
 
-// why: keep tall pastes to one compact user row while sending the full text
-function userLabel(t) {
-  const first = String(t).split('\n')[0];
-  return (first.length > 120 || String(t).includes('\n')) ? first.slice(0, 120) + '…' : t;
-}
-
 function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 // Readable error text: drop Electron's invoke wrapper, tolerate non-Error rejections.
 function errText(e) {
@@ -172,6 +166,7 @@ function decorateCode(root) {
     btn.className = 'pre-copy';
     btn.innerHTML = copySvg() + '<span>Copy</span>';
     btn.setAttribute('aria-label', 'Copy code block');
+    btn.title = 'Copy code block';
     btn.onclick = (e) => {
       e.stopPropagation();
       copyText((pre.querySelector('code') || pre).textContent || '');
@@ -608,6 +603,7 @@ function syncChrome() {
   if ($('modebar')) $('modebar').classList.toggle('hidden', idle);
   const multi = !palOpen && !hasMsgs && !!inputEl.value && (inputEl.value.includes('\n') || inputEl.scrollHeight > 32);
   if ($('hint-nav')) $('hint-nav').classList.toggle('hidden', multi);
+  if ($('hint-esc')) $('hint-esc').classList.toggle('hidden', !hasMsgs);
   if ($('hint-multi')) $('hint-multi').classList.toggle('hidden', !multi);
   const hasAnswer = currentView === 'messages' && !!messagesEl.querySelector('.msg.assistant');
   if ($('answer-meta')) $('answer-meta').classList.toggle('hidden', !hasAnswer);
@@ -697,8 +693,9 @@ if ($('btn-copy')) $('btn-copy').addEventListener('click', async () => {
   const text = (last.dataset && last.dataset.raw) || last.textContent || '';
   try { await navigator.clipboard.writeText(text); }
   catch { fallbackCopy(text); }
-  // why: ghost buttons confirm inline; the icon markup restores with the label
-  const orig = btn.innerHTML;
+  // why: ghost buttons confirm inline; orig stored once so rapid clicks still restore the icon markup
+  if (!btn.dataset.orig) btn.dataset.orig = btn.innerHTML;
+  const orig = btn.dataset.orig;
   btn.innerHTML = copySvg() + 'Copied';
   setTimeout(() => { btn.innerHTML = orig; }, 1500);
 });
@@ -898,9 +895,21 @@ function handleAgentEvent(runId, ev) {
   const st = agentState;
   if (!st) return;
   if (ev.type === 'step') {
-    return; // planning narration is replaced by the N-steps header once tools run
+    // planning narration stays as one pending row until tools run (zero-tool runs keep it)
+    let row = document.querySelector('#agent-steps .plan-row');
+    if (row) {
+      const tx = row.querySelector('.tx');
+      if (tx) tx.textContent = ev.text || 'Working…';
+    } else {
+      row = addAgentRow('tool',
+        iconFor('run') + `<div class="tx">${esc(ev.text || 'Working…')}</div><span class="dur"></span>`);
+      row.classList.add('plan-row');
+    }
+    finalizeSpinners(row.querySelector('.ic'));
   } else if (ev.type === 'tool_call') {
     finalizeSpinners();
+    // planning narration is replaced by the N-steps header once tools run
+    document.querySelectorAll('#agent-steps .plan-row').forEach((r) => r.remove());
     const row = addAgentRow('tool',
       iconFor('run') + `<div class="tx"><span class="tool-name">${esc(ev.tool)}</span> ` +
       `<span>${esc(ev.summary || '')}</span>` +
@@ -1806,13 +1815,14 @@ function expandSteps() {
   syncSteps();
 }
 
-// why: steps show only for tool runs — collapsed with an N-steps chevron, expanded on failure
+// why: steps show for any run rows — collapsed with a tool-only N-steps chevron, expanded on failure
 function syncSteps() {
   const steps = $('agent-steps');
   if (!steps) return;
   const tools = steps.querySelectorAll('.tool-name').length;
+  const rows = steps.querySelectorAll('.astep').length;
   let head = steps.querySelector('.steps-toggle');
-  if (!tools && !steps.querySelector('.error-row') && !steps.querySelector('.stopped-row')) {
+  if (!rows) {
     steps.classList.add('hidden');
     if (head) head.remove();
     return;

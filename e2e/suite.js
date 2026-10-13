@@ -218,7 +218,7 @@ async function main() {
   if (s.input.trim() === '/clear') { await key('Enter'); await sleep(600); s = await S(); }
   const rc = JSON.parse(await ev(`JSON.stringify({v:document.getElementById('input').value,ch:document.getElementById('input').clientHeight,multi:document.querySelector('.bar').classList.contains('multiline')})`));
   check('composer-reset-1line', rc.v === '' && rc.ch <= 32 && !rc.multi, JSON.stringify(rc));
-  check('user-label-truncates', await ev(`userLabel('x'.repeat(200)).length===121 && userLabel('a'+String.fromCharCode(10)+'b')==='a…'`));
+  check('user-row-clamps', await ev(`typeof userLabel==='undefined' && /you-clamp/.test(addMsg.toString())`));
   await shot('05-reshown');
   // /help executes (palette may select first on fast typing -> Enter again)
   check('help-ready', await ensureInput());

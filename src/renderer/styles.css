@@ -91,7 +91,7 @@ button { font: inherit; }
 /* single Tab keycap: outside the pill, on hover or when composer is focused-and-empty */
 #mode-hint { display: none; flex: none; }
 #modebar:hover + #mode-hint { display: inline !important; }
-body.show-tabkey #mode-hint { display: inline !important; }
+body.show-tabkey #modebar:not(.hidden) + #mode-hint { display: inline !important; }
 
 /* result: single column 18/22 rhythm, 16 gap; meta row carries model left + actions right */
 #messages { display: flex; flex-direction: column; gap: 16px; padding: 18px 22px 0; }
