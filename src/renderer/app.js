@@ -13,6 +13,14 @@ let returnTo = 'idle'; // idle|run origin for Esc/Back (mirrors shared/view.ts o
 let currentView = null; // legacy alias: 'palette'|'messages'|'settings'|'history'|'extensions'|'onboard'|null
 function hasRun() { return messagesEl.children.length > 0 || ($('agent-steps') && $('agent-steps').children.length > 0); }
 function backTarget() { return returnTo === 'run' && !hasRun() ? 'idle' : returnTo; }
+function attachPending() { try { return typeof attachPendingCount === 'function' ? attachPendingCount() : 0; } catch { return 0; } }
+// why: starter suggestions only on a fresh idle composer — mirrors shared/view.ts isEmpty
+function isEmptyUI() {
+  const steps = $('agent-steps');
+  const toolCount = steps ? steps.querySelectorAll('.tool-name').length : 0;
+  const active = (typeof agentRunning === 'function' && agentRunning());
+  return !inputEl.value && messagesEl.children.length === 0 && toolCount === 0 && attachPending() === 0 && !active;
+}
 let drafts = { chat: '', agent: '' };
 
 // Fail visibly, not half-wired, if the preload bridge did not load.
@@ -146,9 +154,7 @@ function addMsg(role, content) {
   messagesEl.appendChild(div);
   const $viewEl = $('view');
   if ($viewEl) $viewEl.scrollTop = $viewEl.scrollHeight; // .view is the only scroller
-  // Background runs must not yank panels: only auto-switch when no run is active.
-  // Explicit sends switch via sendInner/beginRun; extension errors keep legacy yank.
-  if (view !== 'run' && !(typeof agentRunning === 'function' && agentRunning())) showView('run');
+  // why: no view yank here — senders switch explicitly; the approval yank lives in handleAgentEvent
   return div;
 }
 
@@ -250,6 +256,7 @@ async function sendInner() {
     if (r.found) {
       if (r.found.scope && r.found.scope !== 'all' && r.found.scope !== mode) {
         addMsg('assistant', `${esc(trigger)} is only available in ${esc(r.found.scope)} mode.`);
+        showView('run');
         return;
       }
       if (r.found.source === 'workflow') {
@@ -259,6 +266,7 @@ async function sendInner() {
           if (info && info.kind === 'ext') return void openWorkflowForm(trigger, info);
         } catch { /* fall through to legacy path */ }
         addMsg('user', text);
+        showView('run');
         assistantDiv = addMsg('assistant', '…');
         try {
           const out = await window.nexio.runWorkflow(trigger, { text: rest.join(' ') });
@@ -274,18 +282,21 @@ async function sendInner() {
       if (r.found.source === 'skill') return void runSkillCommand(trigger);
       if (r.found.source === 'mcp') return void runMcpPrompt(trigger);
       if (trigger === '/new') return void newChat();
-      if (trigger === '/clear') { messagesEl.innerHTML = ''; assistantDiv = null; const st0 = $('agent-steps'); if (st0) st0.innerHTML = ''; const ch0 = $('run-chips'); if (ch0) ch0.remove(); showView('idle'); syncChrome(); requestResize(); return; }
+      if (trigger === '/clear') { messagesEl.innerHTML = ''; assistantDiv = null; const st0 = $('agent-steps'); if (st0) st0.innerHTML = ''; const ch0 = $('run-chips'); if (ch0) ch0.remove(); inputEl.value = ''; drafts[mode] = ''; try { if (typeof clearAttachTray === 'function') clearAttachTray(); } catch {} hideSuggest(); showView('idle'); try { maybeSuggest(); } catch {} syncChrome(); requestResize(); return; }
       if (trigger === '/help') {
         addMsg('assistant', '**Commands:** /help /new /clear /model /history /settings /log /extensions + prompt templates + workflows + skills.\nType `/` to browse.');
+        showView('run');
         return;
       }
       // view-only slashes handled before router/agent at the top of sendInner
       if (trigger === '/model') {
         if (rest[0]) { await window.nexio.setSettings({ model: rest[0] }); addMsg('assistant', `Model → ${esc(rest[0])}`); }
         else { const s = await window.nexio.getSettings(); addMsg('assistant', `Current model: ${esc(s.model)}`); }
+        showView('run');
         return;
       }
       addMsg('user', text);
+      showView('run');
       // prompt template: send rendered via chat
       const id = await ensureConv();
       assistantDiv = addMsg('assistant', '…');
@@ -300,9 +311,11 @@ async function sendInner() {
       return;
     }
     addMsg('assistant', `Unknown command ${esc(trigger)}. Did you mean: ${(r.suggestions || []).map((s) => esc(s.trigger)).join(', ') || '—'}?`);
+    showView('run');
     return;
   }
   addMsg('user', text);
+  showView('run');
   const id = await ensureConv();
   assistantDiv = addMsg('assistant', '…');
   try {
@@ -416,6 +429,7 @@ function showView(name) {
   if (name !== 'run' && document.querySelector('#agent-steps .appr')) { flashApproval(); return; } // never bury an undecided approval
   if (name !== 'idle' && name !== 'run' && (view === 'idle' || view === 'run')) returnTo = view;
   view = name;
+  if (name !== 'idle') hideSuggest(); // suggestions live on idle only
   currentView = name === 'run' ? 'messages' : name === 'idle' ? null : name; // legacy alias
   paletteEl.classList.toggle('hidden', name !== 'palette');
   const runEl = $('run');
@@ -437,12 +451,14 @@ function showView(name) {
   requestResize();
   assertSingleView();
 }
-// dev-only: exactly one top-level view node (.view hidden only when idle)
+// dev-only: exactly one top-level view node (idle holds none, or suggest alone)
 function assertSingleView() {
   try {
-    const ids = ['palette', 'run', 'settings', 'history', 'extensions', 'onboard'];
+    const ids = ['palette', 'suggest', 'run', 'settings', 'history', 'extensions', 'onboard'];
     const vis = ids.filter((id) => { const el = $(id); return el && !el.classList.contains('hidden'); });
-    const expect = view === 'idle' ? 0 : 1;
+    const sug = $('suggest');
+    const sugVisible = !!(sug && !sug.classList.contains('hidden'));
+    const expect = view === 'idle' ? (sugVisible ? 1 : 0) : 1;
     if (vis.length !== expect) console.assert(false, 'single-view: expected ' + expect + ' visible, got ' + vis.join(','));
   } catch {}
 }
@@ -577,9 +593,13 @@ $('btn-new').onclick = () => void newChat();
 async function newChat() {
   const c = await window.nexio.createConversation('New chat');
   convId = c.id; messagesEl.innerHTML = ''; assistantDiv = null;
+  inputEl.value = ''; drafts.chat = ''; drafts.agent = ''; // fresh composer
+  try { if (typeof clearAttachTray === 'function') clearAttachTray(); } catch {}
+  hideSuggest();
   const stN = $('agent-steps'); if (stN) stN.innerHTML = '';
   const chN = $('run-chips'); if (chN) chN.remove();
   showView('idle');
+  try { maybeSuggest(); } catch {}
   void refreshHistory();
 }
 async function refreshHistory() {
@@ -659,6 +679,7 @@ function syncChrome() {
 }
 // why: keep artboard grouped palette + selected accent + enter cap without touching core logic
 renderPalette = function () {
+  hideSuggest(); // slash palette and starter suggestions never co-show
   paletteEl.innerHTML = '';
   const groups = [['PROMPTS', paletteItems.filter((it) => it.source !== 'workflow' && it.source !== 'skill' && it.source !== 'mcp')], ['WORKFLOWS', paletteItems.filter((it) => it.source === 'workflow')], ['SKILLS', paletteItems.filter((it) => it.source === 'skill')], ['MCP', paletteItems.filter((it) => it.source === 'mcp')]];
   const idxOf = new Map(paletteItems.map((it, i) => [it, i]));
@@ -796,11 +817,15 @@ document.addEventListener('keydown', (e) => {
     if (document.querySelector('#agent-steps .appr')) { flashApproval(); inputEl.focus(); return; } // never bury an undecided approval
     messagesEl.innerHTML = '';
     assistantDiv = null;
+    inputEl.value = ''; drafts.chat = ''; drafts.agent = ''; // fresh composer
+    try { if (typeof clearAttachTray === 'function') clearAttachTray(); } catch {}
+    hideSuggest();
     const stC = $('agent-steps'); if (stC) stC.innerHTML = '';
     const chC = $('run-chips'); if (chC) chC.remove();
     showView('idle');
     syncChrome();
     requestResize();
+    try { maybeSuggest(); } catch {}
     inputEl.focus();
   }
 }, true);
@@ -944,7 +969,7 @@ function handleAgentEvent(runId, ev) {
   const st = agentState;
   if (!st) return;
   if (ev.type === 'step') {
-    // planning narration stays as one pending row until tools run (zero-tool runs keep it)
+    // Do-only planning narration: one pending row until tools run (Ask streams via onStream, never here)
     let row = document.querySelector('#agent-steps .plan-row');
     if (row) {
       const tx = row.querySelector('.tx');
@@ -1022,6 +1047,7 @@ function handleAgentEvent(runId, ev) {
     }
     agentScroll();
   } else if (ev.type === 'text_delta') {
+    document.querySelectorAll('#agent-steps .plan-row').forEach((r) => r.remove()); // answer replaces narration
     finalizeSpinners();
     if (!st.answerDiv) st.answerDiv = addMsg('assistant', '');
     st.answerDiv.dataset.raw = (st.answerDiv.dataset.raw || '') + ev.text;
@@ -1029,8 +1055,9 @@ function handleAgentEvent(runId, ev) {
     decorateCode(st.answerDiv);
     agentScroll();
   } else if (ev.type === 'done') {
-    finalizeSpinners();
+    // why: remove narration first so a zero-tool run keeps no checkmark, then finalize live rows
     document.querySelectorAll('#agent-steps .plan-row').forEach((r) => r.remove());
+    finalizeSpinners();
     if (st.answerDiv) st.answerDiv.classList.remove('streaming');
     collapseSteps();
     clearRunCards(runId);
@@ -1040,6 +1067,7 @@ function handleAgentEvent(runId, ev) {
     syncChrome();
     requestResize();
   } else if (ev.type === 'error') {
+    document.querySelectorAll('#agent-steps .plan-row').forEach((r) => r.remove());
     finalizeSpinners();
     addAgentRow('error', iconFor('fail') + `<div class="tx">${esc(ev.message || 'Error')}</div>`);
     setRouteStatus(null);
@@ -1047,6 +1075,7 @@ function handleAgentEvent(runId, ev) {
     expandSteps();
     endAgentRun();
   } else if (ev.type === 'stopped') {
+    document.querySelectorAll('#agent-steps .plan-row').forEach((r) => r.remove());
     finalizeSpinners();
     addAgentRow('stopped', iconFor('fail') + '<div class="tx">Stopped — nothing is still running.</div>');
     setRouteStatus(null);
@@ -1074,6 +1103,7 @@ async function startAgentRun(text) {
 
 async function beginRun(userText) {
   const id = await ensureConv();
+  hideSuggest(); // a run is never an empty composer
   agentState = { runId: null, rows: new Map(), answerDiv: null };
   const oldChips = $('run-chips');
   if (oldChips) oldChips.remove();
@@ -1129,11 +1159,13 @@ function clearRunCards(runId) {
 async function showAgentLog() {
   try {
     const log = await window.nexio.agentLog();
-    if (!log) { addMsg('assistant', 'No agent logs yet.'); return; }
+    if (!log) { addMsg('assistant', 'No agent logs yet.'); showView('run'); return; }
     const tail = String(log.content || '').slice(-3000);
     addMsg('assistant', `**Latest agent log:** ${log.path}\n\`\`\`\n${tail}\n\`\`\``);
+    showView('run');
   } catch (e) {
     addMsg('assistant', errText(e));
+    showView('run');
   }
 }
 
@@ -1836,6 +1868,7 @@ function renderExtTrust(body, sub) {
 async function runSkillCommand(trigger) {
   const name = trigger.replace(/^\//, '');
   addMsg('user', trigger);
+  showView('run');
   try {
     const body = await extCall({ action: 'skillBody', name });
     addMsg('assistant', body);
@@ -1850,6 +1883,7 @@ async function runSkillCommand(trigger) {
 
 async function runMcpPrompt(trigger) {
   addMsg('user', trigger);
+  showView('run');
   try {
     const m = /^\/mcp-([A-Za-z0-9_-]+)-(.+)$/.exec(trigger);
     const text = await extCall({ action: 'mcpPrompt', server: m ? m[1] : '', prompt: m ? m[2] : '', trigger });
@@ -1865,6 +1899,7 @@ async function runMcpPrompt(trigger) {
 
 function openWorkflowForm(trigger, info) {
   addMsg('user', trigger);
+  showView('run');
   const div = addMsg('assistant', `**${esc(trigger)}** — fill inputs, then Run.`);
   const form = document.createElement('div');
   form.className = 'extform';
@@ -2041,10 +2076,13 @@ async function startUndoRun(runId) {
 // --- Starter suggestions: idle + empty input, fill without executing ---
 var suggestTimer = null;
 var suggestCache = null;
+var suggestSeq = 0; // anti-race: stale timers and in-flight awaits drop their render
 function hideSuggest() {
+  try { suggestSeq = (typeof suggestSeq === 'number' ? suggestSeq : 0) + 1; } catch {}
   clearTimeout(suggestTimer);
   const box = $('suggest');
-  if (box) box.classList.add('hidden');
+  if (box) { box.innerHTML = ''; box.classList.add('hidden'); } // unmount so height collapses
+  try { if (typeof requestResize === 'function') requestResize(); } catch {}
 }
 async function suggestList() {
   if (suggestCache) return suggestCache;
@@ -2064,17 +2102,21 @@ async function suggestList() {
   return suggestCache;
 }
 function maybeSuggest() {
-  hideSuggest();
-  if (inputEl.value || agentRunning()) return;
-  if (view === 'settings' || view === 'onboard' || view === 'extensions') return;
-  if (!paletteEl.classList.contains('hidden')) return;
-  suggestTimer = setTimeout(() => void renderSuggest(), 1000);
+  hideSuggest(); // unmount stale first (bumps suggestSeq)
+  if (view !== 'idle' || !isEmptyUI()) return; // idle + fresh composer only
+  if (!paletteEl.classList.contains('hidden')) return; // slash palette wins
+  if (view === 'settings' || view === 'history' || view === 'extensions' || view === 'onboard' || view === 'palette' || view === 'run') return; // panels win
+  const seq = ++suggestSeq;
+  suggestTimer = setTimeout(() => void renderSuggest(seq), 1000);
 }
-async function renderSuggest() {
+async function renderSuggest(seq) {
+  if (seq !== suggestSeq) return; // stale timer
   const box = $('suggest');
-  if (!box || inputEl.value || agentRunning()) return;
+  if (!box || view !== 'idle' || !isEmptyUI()) return;
+  if (!paletteEl.classList.contains('hidden')) return;
   const items = await suggestList();
-  if (!items.length || inputEl.value) return;
+  if (seq !== suggestSeq) return; // cleared or superseded mid-flight
+  if (!items.length || view !== 'idle' || !isEmptyUI() || !paletteEl.classList.contains('hidden')) return;
   box.innerHTML = '';
   for (const text of items.slice(0, 4)) {
     const d = document.createElement('div');
@@ -2082,7 +2124,7 @@ async function renderSuggest() {
     d.setAttribute('role', 'option');
     d.innerHTML = `<span>${esc(text)}</span>`;
     d.onclick = () => {
-      inputEl.value = text;
+      inputEl.value = text; // fill only — the user sends with Enter
       drafts[mode] = text;
       hideSuggest();
       grow();
@@ -2090,9 +2132,8 @@ async function renderSuggest() {
     };
     box.appendChild(d);
   }
+  if (seq !== suggestSeq) return;
   box.classList.remove('hidden');
-  const $viewEl = $('view');
-  if ($viewEl) $viewEl.classList.remove('hidden');
   requestResize();
 }
 inputEl.addEventListener('input', () => { if (!inputEl.value) maybeSuggest(); else hideSuggest(); });
@@ -2524,6 +2565,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
         pending.push(a);
       }
       renderTray(pending.length ? pending.length + ' attachment(s) added' : undefined);
+      try { if (typeof hideSuggest === 'function') hideSuggest(); } catch (e) {} // attached: never an empty composer
       try { inputEl2.focus(); } catch (e) {}
     } catch (e) {}
   }
@@ -2942,5 +2984,10 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
         });
       }).observe(messagesEl, { childList: true });
     }
+  } catch (e) {}
+  // why: isEmptyUI gates suggestions on pending attachments without reaching into the tray closure
+  try {
+    window.attachPendingCount = function () { try { return pending.length; } catch (e) { return 0; } };
+    window.clearAttachTray = function () { try { clearTray(); } catch (e) {} };
   } catch (e) {}
 })();

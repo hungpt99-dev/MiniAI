@@ -46,7 +46,7 @@ button { font: inherit; }
 .view > * { box-sizing: border-box; max-width: 100%; min-width: 0; flex: none; }
 /* why: result order is visual only — messages, steps, meta+actions, chips — DOM stays stable */
 #palette { order: 0; }
-#suggest { order: 1; }
+/* why: #suggest sits outside .view (idle shows no view) so it needs no flex order */
 #run { order: 2; display: flex; flex-direction: column; }
 #run.hidden { display: none !important; }
 #run > #messages { order: 0; }

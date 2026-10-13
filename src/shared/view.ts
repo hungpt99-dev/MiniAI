@@ -71,3 +71,24 @@ export function runChipLabel(
 export function shouldShowPlanning(active: boolean, toolCount: number): boolean {
   return active && toolCount === 0;
 }
+
+export interface EmptyState {
+  msgCount: number;
+  toolCount: number;
+  active: boolean;
+  attachCount: number;
+  inputEmpty: boolean;
+}
+
+// why: starter suggestions only on a fresh idle composer; the active check
+// reuses shouldShowPlanning so a planning-only run never reads as empty
+export function isEmpty(s: EmptyState): boolean {
+  return (
+    s.inputEmpty &&
+    s.msgCount === 0 &&
+    s.toolCount === 0 &&
+    s.attachCount === 0 &&
+    !s.active &&
+    !shouldShowPlanning(s.active, s.toolCount)
+  );
+}
