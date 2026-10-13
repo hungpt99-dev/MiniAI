@@ -61,13 +61,14 @@ function errText(e) {
     .replace(/^Error: /, '');
 }
 
-// markdown-lite: code blocks, inline code, bold, italic, links, line breaks
+// markdown-lite: code blocks, headings, lists, tables, inline code, bold, italic, links, line breaks
 function mdLite(src) {
   const blocks = [];
   let html = esc(src).replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
     blocks.push(`<pre><code>${code}</code></pre>`);
     return `\u0000${blocks.length - 1}\u0000`;
   });
+  html = mdBlocks(html);
   html = html
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
@@ -77,15 +78,109 @@ function mdLite(src) {
   return html.replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[Number(i)]);
 }
 
+// why: headings/lists/tables need line structure; the inline pass runs after so inner markup still formats
+function mdBlocks(src) {
+  const lines = src.split('\n');
+  const out = [];
+  const listRe = /^(?:[-*]|\d+[.)])\s+(.*)$/;
+  const rowCells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const h = /^(#{1,4})\s+(.*\S)\s*$/.exec(line);
+    if (h) { out.push(`<div class="md-h">${h[2]}</div>`); i++; continue; }
+    if (line.includes('|') && i + 1 < lines.length && lines[i + 1].includes('-') &&
+        /^\s*\|?[\s:|-]+\|?[\s|:-]*$/.test(lines[i + 1])) {
+      const head = rowCells(line);
+      if (head.length > 1) {
+        const rows = [];
+        let j = i + 2;
+        while (j < lines.length && lines[j].includes('|') && rowCells(lines[j]).length === head.length) {
+          rows.push(rowCells(lines[j]));
+          j++;
+        }
+        out.push('<div class="tbl"><table><thead><tr>' + head.map((c) => `<th>${c}</th>`).join('') +
+          '</tr></thead><tbody>' + rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('') +
+          '</tbody></table></div>');
+        i = j;
+        continue;
+      }
+    }
+    const m = listRe.exec(line);
+    if (m) {
+      const ordered = /^\d/.test(line);
+      const items = [];
+      while (i < lines.length) {
+        const mm = listRe.exec(lines[i]);
+        if (!mm || /^\d/.test(lines[i]) !== ordered) break;
+        items.push(mm[1]);
+        i++;
+      }
+      out.push((ordered ? '<ol>' : '<ul>') + items.map((t) => `<li>${t}</li>`).join('') + (ordered ? '</ol>' : '</ul>'));
+      continue;
+    }
+    out.push(line);
+    i++;
+  }
+  return out.join('\n');
+}
+
 function addMsg(role, content) {
   const div = document.createElement('div');
   div.className = 'msg ' + role;
-  div.innerHTML = role === 'assistant' ? mdLite(content) : esc(content);
+  if (role === 'user') {
+    // why: You label + 3-line clamp keeps tall pastes to one compact row; click toggles full text
+    div.innerHTML = '<span class="you-label">You</span><span class="you-prompt you-clamp"></span>';
+    div.querySelector('.you-prompt').textContent = content;
+    div.querySelector('.you-prompt').onclick = (e) => { e.currentTarget.classList.toggle('you-clamp'); };
+  } else {
+    div.innerHTML = mdLite(content);
+    decorateCode(div);
+  }
   messagesEl.appendChild(div);
   const view = $('view');
   if (view) view.scrollTop = view.scrollHeight; // .view is the only scroller
   if (currentView !== 'messages') showView('messages');
   return div;
+}
+
+function copySvg() {
+  return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch {}
+  ta.remove();
+}
+
+function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+  else fallbackCopy(text);
+}
+
+// why: fenced blocks get a ghost Copy without changing mdLite output shape
+function decorateCode(root) {
+  if (!root || !root.querySelectorAll) return;
+  root.querySelectorAll('pre').forEach((pre) => {
+    if (pre.querySelector('.pre-copy')) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pre-copy';
+    btn.innerHTML = copySvg() + '<span>Copy</span>';
+    btn.setAttribute('aria-label', 'Copy code block');
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      copyText((pre.querySelector('code') || pre).textContent || '');
+      const label = btn.querySelector('span');
+      if (label) label.textContent = 'Copied';
+      setTimeout(() => { if (label) label.textContent = 'Copy'; }, 1500);
+    };
+    pre.appendChild(btn);
+  });
 }
 
 async function ensureConv() {
@@ -189,7 +284,7 @@ async function sendInner() {
     addMsg('assistant', `Unknown command ${esc(trigger)}. Did you mean: ${(r.suggestions || []).map((s) => esc(s.trigger)).join(', ') || '—'}?`);
     return;
   }
-  addMsg('user', userLabel(text));
+  addMsg('user', text);
   const id = await ensureConv();
   assistantDiv = addMsg('assistant', '…');
   try {
@@ -208,6 +303,7 @@ window.nexio.onStream((ev) => {
   if (!assistantDiv) assistantDiv = addMsg('assistant', '');
   assistantDiv.dataset.raw = (assistantDiv.dataset.raw || '') + ev.token;
   assistantDiv.innerHTML = mdLite(assistantDiv.dataset.raw);
+  decorateCode(assistantDiv);
   const view = $('view');
   if (view) view.scrollTop = view.scrollHeight;
 });
@@ -594,22 +690,25 @@ try { inputEl.focus(); } catch { /* preview */ }
 setTimeout(() => { try { if (document.activeElement !== inputEl) inputEl.focus(); } catch {} }, 60);
 if ($('btn-save-settings')) $('btn-save-settings').addEventListener('click', () => setTimeout(() => { void refreshModelName(); requestResize(); }, 100));
 if ($('btn-copy')) $('btn-copy').addEventListener('click', async () => {
+  const btn = $('btn-copy');
   const divs = messagesEl.querySelectorAll('.msg.assistant');
   const last = divs[divs.length - 1];
   if (!last) return;
   const text = (last.dataset && last.dataset.raw) || last.textContent || '';
   try { await navigator.clipboard.writeText(text); }
-  catch {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    try { document.execCommand('copy'); } catch {}
-    ta.remove();
-  }
+  catch { fallbackCopy(text); }
+  // why: ghost buttons confirm inline; the icon markup restores with the label
+  const orig = btn.innerHTML;
+  btn.innerHTML = copySvg() + 'Copied';
+  setTimeout(() => { btn.innerHTML = orig; }, 1500);
 });
 if ($('btn-followup')) $('btn-followup').addEventListener('click', () => inputEl.focus());
 if ($('btn-newchat')) $('btn-newchat').addEventListener('click', () => void newChat());
+// why: meta row reads model left, ghost actions right; IDs and handlers move with the node
+(function layoutMetaRow() {
+  const meta = $('answer-meta'), actions = $('actions');
+  if (meta && actions && actions.parentNode !== meta) meta.appendChild(actions);
+})();
 // segmented provider is the only provider control (native select deleted);
 // Base URL row shows only for Custom
 function paintProv() {
@@ -799,8 +898,7 @@ function handleAgentEvent(runId, ev) {
   const st = agentState;
   if (!st) return;
   if (ev.type === 'step') {
-    finalizeSpinners();
-    addAgentRow('step', iconFor('run') + `<div class="tx">${esc(ev.text || 'Working…')}</div>`);
+    return; // planning narration is replaced by the N-steps header once tools run
   } else if (ev.type === 'tool_call') {
     finalizeSpinners();
     const row = addAgentRow('tool',
@@ -868,6 +966,7 @@ function handleAgentEvent(runId, ev) {
     if (!st.answerDiv) st.answerDiv = addMsg('assistant', '');
     st.answerDiv.dataset.raw = (st.answerDiv.dataset.raw || '') + ev.text;
     st.answerDiv.innerHTML = mdLite(st.answerDiv.dataset.raw);
+    decorateCode(st.answerDiv);
     agentScroll();
   } else if (ev.type === 'done') {
     finalizeSpinners();
@@ -884,14 +983,17 @@ function handleAgentEvent(runId, ev) {
     addAgentRow('error', iconFor('fail') + `<div class="tx">${esc(ev.message || 'Error')}</div>`);
     setRouteStatus(null);
     clearRunCards(runId);
+    expandSteps();
     endAgentRun();
   } else if (ev.type === 'stopped') {
     finalizeSpinners();
     addAgentRow('stopped', iconFor('fail') + '<div class="tx">Stopped — nothing is still running.</div>');
     setRouteStatus(null);
     clearRunCards(runId);
+    expandSteps();
     endAgentRun();
   }
+  syncSteps();
   syncAgentFooter();
   syncChrome();
   requestResize();
@@ -916,10 +1018,11 @@ async function beginRun(userText) {
   if (oldChips) oldChips.remove();
   const steps = $('agent-steps');
   if (steps) { steps.innerHTML = ''; steps.classList.remove('hidden'); steps.classList.remove('collapsed'); }
-  addMsg('user', userLabel(userText));
+  addMsg('user', userText);
   assistantDiv = null;
   showView('messages');
   if (steps) steps.classList.remove('hidden');
+  syncSteps();
   syncAgentFooter();
   syncChrome();
   requestResize();
@@ -1691,7 +1794,46 @@ if ($('btn-open-ext')) $('btn-open-ext').onclick = () => void openExtensions();
 /* --- Launcher (appended): result chips, undo, suggestions, run log, onboarding --- */
 function collapseSteps() {
   const steps = $('agent-steps');
-  if (steps && steps.children.length) steps.classList.add('collapsed');
+  if (!steps || steps.querySelector('.appr')) return; // never bury an undecided approval
+  steps.classList.add('collapsed');
+  syncSteps();
+}
+
+function expandSteps() {
+  const steps = $('agent-steps');
+  if (!steps) return;
+  steps.classList.remove('collapsed');
+  syncSteps();
+}
+
+// why: steps show only for tool runs — collapsed with an N-steps chevron, expanded on failure
+function syncSteps() {
+  const steps = $('agent-steps');
+  if (!steps) return;
+  const tools = steps.querySelectorAll('.tool-name').length;
+  let head = steps.querySelector('.steps-toggle');
+  if (!tools && !steps.querySelector('.error-row') && !steps.querySelector('.stopped-row')) {
+    steps.classList.add('hidden');
+    if (head) head.remove();
+    return;
+  }
+  steps.classList.remove('hidden');
+  if (!head) {
+    head = document.createElement('button');
+    head.type = 'button';
+    head.className = 'steps-toggle';
+    head.onclick = () => {
+      steps.classList.toggle('collapsed');
+      head.setAttribute('aria-expanded', String(!steps.classList.contains('collapsed')));
+      agentScroll();
+      requestResize();
+    };
+    steps.prepend(head);
+  }
+  head.innerHTML = '<span>' + tools + ' step' + (tools === 1 ? '' : 's') + '</span>' +
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+  head.setAttribute('aria-expanded', String(!steps.classList.contains('collapsed')));
+  head.setAttribute('aria-label', tools + ' execution steps — toggle');
 }
 
 function renderRunChips(runId) {
@@ -1715,10 +1857,6 @@ function renderRunChips(runId) {
     void window.nexio.reveal(sum.folder).catch(() => {});
   }));
   if (sum && sum.undoable) host.appendChild(mk('Undo', 'Undo this run', () => void startUndoRun(runId)));
-  host.appendChild(mk('Show steps', 'Show execution steps', () => {
-    if (steps) steps.classList.toggle('collapsed');
-    requestResize();
-  }));
   if (steps && steps.parentNode) steps.parentNode.insertBefore(host, steps.nextSibling);
   requestResize();
 }
@@ -1731,6 +1869,7 @@ async function startUndoRun(runId) {
   const steps = $('agent-steps');
   if (steps) { steps.innerHTML = ''; steps.classList.remove('hidden'); steps.classList.remove('collapsed'); }
   showView('messages');
+  syncSteps();
   syncAgentFooter();
   syncChrome();
   requestResize();
