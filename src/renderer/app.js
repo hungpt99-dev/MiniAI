@@ -2290,3 +2290,575 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
     } catch { /* preview */ }
   });
 }
+
+/* --- Attachments (appended): tray under input, paste/drop/picker, preview, notices --- */
+(function attachUI() {
+  if (typeof document === 'undefined') return;
+  var trayEl = null, liveEl = null, prevEl = null, inputEl2 = null, panelEl = null, attachBtn = null;
+  try {
+    trayEl = document.getElementById('attach-tray');
+    liveEl = document.getElementById('attach-live');
+    prevEl = document.getElementById('attach-preview');
+    inputEl2 = document.getElementById('input');
+    panelEl = document.getElementById('panel');
+    attachBtn = document.getElementById('btn-attach');
+  } catch (e) { return; }
+  if (!trayEl || !inputEl2) return;
+  var VISION_NOTICE = 'This model does not support images. Switch model to send images — image bytes were not sent.';
+  var DEFAULT_INSTR = 'Describe the attached file(s).';
+  var FIRST_USE = 'Attachments stay on this computer until you send them. Stays on this computer — processing runs on localhost.';
+  var SECRETS_HINT = 'Attachment text may contain secrets — confirm before sharing.';
+  var pending = [];
+  var keySeq = 0;
+  var sentStash = {};
+  var lastUserText = '';
+  var previewOpen = false;
+  var previewPrior = null;
+  function base(n) { try { return String(n || 'file').split(/[\\/]/).pop() || 'file'; } catch (e) { return 'file'; } }
+  function fmtSize(b) {
+    b = Number(b) || 0;
+    if (b < 1024) return b + ' B';
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+    return (b / 1024 / 1024).toFixed(1) + ' MB';
+  }
+  function announce(m) {
+    try {
+      if (!liveEl) return;
+      liveEl.classList.remove('hidden');
+      liveEl.textContent = m;
+    } catch (e) { /* live region never breaks sends */ }
+  }
+  function chrome() {
+    try { if (typeof grow === 'function') grow(); } catch (e) {}
+    try { if (typeof syncChrome === 'function') syncChrome(); } catch (e) {}
+    try { if (typeof requestResize === 'function') requestResize(); } catch (e) {}
+  }
+  function fileSvg() {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h9l5 5v15a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><path d="M14 2v6h6"/></svg>';
+  }
+  function showError(msg) {
+    try {
+      var d = document.createElement('div');
+      d.className = 'attach-err';
+      d.textContent = msg;
+      trayEl.appendChild(d);
+      trayEl.classList.remove('hidden');
+      announce(msg);
+      chrome();
+      setTimeout(function () { try { if (d.parentNode) d.parentNode.removeChild(d); chrome(); } catch (e) {} }, 6000);
+    } catch (e) {}
+  }
+  function renderTray(note) {
+    try {
+      trayEl.innerHTML = '';
+      if (!pending.length) {
+        trayEl.classList.add('hidden');
+        try { inputEl2.placeholder = (typeof mode !== 'undefined' && mode === 'agent') ? 'What do you want to do?' : 'Ask anything…'; } catch (e) {}
+        chrome();
+        return;
+      }
+      trayEl.classList.remove('hidden');
+      try { inputEl2.placeholder = 'Add a note, Enter to send…'; } catch (e) {}
+      pending.forEach(function (a) {
+        var item;
+        if (a.kind === 'image' && a.previewUrl) {
+          item = document.createElement('button');
+          item.type = 'button';
+          item.className = 'attach-thumb';
+          item.setAttribute('role', 'listitem');
+          item.setAttribute('aria-label', 'Preview ' + base(a.name));
+          item.title = base(a.name) + ' (' + fmtSize(a.size) + ') — click to preview';
+          var img = document.createElement('img');
+          img.alt = base(a.name);
+          img.src = a.previewUrl;
+          item.appendChild(img);
+        } else {
+          item = document.createElement('div');
+          item.className = 'attach-chip';
+          item.setAttribute('role', 'listitem');
+          item.tabIndex = 0;
+          item.title = base(a.name) + ' (' + fmtSize(a.size) + ')';
+          item.innerHTML = fileSvg() + '<span></span><span class="asz"></span>';
+          item.querySelector('span').textContent = base(a.name);
+          item.querySelector('.asz').textContent = fmtSize(a.size);
+          if (a.verdict === 'approval') {
+            var b = document.createElement('span');
+            b.className = 'aonce';
+            b.textContent = 'Allow once';
+            item.appendChild(b);
+          }
+        }
+        item.dataset.akey = a.key;
+        item.addEventListener('click', function (ev) {
+          if (ev.target && ev.target.classList && ev.target.classList.contains('attach-rm')) return;
+          openPreview(a);
+        });
+        item.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openPreview(a); }
+          else if (ev.key === 'Backspace' || ev.key === 'Delete') { ev.preventDefault(); removeEntry(a.key); }
+        });
+        var rm = document.createElement('button');
+        rm.type = 'button';
+        rm.className = 'attach-rm';
+        rm.setAttribute('aria-label', 'Remove ' + base(a.name));
+        rm.title = 'Remove ' + base(a.name);
+        rm.textContent = '×';
+        rm.addEventListener('click', function (ev) { ev.stopPropagation(); removeEntry(a.key); });
+        if (item.classList.contains('attach-thumb')) item.appendChild(rm);
+        else item.appendChild(rm);
+        trayEl.appendChild(item);
+      });
+      var needSecrets = pending.some(function (a) { return a.kind !== 'image'; });
+      if (needSecrets) {
+        var n = document.createElement('div');
+        n.className = 'attach-note';
+        n.textContent = SECRETS_HINT;
+        trayEl.appendChild(n);
+      }
+      try {
+        if (!window.localStorage.getItem('nexio-attach-notice')) {
+          var f = document.createElement('div');
+          f.className = 'attach-note';
+          f.textContent = FIRST_USE;
+          trayEl.appendChild(f);
+          window.localStorage.setItem('nexio-attach-notice', '1');
+        }
+      } catch (e) {}
+      if (note) announce(note);
+      chrome();
+    } catch (e) { /* tray never breaks the composer */ }
+  }
+  function removeEntry(key) {
+    try {
+      var ix = -1, nm = '';
+      for (var i = 0; i < pending.length; i++) if (pending[i].key === key) { ix = i; nm = base(pending[i].name); break; }
+      if (ix >= 0) pending.splice(ix, 1);
+      renderTray('Removed ' + nm);
+      try { inputEl2.focus(); } catch (e) {}
+    } catch (e) {}
+  }
+  function clearTray() { try { pending = []; renderTray(); } catch (e) {} }
+  function toSendEntry(a) {
+    var o = { name: base(a.name), mime: a.mime, size: a.size };
+    if (a.path) o.path = a.path;
+    else if (a.dataBase64) o.dataBase64 = a.dataBase64;
+    return o;
+  }
+  function drainToSend() { return pending.map(toSendEntry); }
+  function addEntries(list) {
+    try {
+      for (var i = 0; i < list.length; i++) {
+        var a = list[i];
+        if (pending.length >= 5) { showError('Too many attachments (max 5)'); break; }
+        if ((a.size || 0) > 20 * 1024 * 1024) { showError('Attachment too large: ' + base(a.name) + ' (max 20MB per file)'); continue; }
+        if (/\.exe$/i.test(a.name || '')) { showError('Rejected ' + base(a.name) + ': executable content detected'); continue; }
+        a.key = 'k' + (++keySeq);
+        if (!a.kind) a.kind = (a.mime || '').indexOf('image/') === 0 ? 'image' : 'file';
+        pending.push(a);
+      }
+      renderTray(pending.length ? pending.length + ' attachment(s) added' : undefined);
+      try { inputEl2.focus(); } catch (e) {}
+    } catch (e) {}
+  }
+  function readFiles(files, asDrop) {
+    try {
+      var arr = [];
+      for (var i = 0; i < files.length; i++) arr.push(files[i]);
+      if (!arr.length) return;
+      if (pending.length + arr.length > 5) { showError('Too many attachments (max 5)'); arr = arr.slice(0, Math.max(0, 5 - pending.length)); }
+      var started = 0;
+      arr.forEach(function (f) {
+        var name = base(f.name || 'pasted-image.png');
+        var mime = f.type || 'application/octet-stream';
+        if ((f.size || 0) > 20 * 1024 * 1024) { showError('Attachment too large: ' + name + ' (max 20MB per file)'); return; }
+        if (/\.exe$/i.test(name)) { showError('Rejected ' + name + ': executable content detected'); return; }
+        started++;
+        try {
+          var r = new FileReader();
+          r.onload = function () {
+            try {
+              var url = String(r.result || '');
+              var b64 = url.indexOf(',') >= 0 ? url.slice(url.indexOf(',') + 1) : '';
+              var isImg = mime.indexOf('image/') === 0;
+              addEntries([{ name: name, mime: mime, size: f.size || b64.length, dataBase64: b64, previewUrl: isImg ? url : undefined, kind: isImg ? 'image' : 'file' }]);
+            } catch (e) {}
+          };
+          r.onerror = function () { showError('Attachment unreadable: ' + name); };
+          r.readAsDataURL(f);
+        } catch (e) { showError('Attachment unreadable: ' + name); }
+      });
+      void asDrop;
+      if (!started) chrome();
+    } catch (e) {}
+  }
+  function insertTextAtCursor(text) {
+    try {
+      var s = inputEl2.selectionStart || inputEl2.value.length;
+      var e2 = inputEl2.selectionEnd || s;
+      inputEl2.value = inputEl2.value.slice(0, s) + text + inputEl2.value.slice(e2);
+      try { if (typeof grow === 'function') grow(); } catch (e) {}
+    } catch (e) { inputEl2.value += text; }
+  }
+  // Paste: image/files + text+image; text-only falls through to the default paste.
+  try {
+    inputEl2.addEventListener('paste', function (e) {
+      try {
+        var cd = e.clipboardData;
+        if (!cd) return;
+        var files = [];
+        if (cd.files) for (var i = 0; i < cd.files.length; i++) files.push(cd.files[i]);
+        var text = '';
+        try { text = cd.getData ? (cd.getData('text/plain') || cd.getData('text') || '') : ''; } catch (e2) {}
+        var kind = files.length && text ? 'mixed' : files.length ? (files.length === 1 ? 'image-only' : 'files-only') : text ? 'text-only' : 'empty';
+        if (kind === 'text-only' || kind === 'empty') return;
+        e.preventDefault();
+        if (kind === 'mixed' && text) insertTextAtCursor(text);
+        readFiles(files, false);
+      } catch (e2) {}
+    });
+  } catch (e) {}
+  // Drop: dashed accent + Drop to attach; always prevent navigate.
+  try {
+    window.addEventListener('dragover', function (e) { try { e.preventDefault(); } catch (e2) {} }, false);
+    window.addEventListener('drop', function (e) { try { e.preventDefault(); } catch (e2) {} }, false);
+    if (panelEl) {
+      panelEl.addEventListener('dragenter', function (e) {
+        try {
+          if (e.dataTransfer && Array.from(e.dataTransfer.types || []).indexOf('Files') >= 0) {
+            e.preventDefault();
+            trayEl.classList.remove('hidden');
+            trayEl.classList.add('dragover');
+          }
+        } catch (e2) {}
+      });
+      panelEl.addEventListener('dragover', function (e) { try { e.preventDefault(); } catch (e2) {} });
+      panelEl.addEventListener('dragleave', function (e) {
+        try { if (e.target === panelEl) trayEl.classList.remove('dragover'); } catch (e2) {}
+      });
+      panelEl.addEventListener('drop', function (e) {
+        try {
+          e.preventDefault();
+          trayEl.classList.remove('dragover');
+          var dt = e.dataTransfer;
+          if (dt && dt.files && dt.files.length) readFiles(dt.files, true);
+          else renderTray();
+        } catch (e2) {}
+      });
+    }
+  } catch (e) {}
+  // Paperclip: multi picker through the dialog lock (main keeps the popup visible).
+  try {
+    if (attachBtn) attachBtn.addEventListener('click', function () {
+      if (!window.nexio || !window.nexio.attachPick) return;
+      attachBtn.disabled = true;
+      window.nexio.attachPick().then(function (res) {
+        attachBtn.disabled = false;
+        try {
+          var list = res || [];
+          if (typeof list === 'string') list = [list];
+          var ok = [];
+          (Array.isArray(list) ? list : []).forEach(function (r) {
+            if (typeof r === 'string') { ok.push({ name: base(r), mime: 'application/octet-stream', size: 0, path: r, kind: 'file', verdict: 'approval' }); return; }
+            if (r && r.verdict === 'deny') { showError('Attachment refused: ' + base(r.name) + (r.reason ? ' — ' + r.reason : '')); return; }
+            if (!r || !r.path) return;
+            ok.push({
+              name: base(r.name || r.path), mime: r.mime || 'application/octet-stream', size: r.size || 0,
+              path: r.path, previewUrl: r.previewDataUrl,
+              kind: (r.mime || '').indexOf('image/') === 0 ? 'image' : 'file',
+              verdict: r.verdict === 'approval' ? 'approval' : undefined,
+            });
+          });
+          if (ok.length) addEntries(ok);
+          else chrome();
+        } catch (e2) {}
+        try { inputEl2.focus(); } catch (e2) {}
+      }).catch(function (err) {
+        attachBtn.disabled = false;
+        var m = 'Attach failed';
+        try { m = (err && err.message) || m; } catch (e2) {}
+        showError(m);
+      });
+    });
+  } catch (e) {}
+  // In-panel preview; window-capture Esc closes it first (before the core closer).
+  function openPreview(a) {
+    try {
+      if (!prevEl) return;
+      previewPrior = document.activeElement;
+      prevEl.innerHTML = '';
+      if (a.kind === 'image' && a.previewUrl) {
+        var img = document.createElement('img');
+        img.alt = base(a.name);
+        img.src = a.previewUrl;
+        prevEl.appendChild(img);
+      } else {
+        var d = document.createElement('div');
+        d.className = 'attach-chip';
+        d.innerHTML = fileSvg() + '<span></span><span class="asz"></span>';
+        d.querySelector('span').textContent = base(a.name);
+        d.querySelector('.asz').textContent = fmtSize(a.size) + ' ' + (a.mime || '');
+        prevEl.appendChild(d);
+      }
+      var cap = document.createElement('div');
+      cap.className = 'ap-cap';
+      cap.textContent = base(a.name) + ' — Esc to close';
+      prevEl.appendChild(cap);
+      var x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'btn';
+      x.textContent = 'Close';
+      x.setAttribute('aria-label', 'Close preview');
+      x.addEventListener('click', closePreview);
+      prevEl.appendChild(x);
+      prevEl.classList.remove('hidden');
+      previewOpen = true;
+      try { if (typeof showView === 'function' && currentView !== 'messages') showView('messages'); } catch (e2) {}
+      chrome();
+      try { x.focus(); } catch (e2) {}
+    } catch (e) {}
+  }
+  function closePreview() {
+    try {
+      if (!previewOpen) return false;
+      prevEl.classList.add('hidden');
+      prevEl.innerHTML = '';
+      previewOpen = false;
+      chrome();
+      try { if (previewPrior && document.contains(previewPrior)) previewPrior.focus(); else inputEl2.focus(); } catch (e) {}
+      previewPrior = null;
+      return true;
+    } catch (e) { return false; }
+  }
+  try {
+    window.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && previewOpen) { e.preventDefault(); e.stopPropagation(); closePreview(); }
+    }, true);
+  } catch (e) {}
+  // Tray keyboard: Backspace/Delete removes focused chip, or the last one.
+  try {
+    trayEl.addEventListener('keydown', function (e) {
+      if (e.key !== 'Backspace' && e.key !== 'Delete') return;
+      try {
+        var t = e.target;
+        var holder = t && t.closest ? t.closest('[data-akey]') : null;
+        var key = holder ? holder.dataset.akey : (pending.length ? pending[pending.length - 1].key : null);
+        if (key) { e.preventDefault(); removeEntry(key); }
+      } catch (e2) {}
+    });
+    inputEl2.addEventListener('keydown', function (e) {
+      if (e.key === 'Backspace' && !inputEl2.value && pending.length && !e.isComposing) {
+        e.preventDefault();
+        removeEntry(pending[pending.length - 1].key);
+      }
+    });
+  } catch (e) {}
+  // Empty + attach Enter sends the default instruction (core sendInner returns on '').
+  function emptyAttachEnter(e) {
+    try {
+      if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+      if (inputEl2.value.trim() !== '' || !pending.length) return;
+      e.preventDefault();
+      inputEl2.value = DEFAULT_INSTR;
+      try { if (typeof grow === 'function') grow(); } catch (e2) {}
+      try { if (typeof send === 'function') void send(); } catch (e2) {}
+    } catch (e2) {}
+  }
+  try {
+    inputEl2.addEventListener('keydown', emptyAttachEnter);
+    var sendBtn = document.getElementById('btn-send');
+    if (sendBtn) sendBtn.addEventListener('click', function () {
+      try {
+        if (inputEl2.value.trim() === '' && pending.length) {
+          inputEl2.value = DEFAULT_INSTR;
+          try { if (typeof grow === 'function') grow(); } catch (e2) {}
+        }
+      } catch (e2) {}
+    });
+  } catch (e) {}
+  // Bridge: merge pending into every send/agentStart; stash for history; clear after.
+  function stashFor(cid) {
+    try {
+      if (!cid) return;
+      var cur = sentStash[cid] || [];
+      pending.forEach(function (a) { cur.push({ name: base(a.name), mime: a.mime, size: a.size, previewUrl: a.previewUrl, kind: a.kind }); });
+      sentStash[cid] = cur.slice(-10);
+    } catch (e) {}
+  }
+  try {
+    if (window.nexio) {
+      if (window.nexio.send) {
+        var _send = window.nexio.send.bind(window.nexio);
+        window.nexio.send = function (cid, text, opts) {
+          opts = opts || {};
+          if (pending.length && !opts.attachments) {
+            var merged = [];
+            try { merged = drainToSend(); } catch (e) {}
+            if (merged.length) opts = Object.assign({}, opts, { attachments: merged });
+          }
+          var had = pending.length;
+          var p = _send(cid, text, opts);
+          if (had) {
+            try { stashFor(cid); } catch (e) {}
+            clearTray();
+          }
+          return p;
+        };
+      }
+      if (window.nexio.agentStart) {
+        var _astart = window.nexio.agentStart.bind(window.nexio);
+        window.nexio.agentStart = function (cid, text, opts) {
+          opts = opts || {};
+          if (pending.length && !opts.attachments) {
+            var merged2 = [];
+            try { merged2 = drainToSend(); } catch (e) {}
+            if (merged2.length) opts = Object.assign({}, opts, { attachments: merged2 });
+          }
+          var had2 = pending.length;
+          var p2 = _astart(cid, text, opts);
+          if (had2) {
+            try { stashFor(cid); } catch (e) {}
+            clearTray();
+          }
+          return p2;
+        };
+      }
+    }
+  } catch (e) {}
+  // Ask history: 160px thumbs + chips + Delete attachments menu.
+  function paintHistAttach() {
+    try {
+      var ul = document.getElementById('history-list');
+      if (!ul) return;
+      var items = ul.querySelectorAll('li');
+      items.forEach(function (li, ix) {
+        if (li.dataset.attachDone) return;
+        li.dataset.attachDone = '1';
+        var keys = Object.keys(sentStash);
+        if (!keys.length) return;
+        var bag = sentStash[keys[Math.min(ix, keys.length - 1)]] || [];
+        if (!bag.length) return;
+        var wrap = document.createElement('div');
+        wrap.className = 'attach-menu';
+        bag.forEach(function (a) {
+          if (a.kind === 'image' && a.previewUrl) {
+            var im = document.createElement('img');
+            im.className = 'hist-thumb';
+            im.alt = base(a.name);
+            im.src = a.previewUrl;
+            wrap.appendChild(im);
+          } else {
+            var c = document.createElement('span');
+            c.className = 'attach-chip';
+            c.textContent = base(a.name) + ' (' + fmtSize(a.size) + ')';
+            wrap.appendChild(c);
+          }
+        });
+        var del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'linklike';
+        del.textContent = 'Delete attachments';
+        del.setAttribute('aria-label', 'Delete attachments');
+        del.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          try {
+            delete sentStash[keys[Math.min(ix, keys.length - 1)]];
+            if (window.nexio && window.nexio.attachClear) {
+              Object.keys(sentStash).forEach(function () {});
+              window.nexio.attachClear(keys[Math.min(ix, keys.length - 1)]).catch(function () {});
+            }
+            if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+            announce('Delete attachments — cleared');
+          } catch (e2) {}
+        });
+        wrap.appendChild(del);
+        li.appendChild(wrap);
+      });
+    } catch (e) {}
+  }
+  try {
+    if (typeof refreshHistory === 'function') {
+      var _rh = refreshHistory;
+      refreshHistory = function () {
+        var p = _rh.apply(this, arguments);
+        if (p && p.then) p.then(function () { paintHistAttach(); chrome(); }).catch(function () {});
+        else { try { paintHistAttach(); } catch (e) {} }
+        return p;
+      };
+    }
+  } catch (e) {}
+  // Decorate just-sent user bubbles with thumbs/chips (Ask view).
+  try {
+    if (typeof addMsg === 'function' && typeof messagesEl !== 'undefined' && messagesEl) {
+      var _addMsg = addMsg;
+      addMsg = function (role, content) {
+        var div = _addMsg(role, content);
+        try {
+          if (role === 'user' && pending.length) {
+            var bag = pending.map(function (a) { return { name: a.name, previewUrl: a.previewUrl, kind: a.kind, size: a.size }; });
+            bag.forEach(function (a) {
+              if (a.kind === 'image' && a.previewUrl) {
+                var im = document.createElement('img');
+                im.className = 'hist-thumb';
+                im.alt = base(a.name);
+                im.src = a.previewUrl;
+                div.appendChild(im);
+              } else {
+                var c = document.createElement('span');
+                c.className = 'attach-chip';
+                c.textContent = base(a.name) + ' (' + fmtSize(a.size) + ')';
+                div.appendChild(c);
+              }
+            });
+            try { lastUserText = String(content || ''); } catch (e2) {}
+          } else if (role === 'user') {
+            try { lastUserText = String(content || ''); } catch (e2) {}
+          }
+        } catch (e2) {}
+        return div;
+      };
+    }
+  } catch (e) {}
+  // Non-vision notice: one-click Switch model + single recovery resend (bytes were never sent).
+  function maybeVisionNotice(node) {
+    try {
+      if (!node || !node.classList || !node.classList.contains('assistant')) return;
+      var t = node.textContent || '';
+      if (t.indexOf('does not support images') < 0) return;
+      if (node.dataset.visionBtn) return;
+      node.dataset.visionBtn = '1';
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn';
+      b.textContent = 'Switch model';
+      b.setAttribute('aria-label', 'Switch model');
+      b.addEventListener('click', function () {
+        if (node.dataset.recovered) return;
+        node.dataset.recovered = '1';
+        b.disabled = true;
+        try {
+          (window.nexio.setSettings({ provider: 'openai', model: 'gpt-4o-mini' }) || Promise.resolve()).then(function () {
+            try { if (typeof refreshModelName === 'function') refreshModelName(); } catch (e2) {}
+            try {
+              if (lastUserText && typeof send === 'function') {
+                inputEl2.value = lastUserText;
+                try { if (typeof grow === 'function') grow(); } catch (e3) {}
+                void send();
+              }
+            } catch (e2) {}
+          }).catch(function () { b.disabled = false; });
+        } catch (e2) { b.disabled = false; }
+      });
+      node.appendChild(b);
+      chrome();
+    } catch (e) {}
+  }
+  try {
+    if (typeof MutationObserver !== 'undefined' && messagesEl) {
+      new MutationObserver(function (muts) {
+        muts.forEach(function (m) {
+          (m.addedNodes || []).forEach(function (n) { maybeVisionNotice(n); });
+        });
+      }).observe(messagesEl, { childList: true });
+    }
+  } catch (e) {}
+})();
