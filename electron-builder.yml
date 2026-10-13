@@ -29,6 +29,7 @@ files:
   - node_modules/zod/**/*
   - node_modules/zod-to-json-schema/**/*
 win:
+  icon: assets/icon.ico
   signAndEditExecutable: false
   target:
     - target: nsis
@@ -36,6 +37,11 @@ win:
     - target: portable
       arch: [x64]
 mac:
+  # icon.icns is built on macOS by `npm run assets` (iconutil): the mac
+  # release job runs `npm run assets` on macos-latest before dist, so the file
+  # exists at package time. Off-mac checkouts carry icon.icns.png plus
+  # icon.icns.note.txt instead (accepted by assets:check and the asset tests).
+  icon: assets/icon.icns
   category: public.app-category.productivity
   minimumSystemVersion: '13.0'
   hardenedRuntime: true
@@ -56,6 +62,16 @@ mac:
     NSAppleEventsUsageDescription: Nexio sends Apple Events only if you enable an automation tool that needs them.
 nsis:
   oneClick: false
+  installerIcon: assets/icon.ico
+  uninstallerIcon: assets/icon.ico
   allowToChangeInstallationDirectory: true
+dmg:
+  # Same macOS-built icns as above (present after `npm run assets` on macOS).
+  icon: assets/icon.icns
+linux:
+  # Flat dir of `icon-<size>.png`; app-builder parses the sizes from the
+  # filenames, so no hicolor tree is needed.
+  icon: assets/icons
+  category: Utility
 portable:
   artifactName: Nexio-portable.exe

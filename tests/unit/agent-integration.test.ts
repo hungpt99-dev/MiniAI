@@ -294,6 +294,6 @@ describe('integration: runs history tolerates corruption', () => {
   });
   it('resolveDbPath honors the data dir override', () => {
     const userDir = tmpRoot();
-    expect(resolveDbPath(userDir)).toBe(`${userDir}/nexio.db`);
+    expect(resolveDbPath(userDir)).toBe(path.join(userDir, 'nexio.db'));
   });
 });

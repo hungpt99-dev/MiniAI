@@ -14,6 +14,8 @@ footer hints use the same mapping).
 | Settings | (footer button) | `Cmd+,` |
 | Quit | (tray menu) | `Cmd+Q` |
 | Copy / Paste / Select all | `Ctrl+C` / `Ctrl+V` / `Ctrl+A` | `Cmd+C` / `Cmd+V` / `Cmd+A` |
+| Paste images/files | `Ctrl+V` with image data on the clipboard | `Cmd+V` with image data on the clipboard |
+| Remove attachment | `Backspace` on empty composer or in tray | same |
 
 Notes:
 

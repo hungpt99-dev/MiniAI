@@ -1,6 +1,7 @@
 import { BrowserWindow, screen } from 'electron';
 import path from 'node:path';
 import { IpcChannels } from '../shared/ipc-channels';
+import { resetDialogLock, shouldSuppressBlur } from './app/dialogs';
 import { platform } from './platform/index';
 
 let win: BrowserWindow | null = null;
@@ -28,6 +29,7 @@ export function createPopup(): BrowserWindow {
     alwaysOnTop: true,
     skipTaskbar: true,
     show: false,
+    icon: path.join(__dirname, '../assets/icon.png'),
     transparent: true,
     backgroundColor: '#00000000',
     ...(mac ? { visibleOnAllWorkspaces: true } : {}),
@@ -44,11 +46,13 @@ export function createPopup(): BrowserWindow {
   // NOTE: resizable:false pins min/max to the current size on Windows, so
   // creation-time setMinimum/MaximumSize does not stick — setPopupHeight
   // re-pins (width fixed, height free) on every call instead.
-  // Hide (not quit) on blur like a launcher popup.
+  // Hide (not quit) on blur like a launcher popup — except while a native
+  // dialog owns focus (blur fires on the popup when the picker opens).
   win.on('blur', () => {
+    if (shouldSuppressBlur(win)) return;
     if (win?.isVisible() && !win.webContents.isDevToolsOpened()) win.hide();
   });
-  win.on('closed', () => { win = null; });
+  win.on('closed', () => { win = null; resetDialogLock(); });
   return win;
 }
 
@@ -67,6 +71,11 @@ export function setPopupHeight(contentH: number): void {
 export function togglePopup(): void {
   const w = getPopup() || createPopup();
   if (w.isVisible()) {
+    // Hotkey/tray toggle while a native dialog is open: never hide, refocus.
+    if (shouldSuppressBlur(w)) {
+      try { w.focus(); } catch { /* window gone */ }
+      return;
+    }
     w.hide();
   } else {
     // Centered upper-third on the display nearest the cursor (multi-monitor safe).
@@ -87,8 +96,4 @@ export function togglePopup(): void {
     } catch { /* older Electron */ }
     try { w.webContents.send(IpcChannels.popupShown); } catch { /* webcontents not ready */ }
   }
-}
-
-export function hidePopup(): void {
-  win?.hide();
 }

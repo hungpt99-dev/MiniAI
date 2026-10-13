@@ -10,6 +10,8 @@ export interface RunRecord {
   ts: number;
   status: 'done' | 'error' | 'stopped';
   undoable: boolean;
+  /** Execution engine; only built-in exists (unrelated to the purged settings key). */
+  engine?: 'builtin';
 }
 
 function runsFile(userDataPath?: string): string {
@@ -24,7 +26,7 @@ export function oneLineOutcome(text: string): string {
 
 export function recordRun(rec: RunRecord, userDataPath?: string): void {
   try {
-    fs.appendFileSync(runsFile(userDataPath), JSON.stringify(rec) + '\n', 'utf8');
+    fs.appendFileSync(runsFile(userDataPath), JSON.stringify({ ...rec, engine: rec.engine ?? 'builtin' }) + '\n', 'utf8');
   } catch { /* history must never break runs */ }
 }
 
@@ -38,7 +40,9 @@ export function listRuns(limit = 50, userDataPath?: string): RunRecord[] {
   const out: RunRecord[] = [];
   for (const line of lines.slice(-Math.max(limit, 1) * 2)) {
     try {
-      out.push(JSON.parse(line) as RunRecord);
+      const rec = JSON.parse(line) as RunRecord;
+      if (!rec.engine) rec.engine = 'builtin'; // history written before the literal
+      out.push(rec);
     } catch { /* skip corrupt line */ }
   }
   return out.slice(-limit).reverse();

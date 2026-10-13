@@ -3,7 +3,22 @@
 - Hotkey taken: change `hotkey` in settings.
 - Window hides on blur by design; click tray to reshow.
 - 401 → wrong key; 429 → rate limit; 60 s timeout; model error → name.
-- No icon: `assets/icon.svg` is a placeholder, replace with PNG.
+- Missing icons: run `npm run assets`, then `npm run assets:check`.
+
+## Providers
+
+Settings → Test reports the normalized kind + action. Common cases:
+
+| Message kind | Meaning | Action |
+|---|---|---|
+| `auth` | key rejected | re-enter the API key |
+| `model_not_found` | bad model name | pick from the model suggestions (`listModels`) |
+| `unsupported_parameter` | server rejected a param | auto-fix retried once; still failing → Reset fixes |
+| `context_too_long` | conversation exceeds the model | new chat or shorten |
+| `rate_limited` / `quota_exceeded` / `overloaded` | throttled or billing | wait, then retry |
+| `network` | unreachable base URL (Custom) | check server running + base URL |
+
+Full kind table, recovery rules, and per-provider notes: `docs/providers.md`.
 
 ## macOS
 

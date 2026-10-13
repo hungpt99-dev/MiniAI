@@ -33,9 +33,13 @@ No external agent CLI is wrapped. Chat mode is untouched.
 - Injection: tool output is wrapped as untrusted data; write/destructive
   calls right after untrusted reads show "Requested after reading
   \<source\>" on the approval card.
+- Attachments in Do mode: `attachment_list` / `attachment_read` (read-only)
+  expose the run's staged files as context paths; their output is untrusted
+  and never grants permission. The router only sees attachment metadata
+  (name/type/size), never bytes.
 
 ## Tools (`src/main/agent/tools/`)
 
 Read: `fs_search fs_read fs_list apps_list clipboard_read web_search
-web_fetch`. Write: `app_open clipboard_write fs_write fs_move fs_copy
+web_fetch attachment_list attachment_read`. Write: `app_open clipboard_write fs_write fs_move fs_copy
 fs_trash` (trash only, never delete). Destructive: `shell_run`.

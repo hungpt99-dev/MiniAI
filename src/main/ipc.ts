@@ -1,15 +1,17 @@
-import { dialog, globalShortcut, ipcMain, shell } from 'electron';
+import { globalShortcut, ipcMain } from 'electron';
 import type { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { IpcChannels } from '../shared/ipc-channels';
+import { IpcChannels, IpcErrorEnvelope, IpcInvokeChannels, IpcPushChannels, IpcSendChannels } from '../shared/ipc-channels';
 import { getSettings, updateSettings } from './store/settings';
 import { setSecret, getSecret, apiKeyService, isEncryptionAvailable } from './store/secrets';
 import { createConversation, listConversations, addMessage, getMessages, deleteConversation } from './db/conversations';
 import { listTemplates, upsertTemplate, listWorkflows, render } from './db/templates';
 import { streamChat } from './ai/stream';
-import { testConnectivity } from './ai/providers';
+import { testConnectivity, resetParamCache } from './ai/providers';
+import { resolveBase } from './ai/providers/base';
+import { getAdapter } from './ai/providers/index';
 import { buildRegistry, querySlash, resolveSlash, type SlashEntry } from './slash/registry';
 import { runWorkflow } from './workflow/engine';
 import { routeRequest, type RouteInput } from './agent/router';
@@ -29,11 +31,15 @@ import { readInstalledWorkflows } from './extensions/store';
 import { parseWorkflowDoc, runExtWorkflow } from './extensions/workflows';
 import type { ExtAction, ExtSourceInput } from '../shared/types';
 import type { SourceInput } from './extensions/sources';
-import { setPopupHeight, togglePopup } from './popup';
-import { createOpencodeAdapter } from './agent/opencode';
-import { createClaudeAdapter, createCodexAdapter } from './agent/cli';
-import type { AgentRuntimeAdapter } from './agent/adapter';
-import type { ChatMessage, Mode, RuntimeId, Settings } from '../shared/types';
+import { setPopupHeight, togglePopup, getPopup } from './popup';
+import { openExternalUrl, pickAttachFiles, pickFile, pickFolder, revealPath, withDialogLock } from './app/dialogs';
+import { resolveDbPath } from './db/db';
+import { ATTACH_LIMITS, ATTACH_STRINGS, sniffMime, validateLimits } from '../shared/attachments';
+import { attachmentLogRecord, classifyAttachPath, decodeText, deleteRunAttachments, processImage, resolveAttachMime, saveAttachment, sha256, sweepOldAttachments } from './attachments';
+import { clearRunAttachments, registerRunAttachments } from './agent/tools/attachment_tools';
+import { VisionNotSupportedError } from './ai/providers/vision';
+import type { ContentPart } from './ai/providers/types';
+import type { ChatMessage, Mode, Settings } from '../shared/types';
 
 const aborters = new Map<string, AbortController>();
 let seq = 0;
@@ -171,13 +177,164 @@ export function platformInfo(): {
 }
 
 // IPC serializes non-Error rejections as "[object Object]" — normalize at the boundary
-// so the real cause (e.g. `auth: ...`, `runtime-unavailable: ...`) reaches the UI.
+// so the real cause (e.g. `auth: ...`) reaches the UI.
 function asError(e: unknown): Error {
   if (e instanceof Error) return e;
   const o = e as { code?: string; message?: string };
   if (o?.code && o?.message) return new Error(`${o.code}: ${o.message}`);
   try { return new Error(`Unknown error: ${JSON.stringify(e)}`); }
   catch { return new Error(`Unknown error: ${String(e)}`); }
+}
+
+// ---------- IPC registry + typed handlers ----------
+// Every invoke channel gets exactly one handler, every send channel one
+// listener, push channels none (main→renderer only). Startup asserts this;
+// a double register throws outside prod (dev/test) and logs in prod.
+
+type IpcKind = 'handle' | 'on';
+const ipcRegistry = new Map<string, IpcKind>();
+
+/** Test seam: clear registrations between cases. */
+export function __resetIpcRegistryForTests(): void {
+  ipcRegistry.clear();
+}
+
+/** Test seam: read-only view of channel → kind. */
+export function __ipcRegistryForTests(): ReadonlyMap<string, IpcKind> {
+  return ipcRegistry;
+}
+
+function isProdBuild(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { app } = require('electron') as typeof import('electron');
+    if (app?.isPackaged !== undefined) return !!app.isPackaged;
+  } catch { /* electron mocked in tests */ }
+  return process.env.NODE_ENV === 'production';
+}
+
+function trackIpc(channel: string, kind: IpcKind): void {
+  const prev = ipcRegistry.get(channel);
+  if (prev !== undefined) {
+    const msg = `Duplicate IPC ${kind} for ${channel} (already ${prev})`;
+    if (!isProdBuild()) throw new Error(msg);
+    console.error(`[Nexio] ${msg}`);
+    return;
+  }
+  ipcRegistry.set(channel, kind);
+}
+
+/** Startup: every invoke channel has one handler, every send channel one
+ * listener, push channels stay handler-free. Throws in dev, logs in prod. */
+function assertIpcComplete(): void {
+  const problems: string[] = [];
+  for (const c of IpcInvokeChannels) {
+    if (ipcRegistry.get(c) !== 'handle') problems.push(`missing handle ${c}`);
+  }
+  for (const c of IpcSendChannels) {
+    if (ipcRegistry.get(c) !== 'on') problems.push(`missing listener ${c}`);
+  }
+  for (const c of IpcPushChannels) {
+    if (ipcRegistry.has(c)) problems.push(`push channel registered ${c}`);
+  }
+  if (!problems.length) return;
+  const msg = `IPC registry incomplete: ${problems.join('; ')}`;
+  if (!isProdBuild()) throw new Error(msg);
+  console.error(`[Nexio] ${msg}`);
+}
+
+/** Runtime arg guard: parse returns the args or throws a coded Error. */
+export interface IpcSchema {
+  parse: (args: unknown[]) => unknown[];
+}
+
+function validationError(message: string): Error {
+  return Object.assign(new Error(message), { code: 'IPC_VALIDATION' });
+}
+
+function arity(a: unknown[], min: number, max: number, what: string): void {
+  if (a.length < min || a.length > max) {
+    throw validationError(`${what}: expected ${min === max ? min : `${min}..${max}`} args, got ${a.length}`);
+  }
+}
+
+function needStr(v: unknown, what: string): void {
+  if (typeof v !== 'string') throw validationError(`${what}: expected string`);
+}
+
+function needObj(v: unknown, what: string): void {
+  if (!v || typeof v !== 'object') throw validationError(`${what}: expected object`);
+}
+
+const vNone: IpcSchema = { parse: (a) => { arity(a, 0, 0, 'args'); return a; } };
+const vStr1: IpcSchema = { parse: (a) => { arity(a, 1, 1, 'args'); needStr(a[0], 'arg0'); return a; } };
+const vStr2: IpcSchema = { parse: (a) => { arity(a, 2, 2, 'args'); needStr(a[0], 'arg0'); needStr(a[1], 'arg1'); return a; } };
+const vHead1: IpcSchema = { parse: (a) => { arity(a, 1, 99, 'args'); needStr(a[0], 'arg0'); return a; } };
+const vHead2: IpcSchema = { parse: (a) => { arity(a, 2, 99, 'args'); needStr(a[0], 'arg0'); needStr(a[1], 'arg1'); return a; } };
+const vObj0: IpcSchema = { parse: (a) => { arity(a, 1, 99, 'args'); needObj(a[0], 'arg0'); return a; } };
+const vOptStr: IpcSchema = { parse: (a) => { arity(a, 0, 1, 'args'); if (a[0] !== undefined) needStr(a[0], 'arg0'); return a; } };
+const vChat: IpcSchema = { parse: (a) => { arity(a, 2, 3, 'chat'); needStr(a[0], 'conversationId'); if (!Array.isArray(a[1])) throw validationError('chat: messages must be an array'); return a; } };
+const vRunWf: IpcSchema = { parse: (a) => { arity(a, 2, 2, 'runWorkflow'); needStr(a[0], 'trigger'); needObj(a[1], 'vars'); return a; } };
+const vApprove: IpcSchema = {
+  parse: (a) => {
+    arity(a, 3, 3, 'agentApprove');
+    needStr(a[0], 'runId');
+    needStr(a[1], 'callId');
+    if (a[2] !== 'allow-once' && a[2] !== 'deny' && a[2] !== 'always') throw validationError(`agentApprove: bad decision ${String(a[2])}`);
+    return a;
+  },
+};
+const vAttachProc: IpcSchema = {
+  parse: (a) => {
+    arity(a, 1, 1, 'attachProcess');
+    needObj(a[0], 'input');
+    const o = a[0] as Record<string, unknown>;
+    needStr(o.runId, 'runId');
+    needStr(o.name, 'name');
+    needStr(o.dataBase64, 'dataBase64');
+    return a;
+  },
+};
+const vAttachClass: IpcSchema = {
+  parse: (a) => {
+    arity(a, 1, 1, 'attachClassify');
+    needObj(a[0], 'input');
+    needStr((a[0] as Record<string, unknown>).path, 'path');
+    return a;
+  },
+};
+
+function ipcError(err: unknown): IpcErrorEnvelope {
+  const code = (err as { code?: unknown })?.code;
+  return { ok: false, code: typeof code === 'string' && code ? code : 'IPC_ERROR', message: asError(err).message };
+}
+
+/**
+ * Validated invoke handler: schema rejects and handler failures both resolve
+ * to {ok:false,code,message} (preload rethrows). Dialog lock, magic-byte,
+ * limit and root checks stay in the handler bodies.
+ */
+export function typedHandle(channel: string, schema: IpcSchema, fn: (...args: any[]) => unknown): void {
+  trackIpc(channel, 'handle');
+  ipcMain.handle(channel, async (e, ...raw: unknown[]) => {
+    let parsed: unknown[];
+    try {
+      parsed = schema.parse(raw);
+    } catch (err) {
+      return ipcError(err);
+    }
+    try {
+      return await (fn as (e: unknown, ...args: unknown[]) => unknown)(e, ...parsed);
+    } catch (err) {
+      return ipcError(err);
+    }
+  });
+}
+
+/** Fire-and-forget listener with double-register tracking (no envelope). */
+export function typedOn(channel: string, fn: (...args: any[]) => void): void {
+  trackIpc(channel, 'on');
+  ipcMain.on(channel, fn);
 }
 
 function db(): DatabaseSync {
@@ -239,21 +396,13 @@ function extSlashEntries(): { skills: SlashEntry[]; workflows: SlashEntry[]; mcp
   }
 }
 
-function buildAgents(s: Settings): Partial<Record<RuntimeId, AgentRuntimeAdapter>> {
-  return {
-    opencode: createOpencodeAdapter({ baseUrl: s.opencodeBaseUrl || '' }),
-    claude: createClaudeAdapter(s.claudeBin || '', undefined, s.agentCwd),
-    codex: createCodexAdapter(s.codexBin || '', undefined, s.agentCwd),
-  };
-}
-
 export interface SendOpts {
   mode?: Mode;
-  runtimeId?: RuntimeId;
   sessionId?: string;
   requestId?: string;
   /** True when the user explicitly picked the mode pill (wins over intent routing). */
   explicit?: boolean;
+  attachments?: Array<{ name: string; mime?: string; size?: number; dataBase64?: string; path?: string }>;
 }
 
 /** One cheap model call for uncertain intents (heuristic runs first). */
@@ -273,6 +422,94 @@ function routeStatus(sender: Electron.WebContents, id: string, status: 'doing' |
   try { sender.send(IpcChannels.routeStatus, { id, status }); } catch { /* window gone */ }
 }
 
+function appBaseDir(): string {
+  try { return path.dirname(resolveDbPath()); }
+  catch { return os.tmpdir(); }
+}
+
+export interface PreparedAttachment {
+  part: ContentPart;
+  log: { name: string; type: string; size: number; sha256: string };
+  ref: { id: string; name: string; mime: string; size: number; sha256: string; path: string; kind: 'image' | 'file' | 'text' };
+}
+
+/**
+ * Validate + process staged attachments (magic bytes, limits, EXIF strip,
+ * 2048 resize when Electron nativeImage is present, BOM, 200KB truncation).
+ * Temp files live under the given scope id (conversation id, so Clear /
+ * conversation delete removes agent temps too). Rejections throw inline
+ * errors — never silent. Returns provider parts + log-safe records (never bytes).
+ */
+export function prepareAttachments(
+  scopeId: string,
+  staged: NonNullable<SendOpts['attachments']>,
+  cwd: string,
+  ctx: PolicyContext,
+): PreparedAttachment[] {
+  const lim = validateLimits(staged.map((a) => ({ size: a.size || (a.dataBase64 ? Buffer.byteLength(a.dataBase64, 'base64') : 0) })));
+  if (!lim.ok) throw new Error(lim.error || ATTACH_STRINGS.oversizeError);
+  const out: PreparedAttachment[] = [];
+  for (const a of staged) {
+    let bytes: Buffer;
+    let origName = a.name || 'file';
+    if (a.path) {
+      // Per-file path policy: outside roots = Allow once (this send grants it once);
+      // protected/symlink escape = refuse inline (Remove).
+      const verdict = classifyAttachPath(a.path, cwd, ctx);
+      if (verdict.verdict === 'deny') throw new Error(`Attachment refused: ${verdict.reason || 'blocked path'}`);
+      try { bytes = fs.readFileSync(verdict.real); }
+      catch { throw new Error(`Attachment unreadable: ${origName}`); }
+      origName = path.basename(verdict.real);
+    } else if (a.dataBase64) {
+      // Pre-cap the base64 payload before decoding so oversize input never allocates.
+      if (a.dataBase64.length > Math.ceil(ATTACH_LIMITS.maxFileBytes * 4 / 3) + 64) throw new Error(`${ATTACH_STRINGS.oversizeError}: ${origName} (max 20MB per file)`);
+      bytes = Buffer.from(a.dataBase64, 'base64');
+    } else throw new Error(`Attachment rejected: ${origName} (no data)`);
+    if (bytes.length > ATTACH_LIMITS.maxFileBytes) throw new Error(`${ATTACH_STRINGS.oversizeError}: ${origName} (max 20MB per file)`);
+    const u8 = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length);
+    const sniffed = sniffMime(u8, origName);
+    if (sniffed === 'exe' || sniffed === null) throw new Error(`Rejected ${origName}: executable or unknown content (type checked, not extension)`);
+    // Trust sniffed bytes over the claimed extension (markdown names keep text/markdown).
+    const mime = resolveAttachMime(sniffed, a.mime, origName);
+    if (mime.startsWith('image/')) {
+      const proc = processImage(bytes, mime);
+      const stored = saveAttachment(appBaseDir(), scopeId, origName, proc.mime, proc.bytes, { width: proc.width, height: proc.height, dataUrl: proc.dataUrl });
+      out.push({
+        part: { type: 'image', dataUrl: proc.dataUrl, mimeType: proc.mime, width: proc.width, height: proc.height, bytes: proc.bytes.length },
+        log: attachmentLogRecord(stored),
+        ref: { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, sha256: stored.sha256, path: stored.path, kind: 'image' },
+      });
+    } else if (mime.startsWith('text/') || mime.includes('markdown')) {
+      const { text, truncated } = decodeText(bytes);
+      const stored = saveAttachment(appBaseDir(), scopeId, origName, mime, Buffer.from(text, 'utf8'), { truncated });
+      out.push({
+        part: { type: 'file_ref', name: stored.name, mimeType: stored.mime, size: stored.size, sha256: stored.sha256, text },
+        log: attachmentLogRecord(stored),
+        ref: { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, sha256: stored.sha256, path: stored.path, kind: 'text' },
+      });
+    } else {
+      // PDFs and other files: file_ref text only (bytes never go to the model).
+      const stored = saveAttachment(appBaseDir(), scopeId, origName, mime, bytes);
+      const note = mime === 'application/pdf' ? '[PDF attached — text extraction is best-effort; open the file for full content]' : `[binary ${mime} attached — metadata only]`;
+      out.push({
+        part: { type: 'file_ref', name: stored.name, mimeType: stored.mime, size: stored.size, sha256: stored.sha256, text: note },
+        log: attachmentLogRecord(stored),
+        ref: { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, sha256: stored.sha256, path: stored.path, kind: 'file' },
+      });
+    }
+  }
+  return out;
+}
+
+/** Build the user content parts: instruction text + image/file_ref parts. */
+export function buildUserParts(text: string, prepared: PreparedAttachment[]): ContentPart[] {
+  const parts: ContentPart[] = [];
+  const body = text.trim() || (prepared.length ? ATTACH_STRINGS.defaultInstruction : '');
+  if (body) parts.push({ type: 'text', text: body });
+  for (const p of prepared) parts.push(p.part);
+  return parts;
+}
+
 /** Persist run history + push the run summary (outcome line, undo, folder). */
 function finishRun(
   d: DatabaseSync, sender: Electron.WebContents,
@@ -280,8 +517,9 @@ function finishRun(
   outcome: string, status: 'done' | 'error' | 'stopped', cwd: string,
 ): void {
   const undoable = undoAvailable(runId);
+  try { clearRunAttachments(runId); } catch { /* refs are run-scoped memory only */ }
   try {
-    recordRun({ runId, kind, prompt, outcome: oneLineOutcome(outcome), ts: Date.now(), status, undoable });
+    recordRun({ runId, kind, prompt, outcome: oneLineOutcome(outcome), ts: Date.now(), status, undoable, engine: 'builtin' });
   } catch { /* history must never break runs */ }
   try {
     sender.send(IpcChannels.runSummary, { runId, undoable, folder: undoable ? undoFolder(runId, cwd) : undefined });
@@ -295,26 +533,42 @@ async function runSend(
   opts: SendOpts = {},
 ): Promise<string> {
   const d = db();
-  // Freeze mode/runtime/sessionId/requestId at send time.
+  // Freeze mode/sessionId/requestId at send time.
   const s = getSettings(d);
   const mode: Mode = opts.mode || s.mode || 'agent';
-  const runtimeId: RuntimeId = opts.runtimeId || s.agentRuntime || 'opencode';
   const sessionId = opts.sessionId || conversationId;
   const requestId = opts.requestId || `req-${Date.now()}-${++seq}`;
-  addMessage(d, conversationId, 'user', content);
+  const staged = opts.attachments || [];
+  const text = content.trim() || (staged.length ? ATTACH_STRINGS.defaultInstruction : '');
+  if (!text && !staged.length) return '';
+  addMessage(d, conversationId, 'user', text);
   const history = getMessages(d, conversationId);
   const key = getSecret(d, apiKeyService(s.provider)) || '';
   const aborter = new AbortController();
   aborters.set(requestId, aborter);
+  // Prepare attachments first: rejections throw inline errors, never silent.
+  const cwd0 = s.agentCwd || os.homedir();
+  let prepared: PreparedAttachment[] = [];
+  if (staged.length) {
+    // Ask temp files live under the conversation id so Clear / run delete
+    // removes them; agent runs re-key under their run id below.
+    prepared = prepareAttachments(conversationId, staged, cwd0, policyFor(s, cwd0));
+    try {
+      const wlog = createRunLog(undefined, requestId);
+      for (const p of prepared) appendLog(wlog.path, { runId: requestId, attachment: p.log });
+    } catch { /* logging never breaks the run */ }
+  }
+  const userParts = buildUserParts(text, prepared);
   // Intent routing: an explicit pill selection wins; otherwise classify.
   // act → built-in agent loop, answer/clarify → plain streamed response.
+  // Attachments skip clarify (empty+attach sends the default instruction).
   let effective = mode;
-  if (!opts.explicit && !content.trim().startsWith('/')) {
-    const intent = await classifyIntent(content, {
+  if (!opts.explicit && !text.trim().startsWith('/') && !staged.length) {
+    const intent = await classifyIntent(text, {
       askModel: (prompt) => classifyWithModel(s, key, prompt, aborter.signal),
     });
     if (intent === 'clarify') {
-      const q = clarifyQuestion(content);
+      const q = clarifyQuestion(text);
       routeStatus(sender, requestId, 'answering');
       addMessage(d, conversationId, 'assistant', q);
       sender.send(IpcChannels.chatStream, { token: q, done: false, conversationId, requestId });
@@ -332,43 +586,71 @@ async function runSend(
     agentRuns.set(runId, state);
     const cwd = s.agentCwd || os.homedir();
     try {
+      if (prepared.length) {
+        // Re-key refs under the agent run id for attachment_list/read.
+        registerRunAttachments(runId, prepared.map((p) => p.ref));
+      }
       const full = await runBuiltInAgent({
-        sender, d, s, key, content, history, cwd, runId,
-        controller: aborter, state, prompt: content,
+        sender, d, s, key, content: text, history, cwd, runId,
+        controller: aborter, state, prompt: text,
+        userParts: staged.length ? userParts : undefined,
+        attachMeta: prepared.length ? `Attached files: ${prepared.map((p) => p.ref.path).join('; ')}` : undefined,
+        imageMode: s.compatibleImages || 'auto',
       });
       if (full) addMessage(d, conversationId, 'assistant', full);
-      finishRun(d, sender, runId, 'agent', content, full, aborter.signal.aborted ? 'stopped' : 'done', cwd);
+      finishRun(d, sender, runId, 'agent', text, full, aborter.signal.aborted ? 'stopped' : 'done', cwd);
       sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
       return full;
     } catch (e) {
-      finishRun(d, sender, runId, 'agent', content, asError(e).message, 'error', cwd);
+      if (e instanceof VisionNotSupportedError) {
+        const notice = ATTACH_STRINGS.visionNotice;
+        addMessage(d, conversationId, 'assistant', notice);
+        sender.send(IpcChannels.chatStream, { token: notice, done: false, conversationId, requestId });
+        sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
+        finishRun(d, sender, runId, 'agent', text, notice, 'done', cwd);
+        return notice;
+      }
+      finishRun(d, sender, runId, 'agent', text, asError(e).message, 'error', cwd);
       throw asError(e);
     } finally {
       agentRuns.delete(runId);
       aborters.delete(requestId);
     }
   }
-  const frozen: RouteInput = { mode: effective, runtimeId, sessionId, requestId, prompt: content };
+  const frozen: RouteInput = {
+    mode: effective, sessionId, requestId, prompt: text,
+  };
   try {
     const full = await routeRequest(
       { ...frozen, cwd: s.agentCwd, signal: aborter.signal, onToken: (t) => sender.send(IpcChannels.chatStream, { token: t, done: false, conversationId, requestId }) },
       {
         chat: async (input) => {
           let acc = '';
+          const msgs = staged.length
+            ? [...history, { id: 'attach', role: 'user' as const, content: userParts, createdAt: Date.now() }]
+            : history;
           await streamChat(s.provider, {
-            apiKey: key, model: s.model, baseUrl: s.baseUrl, temperature: s.temperature,
-            messages: history, signal: input.signal,
+            apiKey: key, model: s.model, baseUrl: s.baseUrl, temperature: chatTemperature(s),
+            messages: msgs as Parameters<typeof streamChat>[1]['messages'],
+            signal: input.signal, imageMode: s.compatibleImages || 'auto',
             onToken: (t) => { acc += t; input.onToken?.(t); },
           });
           return acc;
         },
-        agents: buildAgents(s),
       },
     );
     addMessage(d, conversationId, 'assistant', full);
     sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
     return full;
   } catch (e) {
+    if (e instanceof VisionNotSupportedError || /vision-not-supported/.test(asError(e).message)) {
+      // Non-vision model: notice + one-click switch, bytes never sent, never silent.
+      const notice = ATTACH_STRINGS.visionNotice;
+      addMessage(d, conversationId, 'assistant', notice);
+      sender.send(IpcChannels.chatStream, { token: notice, done: false, conversationId, requestId });
+      sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
+      return notice;
+    }
     throw asError(e);
   } finally {
     aborters.delete(requestId);
@@ -380,6 +662,7 @@ async function runBuiltInAgent(o: {
   sender: Electron.WebContents; d: DatabaseSync; s: Settings; key: string;
   content: string; history: ChatMessage[]; cwd: string; runId: string;
   controller: AbortController; state: AgentRunState; prompt: string;
+  userParts?: ContentPart[]; attachMeta?: string; imageMode?: 'auto' | 'on' | 'off';
 }): Promise<string> {
   const { sender, d, s, key, content, history, cwd, runId, controller, state, prompt } = o;
   const emit = (event: AgentEvent) => {
@@ -412,6 +695,9 @@ async function runBuiltInAgent(o: {
     runId,
     waitForApproval: approvalWaiter(state),
     onPersistAlwaysRule: persistRule(d),
+    ...(o.userParts ? { userParts: o.userParts } : {}),
+    ...(o.attachMeta ? { attachMeta: o.attachMeta } : {}),
+    ...(s.compatibleImages || o.imageMode ? { imageMode: (o.imageMode || s.compatibleImages || 'auto') as 'auto' | 'on' | 'off' } : {}),
   });
 }
 
@@ -591,48 +877,91 @@ async function runExtWorkflowRun(
   return { runId };
 }
 
-export function registerIpc(): void {
-  ipcMain.handle(IpcChannels.getSettings, () => getSettings(db()));
-  ipcMain.handle(IpcChannels.setSettings, (_e, patch: Partial<Settings>) => {
+/** Custom provider with the temperature toggle off sends no sampling param. */
+function chatTemperature(s: Settings): number | undefined {
+  if (s.provider === 'compatible' && s.sendTemperature === false) return undefined;
+  return s.temperature;
+}
+
+function registerSettingsIpc(): void {
+  typedHandle(IpcChannels.getSettings, vNone, () => getSettings(db()));
+  typedHandle(IpcChannels.setSettings, vObj0, (_e, patch: Partial<Settings>) => {
     const out = updateSettings(db(), patch);
     if (patch.agentStopHotkey !== undefined) refreshStopHotkey();
     if (patch.hotkey !== undefined) refreshToggleHotkey(() => togglePopup());
     if (patch.launchAtLogin !== undefined) applyLaunchAtLogin();
     return out;
   });
-  ipcMain.handle(IpcChannels.setApiKey, (_e, provider: string, key: string) => {
+  typedHandle(IpcChannels.setApiKey, vStr2, (_e, provider: string, key: string) => {
     if (!key) throw new Error('Empty API key');
     setSecret(db(), apiKeyService(provider), key);
     return true;
   });
-  ipcMain.handle(IpcChannels.isEncryptionAvailable, () => isEncryptionAvailable());
-  ipcMain.handle(IpcChannels.testConnectivity, async (_e, provider, model: string, baseUrl?: string) => {
-    const key = getSecret(db(), apiKeyService(provider as string)) || '';
-    return testConnectivity(provider, key, model, baseUrl);
+  typedHandle(IpcChannels.isEncryptionAvailable, vNone, () => isEncryptionAvailable());
+  typedHandle(IpcChannels.testConnectivity, vHead2, async (_e, provider, model: string, baseUrl?: string, apiKey?: string) => {
+    // Unsaved settings-panel values win; stored key is the fallback. Never logged.
+    try {
+      const key = (typeof apiKey === 'string' && apiKey.trim()) || getSecret(db(), apiKeyService(provider as string)) || '';
+      const cleanModel = typeof model === 'string' ? model.trim() : '';
+      const rawBase = typeof baseUrl === 'string' && baseUrl.trim() ? baseUrl.trim() : undefined;
+      return await testConnectivity(provider, key, cleanModel, rawBase);
+    } catch (e) {
+      throw asError(e);
+    }
   });
+  typedHandle(IpcChannels.listModels, vHead1, async (_e, provider, baseUrl?: string) => {
+    try {
+      if (provider !== 'openai' && provider !== 'anthropic' && provider !== 'gemini' && provider !== 'compatible') {
+        throw new Error(`Unknown provider: ${String(provider)}`);
+      }
+      const d = db();
+      const s = getSettings(d);
+      const adapter = getAdapter(provider);
+      const key = getSecret(d, apiKeyService(provider)) || '';
+      // Unsaved panel value wins; stored baseUrl applies to compatible only
+      // (other providers ignore it so stale localhost never leaks into suggestions).
+      const unsaved = typeof baseUrl === 'string' ? baseUrl : '';
+      const base = provider === 'compatible'
+        ? resolveBase(unsaved || s.baseUrl || '', adapter.defaultBaseUrl)
+        : resolveBase(unsaved, adapter.defaultBaseUrl);
+      return await adapter.listModels(key, base);
+    } catch (e) {
+      throw asError(e);
+    }
+  });
+  typedHandle(IpcChannels.resetProviderFixes, vNone, () => {
+    resetParamCache();
+    return true;
+  });
+}
 
-  ipcMain.handle(IpcChannels.listConversations, () => listConversations(db()));
-  ipcMain.handle(IpcChannels.createConversation, (_e, title?: string) => createConversation(db(), title));
-  ipcMain.handle(IpcChannels.getMessages, (_e, id: string) => getMessages(db(), id));
-  ipcMain.handle(IpcChannels.deleteConversation, (_e, id: string) => { deleteConversation(db(), id); return true; });
-  ipcMain.handle(IpcChannels.listTemplates, () => listTemplates(db()));
-  ipcMain.handle(IpcChannels.upsertTemplate, (_e, t) => upsertTemplate(db(), t));
-  ipcMain.handle(IpcChannels.listWorkflows, () => listWorkflows(db()));
+function registerDataIpc(): void {
+  typedHandle(IpcChannels.listConversations, vNone, () => listConversations(db()));
+  typedHandle(IpcChannels.createConversation, vOptStr, (_e, title?: string) => createConversation(db(), title));
+  typedHandle(IpcChannels.getMessages, vStr1, (_e, id: string) => getMessages(db(), id));
+  typedHandle(IpcChannels.deleteConversation, vStr1, (_e, id: string) => { deleteConversation(db(), id); try { deleteRunAttachments(appBaseDir(), id); } catch { /* best-effort */ } return true; });
+  typedHandle(IpcChannels.listTemplates, vNone, () => listTemplates(db()));
+  typedHandle(IpcChannels.upsertTemplate, vObj0, (_e, t) => upsertTemplate(db(), t));
+  typedHandle(IpcChannels.listWorkflows, vNone, () => listWorkflows(db()));
+}
 
-  ipcMain.handle(IpcChannels.slashQuery, (_e, text: string, mode?: Mode) => {
+function registerSlashIpc(): void {
+  typedHandle(IpcChannels.slashQuery, vHead1, (_e, text: string, mode?: Mode) => {
     const templates = listTemplates(db()).map((t) => ({ trigger: t.trigger, label: t.title, description: t.body.slice(0, 80), source: 'prompt' as const }));
     const workflows = listWorkflows(db()).map((w) => ({ trigger: w.trigger, label: w.title, description: `${w.steps.length} steps`, source: 'workflow' as const }));
     const extra = extSlashEntries();
     return querySlash(buildRegistry({ prompts: templates, workflows: [...workflows, ...extra.workflows], skills: extra.skills, mcp: extra.mcp }), text, 8, mode);
   });
-  ipcMain.handle(IpcChannels.slashResolve, (_e, trigger: string, mode?: Mode) => {
+  typedHandle(IpcChannels.slashResolve, vHead1, (_e, trigger: string, mode?: Mode) => {
     const templates = listTemplates(db()).map((t) => ({ trigger: t.trigger, label: t.title, description: t.body.slice(0, 80), source: 'prompt' as const }));
     const workflows = listWorkflows(db()).map((w) => ({ trigger: w.trigger, label: w.title, description: `${w.steps.length} steps`, source: 'workflow' as const }));
     const extra = extSlashEntries();
     return resolveSlash(buildRegistry({ prompts: templates, workflows: [...workflows, ...extra.workflows], skills: extra.skills, mcp: extra.mcp }), trigger, mode);
   });
+}
 
-  ipcMain.handle(IpcChannels.runWorkflow, async (e, trigger: string, vars: Record<string, string>) => {
+function registerWorkflowIpc(): void {
+  typedHandle(IpcChannels.runWorkflow, vRunWf, async (e, trigger: string, vars: Record<string, string>) => {
     const d = db();
     let w = listWorkflows(d).find((x) => x.trigger === trigger || x.id === trigger);
     if (!w) {
@@ -690,19 +1019,21 @@ export function registerIpc(): void {
       aborters.delete(requestId);
     }
   });
+}
 
-  ipcMain.on(IpcChannels.chatCancel, (_e, requestId?: string) => {
+function registerChatIpc(): void {
+  typedOn(IpcChannels.chatCancel, (_e, requestId?: string) => {
     if (requestId) aborters.get(requestId)?.abort();
     else for (const a of aborters.values()) a.abort();
   });
 
-  ipcMain.on(IpcChannels.resize, (_e, h: unknown) => {
+  typedOn(IpcChannels.resize, (_e, h: unknown) => {
     if (typeof h !== 'number' || !Number.isFinite(h)) return;
     setPopupHeight(h);
   });
 
   // Chat: streams tokens via `chatStream` event, resolves with full text.
-  ipcMain.handle(IpcChannels.chat, async (e, conversationId: string, messages: ChatMessage[], opts: SendOpts = {}) => {
+  typedHandle(IpcChannels.chat, vChat, async (e, conversationId: string, messages: ChatMessage[], opts: SendOpts = {}) => {
     const d = db();
     const s = getSettings(d);
     const key = getSecret(d, apiKeyService(s.provider)) || process.env[`${s.provider.toUpperCase()}_API_KEY`] || '';
@@ -713,7 +1044,7 @@ export function registerIpc(): void {
     try {
       let full = '';
       await streamChat(s.provider, {
-        apiKey: key, model: s.model, baseUrl: s.baseUrl, temperature: s.temperature,
+        apiKey: key, model: s.model, baseUrl: s.baseUrl, temperature: chatTemperature(s),
         messages, signal: aborter.signal,
         onToken: (t) => { full += t; sender.send(IpcChannels.chatStream, { token: t, done: false, conversationId, requestId }); },
       });
@@ -727,27 +1058,24 @@ export function registerIpc(): void {
     }
   });
 
-  ipcMain.handle(IpcChannels.send, (e, conversationId: string, content: string, opts: SendOpts = {}) =>
+  typedHandle(IpcChannels.send, vHead2, (e, conversationId: string, content: string, opts: SendOpts = {}) =>
     runSend(e.sender, conversationId, content, opts),
   );
 
-  ipcMain.handle(IpcChannels.agentRun, (e, conversationId: string, content: string, opts: SendOpts = {}) =>
+  typedHandle(IpcChannels.agentRun, vHead2, (e, conversationId: string, content: string, opts: SendOpts = {}) =>
     runSend(e.sender, conversationId, content, { ...opts, mode: 'agent', explicit: true }),
   );
+}
 
-  const capsOf = () => {
-    const s = getSettings(db());
-    return Promise.all(Object.values(buildAgents(s)).map((a) => a!.caps()));
-  };
-  ipcMain.handle(IpcChannels.runtimeList, () => capsOf());
-  ipcMain.handle(IpcChannels.runtimeRefresh, () => capsOf());
-
+function registerAgentIpc(): void {
   // Built-in computer-use agent: start returns a runId immediately; AgentEvents
   // stream back via the agentEvent push channel. Renderer never gets shell access.
-  ipcMain.handle(IpcChannels.agentStart, async (e, conversationId: string, content: string, opts: { cwd?: string } = {}) => {
+  typedHandle(IpcChannels.agentStart, vHead2, async (e, conversationId: string, content: string, opts: { cwd?: string; attachments?: SendOpts['attachments'] } = {}) => {
     const d = db();
     const s = getSettings(d);
-    addMessage(d, conversationId, 'user', content);
+    const staged = opts.attachments || [];
+    const text = content.trim() || (staged.length ? ATTACH_STRINGS.defaultInstruction : content);
+    addMessage(d, conversationId, 'user', text);
     const history = getMessages(d, conversationId);
     const key = getSecret(d, apiKeyService(s.provider)) || process.env[`${s.provider.toUpperCase()}_API_KEY`] || '';
     const controller = new AbortController();
@@ -762,15 +1090,40 @@ export function registerIpc(): void {
       try {
         const cwd = opts.cwd || s.agentCwd || os.homedir();
         routeStatus(sender, runId, 'doing');
+        let userParts: ContentPart[] | undefined;
+        let attachMeta: string | undefined;
+        if (staged.length) {
+          // Temps live under the conversation id so Clear / conversation delete
+          // removes agent temps too; tools re-key refs under the run id.
+          const prepared = prepareAttachments(conversationId, staged, cwd, policyFor(s, cwd));
+          registerRunAttachments(runId, prepared.map((p) => p.ref));
+          try {
+            const wlog = createRunLog(undefined, runId);
+            for (const p of prepared) appendLog(wlog.path, { runId, attachment: p.log });
+          } catch { /* logging never breaks the run */ }
+          userParts = buildUserParts(text, prepared);
+          attachMeta = `Attached files: ${prepared.map((p) => p.ref.path).join('; ')}`;
+        }
         const full = await runBuiltInAgent({
-          sender, d, s, key, content, history, cwd, runId,
-          controller, state, prompt: content,
+          sender, d, s, key, content: text, history, cwd, runId,
+          controller, state, prompt: text,
+          ...(userParts ? { userParts } : {}),
+          ...(attachMeta ? { attachMeta } : {}),
+          imageMode: s.compatibleImages || 'auto',
         });
         if (full) addMessage(d, conversationId, 'assistant', full);
-        finishRun(d, sender, runId, 'agent', content, full, controller.signal.aborted ? 'stopped' : 'done', cwd);
+        finishRun(d, sender, runId, 'agent', text, full, controller.signal.aborted ? 'stopped' : 'done', cwd);
       } catch (e2) {
+        if (e2 instanceof VisionNotSupportedError) {
+          const notice = ATTACH_STRINGS.visionNotice;
+          addMessage(d, conversationId, 'assistant', notice);
+          emit({ type: 'text_delta', text: notice });
+          emit({ type: 'done', summary: notice });
+          finishRun(d, sender, runId, 'agent', text, notice, 'done', opts.cwd || s.agentCwd || os.homedir());
+          return;
+        }
         emit({ type: 'error', message: asError(e2).message.slice(0, 500) });
-        finishRun(d, sender, runId, 'agent', content, asError(e2).message, 'error', opts.cwd || s.agentCwd || os.homedir());
+        finishRun(d, sender, runId, 'agent', text, asError(e2).message, 'error', opts.cwd || s.agentCwd || os.homedir());
       } finally {
         agentRuns.delete(runId);
       }
@@ -778,7 +1131,7 @@ export function registerIpc(): void {
     return { runId };
   });
 
-  ipcMain.handle(IpcChannels.agentApprove, (_e, runId: string, callId: string, decision: ApprovalDecision) => {
+  typedHandle(IpcChannels.agentApprove, vApprove, (_e, runId: string, callId: string, decision: ApprovalDecision) => {
     const resolve = agentRuns.get(runId)?.approvals.get(callId);
     if (!resolve) throw new Error('No pending approval for this action');
     if (decision !== 'allow-once' && decision !== 'deny' && decision !== 'always') throw new Error('Bad decision');
@@ -786,37 +1139,47 @@ export function registerIpc(): void {
     return true;
   });
 
-  ipcMain.on(IpcChannels.agentStop, (_e, runId?: string) => {
+  typedOn(IpcChannels.agentStop, (_e, runId?: string) => {
     if (runId) agentRuns.get(runId)?.controller.abort();
     else stopAllAgentRuns();
   });
 
-  ipcMain.handle(IpcChannels.agentLog, () => getLatestLog());
+  typedHandle(IpcChannels.agentLog, vNone, () => getLatestLog());
 
-  ipcMain.handle(IpcChannels.agentPickFolder, async () => {
-    const r = await dialog.showOpenDialog({ properties: ['openDirectory'] });
-    return r.canceled ? null : (r.filePaths[0] || null);
+  typedHandle(IpcChannels.agentPickFolder, vNone, async () => {
+    // Parent-modal picker through the dialog lock (no blur-hide, Esc cancels
+    // in the dialog). Blocked system paths reject for the UI; cancel is null.
+    try {
+      const s = getSettings(db());
+      return await pickFolder(getPopup(), {
+        // agentCwd seeds the picker ahead of lastUsedDir (pickFolder fallback) — keeps picks near the working folder.
+        defaultPath: s.agentCwd || undefined,
+        cwd: s.agentCwd || undefined,
+        allowedRoots: s.agentAllowedRoots?.length ? s.agentAllowedRoots : undefined,
+        explicitRoots: s.agentAllowedRoots || [],
+      });
+    } catch (e) {
+      if ((e as Error)?.message?.startsWith('blocked path')) throw asError(e);
+      return null;
+    }
   });
+}
 
-  ipcMain.handle(IpcChannels.platform, () => platformInfo());
-  ipcMain.handle(IpcChannels.hotkeyStatus, () => getHotkeyStatus());
-  ipcMain.handle(IpcChannels.setHotkey, (_e, hotkey: string) => {
+function registerPlatformIpc(): void {
+  typedHandle(IpcChannels.platform, vNone, () => platformInfo());
+  typedHandle(IpcChannels.hotkeyStatus, vNone, () => getHotkeyStatus());
+  typedHandle(IpcChannels.setHotkey, vStr1, (_e, hotkey: string) => {
     const out = updateSettings(db(), { hotkey });
     refreshToggleHotkey(() => togglePopup());
     return { ...getHotkeyStatus(), hotkey: out.hotkey };
   });
-  ipcMain.handle(IpcChannels.openPrivacySettings, async () => {
+  typedHandle(IpcChannels.openPrivacySettings, vNone, async () => {
     // macOS Files and Folders pane; other platforms have no equivalent.
     if (platform().key !== 'darwin') return false;
-    try {
-      await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders');
-      return true;
-    } catch {
-      return false;
-    }
+    return openExternalUrl(getPopup(), 'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders');
   });
 
-  ipcMain.handle(IpcChannels.defaultFolders, () => {
+  typedHandle(IpcChannels.defaultFolders, vNone, () => {
     const home = os.homedir();
     return ['Desktop', 'Documents', 'Downloads'].map((d) => {
       try {
@@ -826,22 +1189,16 @@ export function registerIpc(): void {
       }
     });
   });
+}
 
-  ipcMain.handle(IpcChannels.runs, () => listRuns(50));
+function registerHistoryIpc(): void {
+  typedHandle(IpcChannels.runs, vNone, () => listRuns(50));
 
-  ipcMain.handle(IpcChannels.reveal, async (_e, dir: string) => {
-    try {
-      if (typeof dir !== 'string' || !dir.trim()) return false;
-      const err = await shell.openPath(dir);
-      return !err;
-    } catch {
-      return false;
-    }
-  });
+  typedHandle(IpcChannels.reveal, vStr1, async (_e, dir: string) => revealPath(getPopup(), dir));
 
   // Undo a run's reversible ops in reverse order, through the normal
   // permission layer (approvals + policy apply to every reversal).
-  ipcMain.handle(IpcChannels.undo, async (e, runId: string) => {
+  typedHandle(IpcChannels.undo, vStr1, async (e, runId: string) => {
     const d = db();
     const s = getSettings(d);
     const cwd = s.agentCwd || os.homedir();
@@ -906,9 +1263,11 @@ export function registerIpc(): void {
     })();
     return { runId: undoRunId };
   });
+}
 
+function registerExtIpc(): void {
   // ---------- Extensions: one typed dispatch channel (main-process only) ----------
-  ipcMain.handle(IpcChannels.ext, async (e, a: ExtAction) => {
+  typedHandle(IpcChannels.ext, vObj0, async (e, a: ExtAction) => {
     const d = db();
     const ext = extService(d);
     try {
@@ -1036,14 +1395,7 @@ export function registerIpc(): void {
           return { filename: `${rec.name}.workflow.json`, content: fs.readFileSync(loc, 'utf8') };
         }
         case 'pickFile': {
-          const r = await dialog.showOpenDialog({
-            properties: ['openFile'],
-            filters: [
-              { name: 'Extension files', extensions: ['zip', 'json', 'md'] },
-              { name: 'All files', extensions: ['*'] },
-            ],
-          });
-          return r.canceled ? null : (r.filePaths[0] || null);
+          return pickFile(getPopup());
         }
         default:
           throw new Error(`unknown ext action: ${(a as { action: string }).action}`);
@@ -1052,6 +1404,105 @@ export function registerIpc(): void {
       throw asError(err);
     }
   });
+}
 
+function registerAttachIpc(): void {
+  // ---------- Attachments ----------
+  try { sweepOldAttachments(appBaseDir()); } catch { /* best-effort orphan sweep */ }
+  typedHandle(IpcChannels.attachPick, vNone, async () => {
+    // Paperclip picker: multi-select through the dialog lock (no blur-hide).
+    let picked: string[] = [];
+    try {
+      picked = await pickAttachFiles(getPopup());
+    } catch { picked = []; }
+    try {
+      const s = getSettings(db());
+      const cwd = s.agentCwd || os.homedir();
+      return picked.map((p) => {
+        let name = p.split(/[\\/]/).pop() || 'file';
+        let size = 0;
+        let mime = 'application/octet-stream';
+        let previewDataUrl: string | undefined;
+        try {
+          const st = fs.statSync(p);
+          size = st.size;
+          if (st.isFile() && size <= ATTACH_LIMITS.maxFileBytes) {
+            const fd = fs.openSync(p, 'r');
+            try {
+              const head = Buffer.alloc(Math.min(size, 8192));
+              const n = fs.readSync(fd, head, 0, head.length, 0);
+              const sniffed = sniffMime(new Uint8Array(head.buffer, head.byteOffset, n), name);
+              if (sniffed && sniffed !== 'exe') {
+                mime = sniffed;
+                if (mime.startsWith('image/')) {
+                  try {
+                    const full = fs.readFileSync(p);
+                    previewDataUrl = processImage(full, mime).dataUrl;
+                  } catch { /* chips-only fallback */ }
+                }
+              }
+            } finally { fs.closeSync(fd); }
+          }
+        } catch { /* keep defaults */ }
+        let verdict = 'allow';
+        let reason: string | undefined;
+        try {
+          const v = classifyAttachPath(p, cwd, policyFor(s, cwd));
+          verdict = v.verdict;
+          reason = v.reason;
+        } catch (e) { verdict = 'deny'; reason = (e as Error).message; }
+        return { path: p, name, size, mime, previewDataUrl, verdict, reason };
+      });
+    } catch { return []; }
+  });
+  typedHandle(IpcChannels.attachProcess, vAttachProc, async (_e, input: { runId: string; name: string; dataBase64: string }) => {
+    try {
+      const runId = String(input.runId || `run-${Date.now()}`);
+      // Pre-cap the base64 payload before decoding so oversize input never allocates.
+      if ((input.dataBase64 || '').length > Math.ceil(ATTACH_LIMITS.maxFileBytes * 4 / 3) + 64) throw new Error(`${ATTACH_STRINGS.oversizeError}: ${input.name} (max 20MB per file)`);
+      const bytes = Buffer.from(input.dataBase64 || '', 'base64');
+      if (!bytes.length) throw new Error(`Rejected ${input.name}: empty file`);
+      if (bytes.length > ATTACH_LIMITS.maxFileBytes) throw new Error(`${ATTACH_STRINGS.oversizeError}: ${input.name} (max 20MB per file)`);
+      const u8 = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length);
+      const sniffed = sniffMime(u8, input.name);
+      if (sniffed === 'exe' || sniffed === null) throw new Error(`Rejected ${input.name}: executable or unknown content (type checked, not extension)`);
+      const mime = resolveAttachMime(sniffed, undefined, input.name);
+      if (mime.startsWith('image/')) {
+        const proc = processImage(bytes, mime);
+        const stored = saveAttachment(appBaseDir(), runId, input.name, proc.mime, proc.bytes, { width: proc.width, height: proc.height, dataUrl: proc.dataUrl });
+        return { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, kind: 'image', width: stored.width, height: stored.height, previewDataUrl: stored.previewDataUrl, sha256: stored.sha256 };
+      }
+      const { text, truncated } = decodeText(bytes);
+      const stored = saveAttachment(appBaseDir(), runId, input.name, mime, Buffer.from(text, 'utf8'), { truncated });
+      return { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, kind: stored.kind, sha256: stored.sha256 };
+    } catch (e) { throw asError(e); }
+  });
+  typedHandle(IpcChannels.attachClassify, vAttachClass, async (_e, input: { path: string }) => {
+    try {
+      const s = getSettings(db());
+      const cwd = s.agentCwd || os.homedir();
+      const v = classifyAttachPath(String(input.path || ''), cwd, policyFor(s, cwd));
+      return { verdict: v.verdict, reason: v.reason };
+    } catch (e) { throw asError(e); }
+  });
+  typedHandle(IpcChannels.attachClear, vStr1, async (_e, runId: string) => {
+    try { deleteRunAttachments(appBaseDir(), String(runId || '')); } catch { /* best-effort */ }
+    return true;
+  });
+}
+
+/** Single registration entry (main.ts calls this once at startup). */
+export function registerIpc(): void {
+  registerSettingsIpc();
+  registerDataIpc();
+  registerSlashIpc();
+  registerWorkflowIpc();
+  registerChatIpc();
+  registerAgentIpc();
+  registerPlatformIpc();
+  registerHistoryIpc();
+  registerExtIpc();
+  registerAttachIpc();
+  assertIpcComplete();
   refreshStopHotkey();
 }

@@ -1,5 +1,6 @@
 import type { Tool } from '../types';
-import { platform } from '../../platform/index';
+import { getPopup } from '../../popup';
+import { openTargetGuarded } from '../../app/dialogs';
 
 export const appOpenTool: Tool = {
   name: 'app_open',
@@ -20,7 +21,7 @@ export const appOpenTool: Tool = {
       return { ok: false, output: 'only http/https/file URLs allowed' };
     }
     try {
-      await platform().openTarget(target);
+      await openTargetGuarded(getPopup(), target);
       return { ok: true, output: `opened ${target}` };
     } catch (e) {
       return { ok: false, output: `open failed: ${(e as Error).message}` };

@@ -22,6 +22,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run assets
+      - run: npm run assets:check
       - run: npm run typecheck
       - run: npx vitest run
       - run: npm run build

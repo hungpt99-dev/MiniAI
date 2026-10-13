@@ -1,0 +1,27 @@
+import type { ProviderCapabilities } from '../types';
+
+interface CapRow { match: RegExp; caps: Partial<ProviderCapabilities>; }
+
+const DEFAULT: ProviderCapabilities = {
+  limitParam: 'auto', requiresLimit: false,
+  supportsTemperature: true, supportsTopP: true,
+  supportsSystemRole: true, supportsDeveloperRole: true,
+  topLevelSystem: false, streamUsage: true,
+  supportsTools: true, reasoningAware: false,
+  supportsVision: true, maxImages: 5, maxBytes: 20 * 1024 * 1024,
+  maxSide: 2048, supportedTypes: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'],
+};
+
+// Reasoning models reject sampling params and want the completion limit.
+// why: data-driven table keeps model knowledge out of request code
+const TABLE: CapRow[] = [
+  { match: /\bo1\b|\bo3\b|gpt-5|gpt-6|o[34](-mini)?\b/i, caps: { limitParam: 'max_completion_tokens', supportsTemperature: false, supportsTopP: false, reasoningAware: true } },
+  { match: /gpt-3\.5-turbo/i, caps: { supportsVision: false, maxImages: 0 } },
+];
+
+export function capabilitiesFor(model: string): ProviderCapabilities {
+  for (const row of TABLE) {
+    if (row.match.test(model || '')) return { ...DEFAULT, ...row.caps };
+  }
+  return { ...DEFAULT };
+}

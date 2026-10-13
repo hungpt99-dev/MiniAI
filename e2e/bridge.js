@@ -12,13 +12,13 @@ async function main() {
   const raw = async (e, ap = false) => await send('Runtime.evaluate', { expression: e, returnByValue: true, awaitPromise: ap });
   const mode = process.argv[2] || 'read';
   if (mode === 'read') {
-    const r = await raw(`(async () => { try { return { ok: true, v: await window.miniAI.getSettings() }; } catch (e) { return { ok: false, err: String(e) }; } })()`, true);
+    const r = await raw(`(async () => { try { return { ok: true, v: await (window.nexio||window.miniAI).getSettings() }; } catch (e) { return { ok: false, err: String(e) }; } })()`, true);
     console.log('SETTINGS:', JSON.stringify(r.result));
   } else {
     const hk = process.argv[3] || 'Alt+X';
-    const r = await raw(`(async () => { try { await window.miniAI.setSettings({hotkey:'${hk}'}); return { ok: true, v: await window.miniAI.getSettings() }; } catch (e) { return { ok: false, err: String(e) }; } })()`, true);
+    const r = await raw(`(async () => { try { await (window.nexio||window.miniAI).setSettings({hotkey:'${hk}'}); return { ok: true, v: await (window.nexio||window.miniAI).getSettings() }; } catch (e) { return { ok: false, err: String(e) }; } })()`, true);
     console.log('SET:', JSON.stringify(r.result));
-    const r2 = await ev(`window.miniAI.getSettings()`, true);
+    const r2 = await ev(`(window.nexio||window.miniAI).getSettings()`, true);
     console.log('SETTINGS:', JSON.stringify(r2.value));
   }
   ws.close();

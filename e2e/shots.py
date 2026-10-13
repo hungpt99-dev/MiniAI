@@ -4,7 +4,7 @@ from pywinauto import Desktop
 from PIL import ImageGrab
 
 name = sys.argv[1]
-els = find_elements(title='MiniAI', top_level_only=True, backend='uia')
+els = find_elements(title='Nexio', top_level_only=True, backend='uia') + find_elements(title='MiniAI', top_level_only=True, backend='uia')
 if not els:
     print('NO-WINDOW')
     sys.exit(0)

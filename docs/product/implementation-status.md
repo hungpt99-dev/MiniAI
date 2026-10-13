@@ -10,20 +10,16 @@ Verified from source; packaged-SQLite caveat in main README.
 | Secrets | safeStorage DPAPI + XOR fallback (dev `console.warn`), `redact()` |
 | Env fallback | `${PROVIDER}_API_KEY` in `ipc.ts` |
 | DB | `%APPDATA%/Nexio/nexio.db` or `NEXIO_DATA_DIR`, WAL mode |
-| Router | Freezes mode/runtime/session/requestId, no silent fallback |
+| Router | Freezes mode/session/requestId, no silent fallback; agent → built-in loop only |
 | Tab toggle | Palette/IME/focus guards + Alt+M |
 | Slash | Scope chat/agent/both with suggestions |
 | Workflows | prompt → transform → conditional → user-input → output |
 
-## Experimental
-
-| Area | Detail |
-|---|---|
-| Agent adapters | opencode HTTP SSE, claude/codex CLI JSONL (see agents docs) |
+| Do loop | Built-in tool loop in main, approvals, redacted JSONL + runs.jsonl |
 
 ## Planned / known gaps
 
 | Area | Detail |
 |---|---|
 | Packaged SQLite | Electron 33 bundles Node 20; `node:sqlite` needs 22.5+ — packaged app fails to open DB. Documented, not fixed. |
-| Tray icon | `assets/icon.svg` placeholder, needs PNG. |
+| Tray icon | `assets/icon.png` + `assets/tray/` sizes; macOS `Nexio-Template` pair. |

@@ -4,11 +4,6 @@ import os from 'node:os';
 import type { AlwaysRule, PolicyContext, Risk } from './types';
 import { platform, type PlatformAdapter } from '../platform/index';
 
-/** Tools whose output is attacker-influenced data (flag follow-up write/destructive calls). */
-export const UNTRUSTED_SOURCE_TOOLS = new Set([
-  'fs_read', 'fs_list', 'fs_search', 'web_fetch', 'web_search', 'clipboard_read',
-]);
-
 const NULL_BYTE = /\0/;
 
 function isUnc(p: string): boolean {

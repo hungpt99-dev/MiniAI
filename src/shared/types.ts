@@ -1,7 +1,6 @@
 export type ProviderId = 'openai' | 'anthropic' | 'gemini' | 'compatible';
 
 export type Mode = 'chat' | 'agent';
-export type RuntimeId = 'opencode' | 'claude' | 'codex';
 export type SlashScope = 'chat' | 'agent' | 'all';
 
 export interface ChatMessage {
@@ -61,14 +60,14 @@ export interface Settings {
   model: string;
   baseUrl?: string;
   temperature?: number;
+  /** Custom provider only: send temperature. Default true. */
+  sendTemperature?: boolean;
+  /** Compatible-only: image support Auto (probe) / On / Off. Default Auto. */
+  compatibleImages?: 'auto' | 'on' | 'off';
   theme: 'light' | 'dark';
   hotkey: string;
   mode: Mode;
-  agentRuntime: RuntimeId;
   modeHotkey: string;
-  opencodeBaseUrl?: string;
-  claudeBin?: string;
-  codexBin?: string;
   agentCwd?: string;
   agentAllowedRoots?: string[];
   agentAlwaysAllow?: AgentAlwaysRule[];
@@ -86,7 +85,7 @@ export interface NexioError {
   message: string;
 }
 
-/** Single-channel extension management (nexio:ext). Renderer-safe: plain data only. */
+/** Single-channel extension management (the ext dispatch channel). Renderer-safe: plain data only. */
 export interface ExtSourceInput {
   sourceType: 'folder' | 'zip' | 'git' | 'paste' | 'file';
   path?: string;

@@ -39,7 +39,8 @@ export const win32Adapter: PlatformAdapter = {
     } catch { /* already dead */ }
   },
   shellForCommand(command: string): { bin: string; args: string[] } {
-    return { bin: 'powershell', args: ['-NoProfile', '-NonInteractive', '-Command', command] };
+    // PowerShell -Command maps any native failure to exit 1; forward the real code.
+    return { bin: 'powershell', args: ['-NoProfile', '-NonInteractive', '-Command', `${command}; exit $LASTEXITCODE`] };
   },
   async loginEnv(): Promise<NodeJS.ProcessEnv> {
     return process.env;

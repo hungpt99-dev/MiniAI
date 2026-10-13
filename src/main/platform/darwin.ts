@@ -31,11 +31,6 @@ async function readLoginEnv(shellBin: string): Promise<NodeJS.ProcessEnv> {
   return loginEnvCache;
 }
 
-/** Test seam: drop the cached login env between tests. */
-export function __resetLoginEnvCache(): void {
-  loginEnvCache = null;
-}
-
 export const darwinAdapter: PlatformAdapter = {
   key: 'darwin',
   shellName: 'zsh',
@@ -217,8 +212,3 @@ export const darwinAdapter: PlatformAdapter = {
     }
   },
 };
-
-/** Async login-shell env for child processes (cached, short timeout). */
-export async function darwinLoginEnv(): Promise<NodeJS.ProcessEnv> {
-  return darwinAdapter.loginEnv();
-}

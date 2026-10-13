@@ -31,4 +31,6 @@ npm run dist   # electron-builder --win portable
 - No lint/format tooling — match surrounding 2-space style, CRLF.
 - No secrets in code, logs, fixtures, or screenshots.
   API keys live in OS keychain / env only, never committed.
+- Live provider smoke is manual and opt-in (`NEXIO_LIVE_SMOKE=1`,
+  see `docs/development/testing.md`); never commit keys or transcripts.
 - Update docs (`docs/`) when behavior changes.

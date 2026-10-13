@@ -3,12 +3,24 @@
 const $ = (id) => document.getElementById(id);
 const messagesEl = $('messages'), inputEl = $('input'), paletteEl = $('palette');
 let convId = null, paletteItems = [], paletteActive = 0, assistantDiv = null;
-let mode = 'chat', runtime = 'opencode', reqSeq = 0;
+let mode = 'chat', reqSeq = 0;
 let settingsProvider = 'openai';
 // True once the user explicitly picks a pill this session (wins over intent routing).
 let modeExplicitSession = false;
 function selectMode(m) { modeExplicitSession = true; setMode(m); }
-let currentView = null; // single-panel flow: 'palette'|'messages'|'settings'|'history'|null
+let view = 'idle'; // single view: 'idle'|'palette'|'run'|'settings'|'extensions'|'history'|'onboard'
+let returnTo = 'idle'; // idle|run origin for Esc/Back (mirrors shared/view.ts openView/goBack)
+let currentView = null; // legacy alias: 'palette'|'messages'|'settings'|'history'|'extensions'|'onboard'|null
+function hasRun() { return messagesEl.children.length > 0 || ($('agent-steps') && $('agent-steps').children.length > 0); }
+function backTarget() { return returnTo === 'run' && !hasRun() ? 'idle' : returnTo; }
+function attachPending() { try { return typeof attachPendingCount === 'function' ? attachPendingCount() : 0; } catch { return 0; } }
+// why: starter suggestions only on a fresh idle composer — mirrors shared/view.ts isEmpty
+function isEmptyUI() {
+  const steps = $('agent-steps');
+  const toolCount = steps ? steps.querySelectorAll('.tool-name').length : 0;
+  const active = (typeof agentRunning === 'function' && agentRunning());
+  return !inputEl.value && messagesEl.children.length === 0 && toolCount === 0 && attachPending() === 0 && !active;
+}
 let drafts = { chat: '', agent: '' };
 
 // Fail visibly, not half-wired, if the preload bridge did not load.
@@ -31,9 +43,6 @@ function updateModeUI() {
   $('tab-chat').setAttribute('aria-selected', String(isChat));
   $('tab-agent').classList.toggle('active', !isChat);
   $('tab-agent').setAttribute('aria-selected', String(!isChat));
-  const rt = $('runtime');
-  rt.textContent = runtime;
-  rt.classList.toggle('hidden', isChat);
   const chip = $('agent-cwd');
   if (chip) chip.classList.toggle('hidden', isChat);
   inputEl.placeholder = isChat ? 'Ask anything…' : 'What do you want to do?';
@@ -48,12 +57,6 @@ function grow() {
   requestResize();
 }
 
-// why: keep tall pastes to one compact user row while sending the full text
-function userLabel(t) {
-  const first = String(t).split('\n')[0];
-  return (first.length > 120 || String(t).includes('\n')) ? first.slice(0, 120) + '…' : t;
-}
-
 function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 // Readable error text: drop Electron's invoke wrapper, tolerate non-Error rejections.
 function errText(e) {
@@ -64,13 +67,14 @@ function errText(e) {
     .replace(/^Error: /, '');
 }
 
-// markdown-lite: code blocks, inline code, bold, italic, links, line breaks
+// markdown-lite: code blocks, headings, lists, tables, inline code, bold, italic, links, line breaks
 function mdLite(src) {
   const blocks = [];
   let html = esc(src).replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
     blocks.push(`<pre><code>${code}</code></pre>`);
     return `\u0000${blocks.length - 1}\u0000`;
   });
+  html = mdBlocks(html);
   html = html
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
@@ -80,15 +84,119 @@ function mdLite(src) {
   return html.replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[Number(i)]);
 }
 
+// why: headings/lists/tables need line structure; the inline pass runs after so inner markup still formats
+function mdBlocks(src) {
+  const lines = src.split('\n');
+  const out = [];
+  const listRe = /^(?:[-*]|\d+[.)])\s+(.*)$/;
+  const rowCells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const h = /^(#{1,4})\s+(.*\S)\s*$/.exec(line);
+    if (h) { out.push(`<div class="md-h">${h[2]}</div>`); i++; continue; }
+    if (line.includes('|') && i + 1 < lines.length && lines[i + 1].includes('-') &&
+        /^\s*\|?[\s:|-]+\|?[\s|:-]*$/.test(lines[i + 1])) {
+      const head = rowCells(line);
+      if (head.length > 1) {
+        const rows = [];
+        let j = i + 2;
+        while (j < lines.length && lines[j].includes('|') && rowCells(lines[j]).length === head.length) {
+          rows.push(rowCells(lines[j]));
+          j++;
+        }
+        out.push('<div class="tbl"><table><thead><tr>' + head.map((c) => `<th>${c}</th>`).join('') +
+          '</tr></thead><tbody>' + rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('') +
+          '</tbody></table></div>');
+        i = j;
+        continue;
+      }
+    }
+    const m = listRe.exec(line);
+    if (m) {
+      const ordered = /^\d/.test(line);
+      const items = [];
+      while (i < lines.length) {
+        const mm = listRe.exec(lines[i]);
+        if (!mm || /^\d/.test(lines[i]) !== ordered) break;
+        items.push(mm[1]);
+        i++;
+      }
+      out.push((ordered ? '<ol>' : '<ul>') + items.map((t) => `<li>${t}</li>`).join('') + (ordered ? '</ol>' : '</ul>'));
+      continue;
+    }
+    out.push(line);
+    i++;
+  }
+  return out.join('\n');
+}
+
 function addMsg(role, content) {
   const div = document.createElement('div');
   div.className = 'msg ' + role;
-  div.innerHTML = role === 'assistant' ? mdLite(content) : esc(content);
+  if (role === 'user') {
+    // why: You label + 3-line clamp keeps tall pastes to one compact row; click or Enter/Space toggles full text
+    div.innerHTML = '<span class="you-label">You</span><span class="you-prompt you-clamp" tabindex="0" role="button" aria-expanded="false"></span>';
+    const yp = div.querySelector('.you-prompt');
+    yp.textContent = content;
+    const toggleYou = (el) => {
+      el.classList.toggle('you-clamp');
+      el.setAttribute('aria-expanded', String(!el.classList.contains('you-clamp')));
+    };
+    yp.onclick = (e) => toggleYou(e.currentTarget);
+    yp.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleYou(e.currentTarget); }
+    };
+  } else {
+    div.innerHTML = mdLite(content);
+    decorateCode(div);
+  }
   messagesEl.appendChild(div);
-  const view = $('view');
-  if (view) view.scrollTop = view.scrollHeight; // .view is the only scroller
-  if (currentView !== 'messages') showView('messages');
+  const $viewEl = $('view');
+  if ($viewEl) $viewEl.scrollTop = $viewEl.scrollHeight; // .view is the only scroller
+  // why: no view yank here — senders switch explicitly; the approval yank lives in handleAgentEvent
   return div;
+}
+
+function copySvg() {
+  return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch {}
+  ta.remove();
+}
+
+function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+  else fallbackCopy(text);
+}
+
+// why: fenced blocks get a ghost Copy without changing mdLite output shape
+function decorateCode(root) {
+  if (!root || !root.querySelectorAll) return;
+  root.querySelectorAll('pre').forEach((pre) => {
+    if (pre.querySelector('.pre-copy')) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pre-copy';
+    btn.innerHTML = copySvg() + '<span>Copy</span>';
+    btn.setAttribute('aria-label', 'Copy code block');
+    btn.title = 'Copy code block';
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      copyText((pre.querySelector('code') || pre).textContent || '');
+      const label = btn.querySelector('span');
+      if (label) label.textContent = 'Copied';
+      clearTimeout(btn._copyT);
+      btn._copyT = setTimeout(() => { if (label) label.textContent = 'Copy'; }, 1500);
+    };
+    pre.appendChild(btn);
+  });
 }
 
 async function ensureConv() {
@@ -114,8 +222,20 @@ async function send() {
 }
 
 async function sendInner() {
+  if (inputEl.disabled) return; // settings/onboard own the composer; Esc/Back re-enables
   const text = inputEl.value.trim();
   if (!text) return;
+  // View-only slashes work during a run (background continues): clear + hide before router/agent.
+  {
+    const early = text.split(' ')[0];
+    if (early === '/extensions' || early === '/settings' || early === '/history' || early === '/log') {
+      inputEl.value = ''; drafts[mode] = ''; hideSuggest(); grow(); hidePalette();
+      if (early === '/extensions') return void openExtensions();
+      if (early === '/settings') return void togglePanel('settings');
+      if (early === '/history') return void togglePanel('history');
+      return void showAgentLog();
+    }
+  }
   if (agentRunning()) return; // one run at a time; Stop first
   inputEl.value = '';
   hideSuggest();
@@ -136,6 +256,7 @@ async function sendInner() {
     if (r.found) {
       if (r.found.scope && r.found.scope !== 'all' && r.found.scope !== mode) {
         addMsg('assistant', `${esc(trigger)} is only available in ${esc(r.found.scope)} mode.`);
+        showView('run');
         return;
       }
       if (r.found.source === 'workflow') {
@@ -145,6 +266,7 @@ async function sendInner() {
           if (info && info.kind === 'ext') return void openWorkflowForm(trigger, info);
         } catch { /* fall through to legacy path */ }
         addMsg('user', text);
+        showView('run');
         assistantDiv = addMsg('assistant', '…');
         try {
           const out = await window.nexio.runWorkflow(trigger, { text: rest.join(' ') });
@@ -160,26 +282,26 @@ async function sendInner() {
       if (r.found.source === 'skill') return void runSkillCommand(trigger);
       if (r.found.source === 'mcp') return void runMcpPrompt(trigger);
       if (trigger === '/new') return void newChat();
-      if (trigger === '/clear') { messagesEl.innerHTML = ''; assistantDiv = null; showView(null); return; }
+      if (trigger === '/clear') { messagesEl.innerHTML = ''; assistantDiv = null; const st0 = $('agent-steps'); if (st0) st0.innerHTML = ''; const ch0 = $('run-chips'); if (ch0) ch0.remove(); inputEl.value = ''; drafts[mode] = ''; try { if (typeof clearAttachTray === 'function') clearAttachTray(); } catch {} hideSuggest(); showView('idle'); try { maybeSuggest(); } catch {} syncChrome(); requestResize(); return; }
       if (trigger === '/help') {
         addMsg('assistant', '**Commands:** /help /new /clear /model /history /settings /log /extensions + prompt templates + workflows + skills.\nType `/` to browse.');
+        showView('run');
         return;
       }
-      if (trigger === '/log') return void showAgentLog();
-      if (trigger === '/extensions') return void openExtensions();
-      if (trigger === '/history') return void togglePanel('history');
-      if (trigger === '/settings') return void togglePanel('settings');
+      // view-only slashes handled before router/agent at the top of sendInner
       if (trigger === '/model') {
         if (rest[0]) { await window.nexio.setSettings({ model: rest[0] }); addMsg('assistant', `Model → ${esc(rest[0])}`); }
         else { const s = await window.nexio.getSettings(); addMsg('assistant', `Current model: ${esc(s.model)}`); }
+        showView('run');
         return;
       }
       addMsg('user', text);
+      showView('run');
       // prompt template: send rendered via chat
       const id = await ensureConv();
       assistantDiv = addMsg('assistant', '…');
       try {
-        await window.nexio.send(id, text, { mode, runtimeId: runtime, sessionId: id, requestId: `r${Date.now()}-${++reqSeq}`, explicit: modeExplicitSession });
+        await window.nexio.send(id, text, { mode, sessionId: id, requestId: `r${Date.now()}-${++reqSeq}`, explicit: modeExplicitSession });
       } catch (e) {
         assistantDiv.innerHTML = mdLite(errText(e));
         inputEl.value = text; // keep unsent input after failures
@@ -189,14 +311,16 @@ async function sendInner() {
       return;
     }
     addMsg('assistant', `Unknown command ${esc(trigger)}. Did you mean: ${(r.suggestions || []).map((s) => esc(s.trigger)).join(', ') || '—'}?`);
+    showView('run');
     return;
   }
-  addMsg('user', userLabel(text));
+  addMsg('user', text);
+  showView('run');
   const id = await ensureConv();
   assistantDiv = addMsg('assistant', '…');
   try {
     const requestId = `r${Date.now()}-${++reqSeq}`;
-    await window.nexio.send(id, text, { mode, runtimeId: runtime, sessionId: id, requestId, explicit: modeExplicitSession });
+    await window.nexio.send(id, text, { mode, sessionId: id, requestId, explicit: modeExplicitSession });
   } catch (e) {
     assistantDiv.innerHTML = mdLite(errText(e));
     inputEl.value = text; // keep unsent input after failures
@@ -210,8 +334,9 @@ window.nexio.onStream((ev) => {
   if (!assistantDiv) assistantDiv = addMsg('assistant', '');
   assistantDiv.dataset.raw = (assistantDiv.dataset.raw || '') + ev.token;
   assistantDiv.innerHTML = mdLite(assistantDiv.dataset.raw);
-  const view = $('view');
-  if (view) view.scrollTop = view.scrollHeight;
+  decorateCode(assistantDiv);
+  const $viewEl = $('view');
+  if ($viewEl) $viewEl.scrollTop = $viewEl.scrollHeight;
 });
 
 // launcher behavior: refocus composer when popup regains OS focus,
@@ -231,6 +356,7 @@ inputEl.addEventListener('input', () => {
   clearTimeout(paletteTimer);
   paletteTimer = setTimeout(async () => {
     const v = inputEl.value;
+    if (inputEl.disabled) return hidePalette(); // no slash palette while a panel owns the composer
     if (!/^\/[A-Za-z0-9_-]*$/.test(v)) return hidePalette(); // single-line slash token only
     paletteItems = await window.nexio.slashQuery(v, mode);
     if (!paletteItems.length) return hidePalette();
@@ -290,38 +416,54 @@ document.addEventListener('click', (e) => { if (!paletteEl.contains(e.target) &&
 $('btn-send').onclick = () => void send();
 $('tab-chat').onclick = () => selectMode('chat');
 $('tab-agent').onclick = () => selectMode('agent');
-const RUNTIMES = ['opencode', 'claude', 'codex'];
-// why: single compact cycle button replaces the native runtime select (same persist semantics)
-$('runtime').onclick = () => {
-  runtime = RUNTIMES[(RUNTIMES.indexOf(runtime) + 1) % RUNTIMES.length];
-  updateModeUI();
-  if (window.nexio?.setSettings) void window.nexio.setSettings({ agentRuntime: runtime }).catch(() => {});
-};
 document.addEventListener('keydown', (e) => {
   if (e.altKey && (e.key === 'm' || e.key === 'M')) { e.preventDefault(); selectMode(mode === 'chat' ? 'agent' : 'chat'); }
   else if (e.altKey && e.key === '1') { e.preventDefault(); selectMode('chat'); }
   else if (e.altKey && e.key === '2') { e.preventDefault(); selectMode('agent'); }
 });
-function defaultView() { return messagesEl.children.length ? 'messages' : null; }
-// why: single-panel flow — exactly one view visible; every switch re-syncs chrome + size
+function defaultView() { return hasRun() ? 'run' : 'idle'; }
+// why: single-view — exactly one node in .view; every switch re-syncs chrome + size
 function showView(name) {
-  currentView = name;
+  if (name == null) name = 'idle';
+  if (name === 'messages') name = 'run'; // legacy alias
+  if (name !== 'run' && document.querySelector('#agent-steps .appr')) { flashApproval(); return; } // never bury an undecided approval
+  if (name !== 'idle' && name !== 'run' && (view === 'idle' || view === 'run')) returnTo = view;
+  view = name;
+  if (name !== 'idle') hideSuggest(); // suggestions live on idle only
+  currentView = name === 'run' ? 'messages' : name === 'idle' ? null : name; // legacy alias
   paletteEl.classList.toggle('hidden', name !== 'palette');
-  messagesEl.classList.toggle('hidden', name !== 'messages');
+  const runEl = $('run');
+  if (runEl) runEl.classList.toggle('hidden', name !== 'run');
+  messagesEl.classList.toggle('hidden', name !== 'run');
   $('settings').classList.toggle('hidden', name !== 'settings');
   $('history').classList.toggle('hidden', name !== 'history');
   $('extensions').classList.toggle('hidden', name !== 'extensions');
   $('onboard').classList.toggle('hidden', name !== 'onboard');
-  if ($('view')) $('view').classList.toggle('hidden', !name);
+  if ($('view')) $('view').classList.toggle('hidden', name === 'idle');
   const wasDisabled = inputEl.disabled;
   inputEl.disabled = name === 'settings' || name === 'onboard';
-  if (name === 'settings') inputEl.placeholder = 'Settings';
-  else if (wasDisabled) updateModeUI(); // restores mode placeholder
+  if (name === 'settings') {
+    inputEl.placeholder = 'Settings';
+    hidePalette(); hideSuggest(); // clear /c: no slash palette or suggestions behind settings
+  } else if (wasDisabled) updateModeUI(); // restores mode placeholder
+  updateRunChip();
   syncChrome();
   requestResize();
+  assertSingleView();
+}
+// dev-only: exactly one top-level view node (idle holds none, or suggest alone)
+function assertSingleView() {
+  try {
+    const ids = ['palette', 'suggest', 'run', 'settings', 'history', 'extensions', 'onboard'];
+    const vis = ids.filter((id) => { const el = $(id); return el && !el.classList.contains('hidden'); });
+    const sug = $('suggest');
+    const sugVisible = !!(sug && !sug.classList.contains('hidden'));
+    const expect = view === 'idle' ? (sugVisible ? 1 : 0) : 1;
+    if (vis.length !== expect) console.assert(false, 'single-view: expected ' + expect + ' visible, got ' + vis.join(','));
+  } catch {}
 }
 function togglePanel(which) {
-  if (currentView === which) showView(defaultView());
+  if (view === which) showView(backTarget());
   else { showView(which); if (which === 'history') void refreshHistory(); }
 }
 $('btn-settings').onclick = async () => {
@@ -331,8 +473,9 @@ $('btn-settings').onclick = async () => {
   paintProv();
   $('set-model').value = s.model;
   $('set-baseurl').value = s.baseUrl || '';
-  $('set-opencode').value = s.opencodeBaseUrl || ''; $('set-claudebin').value = s.claudeBin || '';
-  $('set-codexbin').value = s.codexBin || ''; $('set-agentcwd').value = s.agentCwd || '';
+  if ($('set-sendtemp')) $('set-sendtemp').checked = s.sendTemperature !== false;
+  void refreshModelSuggestions();
+  $('set-agentcwd').value = s.agentCwd || '';
   $('set-stophotkey').value = s.agentStopHotkey || 'Ctrl+Alt+Esc';
   $('set-maxcalls').value = s.agentMaxCalls || 25;
   $('set-reqapprove').checked = s.requireApprovalForWrites !== false;
@@ -345,19 +488,19 @@ $('btn-settings').onclick = async () => {
   paintAgentRules(s.agentAlwaysAllow || []);
   document.documentElement.dataset.theme = 'dark'; // dark-only UI; stored theme untouched
 };
-$('btn-settings-back').onclick = () => { showView(defaultView()); inputEl.focus(); };
-$('btn-history-back').onclick = () => { showView(defaultView()); inputEl.focus(); };
+$('btn-settings-back').onclick = () => { showView(backTarget()); inputEl.focus(); };
+$('btn-history-back').onclick = () => { showView(backTarget()); inputEl.focus(); };
 $('btn-history').onclick = () => togglePanel('history');
 $('btn-save-settings').onclick = async () => {
   const patch = {
     provider: settingsProvider,
     model: $('set-model').value,
-    opencodeBaseUrl: $('set-opencode').value.trim(),
-    claudeBin: $('set-claudebin').value.trim(),
-    codexBin: $('set-codexbin').value.trim(),
     agentCwd: $('set-agentcwd').value.trim(),
   };
-  if (settingsProvider === 'compatible' && $('set-baseurl').value.trim()) patch.baseUrl = $('set-baseurl').value.trim();
+  // Custom keeps its own base URL (empty clears a stale one); other providers use their default.
+  if (settingsProvider === 'compatible') patch.baseUrl = $('set-baseurl').value.trim().replace(/\/+$/, '') || '';
+  else patch.baseUrl = '';
+  if (settingsProvider === 'compatible' && $('set-sendtemp')) patch.sendTemperature = $('set-sendtemp').checked;
   patch.agentStopHotkey = $('set-stophotkey').value.trim() || 'Ctrl+Alt+Esc';
   const mc = parseInt($('set-maxcalls').value, 10);
   if (Number.isFinite(mc)) patch.agentMaxCalls = Math.min(100, Math.max(1, mc));
@@ -369,24 +512,94 @@ $('btn-save-settings').onclick = async () => {
   if (sug.length) patch.suggestions = sug;
   suggestCache = null;
   await window.nexio.setSettings(patch);
-  if ($('set-apikey').value) await window.nexio.setApiKey(patch.provider, $('set-apikey').value);
+  { const k = $('set-apikey').value.trim(); if (k) await window.nexio.setApiKey(patch.provider, k); }
   $('set-apikey').value = '';
   currentStopHotkey = $('set-stophotkey').value.trim() || 'Ctrl+Alt+Esc';
   void refreshHotkeyStatus();
   void loadPlatform(); // re-read toggle/stop labels (hotkeys may have changed)
   $('settings-status').textContent = 'Saved';
+  $('settings-status').classList.remove('ok', 'err');
   setTimeout(() => ($('settings-status').textContent = ''), 1500);
 };
 $('btn-test-conn').onclick = async () => {
-  $('settings-status').textContent = 'Testing…';
-  const r = await window.nexio.testConnectivity(settingsProvider, $('set-model').value, $('set-baseurl').value || undefined);
-  $('settings-status').textContent = r.ok ? 'OK' : ('Fail: ' + (r.error?.code || '') + ' ' + (r.error?.message || ''));
+  const btn = $('btn-test-conn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const status = $('settings-status');
+  status.textContent = 'Testing… (15s max)';
+  status.classList.remove('ok', 'err');
+  // Main aborts at 15s; this timer only re-enables the UI if invoke never settles.
+  const timer = setTimeout(() => {
+    status.textContent = 'Test timed out after 15s — check base URL and network.';
+    status.classList.add('err');
+    btn.disabled = false;
+  }, 16000);
+  try {
+    // Unsaved panel values only; the hidden base URL is ignored unless Custom. Key never logged.
+    const testBase = settingsProvider === 'compatible' ? $('set-baseurl').value.trim().replace(/\/+$/, '') : '';
+    const r = await window.nexio.testConnectivity(
+      settingsProvider, $('set-model').value.trim(),
+      testBase || undefined, $('set-apikey').value.trim() || undefined);
+    clearTimeout(timer);
+    if (r.ok) {
+      const d = r.details || {};
+      status.textContent = `Works: ${d.provider || settingsProvider} ${d.model || ''} ${d.ms || 0}ms tools ${d.toolsOk === false ? 'fallback' : 'ok'}`;
+      status.classList.add('ok');
+    } else {
+      const act = r.error && r.error.action ? ` — ${testAction(r.error.action)}` : '';
+      status.textContent = `Fail: ${(r.error && r.error.message) || 'unknown'}${act}`;
+      status.classList.add('err');
+    }
+  } catch (e) {
+    clearTimeout(timer);
+    status.textContent = errText(e);
+    status.classList.add('err');
+  } finally {
+    clearTimeout(timer);
+    btn.disabled = false;
+  }
 };
+function testAction(a) {
+  if (a === 'check-key') return 'check the API key';
+  if (a === 'check-model') return 'check the model name';
+  if (a === 'shorten') return 'shorten the conversation';
+  if (a === 'retry-later') return 'wait and retry';
+  if (a === 'reset-fixes') return 'try Reset fixes';
+  if (a === 'check-base-url') return 'check the base URL';
+  return '';
+}
+if ($('btn-reset-fixes')) $('btn-reset-fixes').onclick = async () => {
+  try { await window.nexio.resetProviderFixes(); } catch { /* best-effort */ }
+  const status = $('settings-status');
+  status.textContent = 'Provider fixes cleared.';
+  status.classList.remove('ok', 'err');
+};
+// Model suggestions from listModels (best-effort, Anthropic has no listing).
+async function refreshModelSuggestions() {
+  const dl = $('model-list');
+  if (!dl || !window.nexio.listModels) return;
+  try {
+    const sugBase = settingsProvider === 'compatible' ? $('set-baseurl').value.trim().replace(/\/+$/, '') : '';
+    const models = await window.nexio.listModels(settingsProvider, sugBase || undefined);
+    dl.innerHTML = '';
+    for (const m of (models || []).slice(0, 100)) {
+      const o = document.createElement('option');
+      o.value = m;
+      dl.appendChild(o);
+    }
+  } catch { /* suggestions never block settings */ }
+}
 $('btn-new').onclick = () => void newChat();
 async function newChat() {
   const c = await window.nexio.createConversation('New chat');
   convId = c.id; messagesEl.innerHTML = ''; assistantDiv = null;
-  showView(null);
+  inputEl.value = ''; drafts.chat = ''; drafts.agent = ''; // fresh composer
+  try { if (typeof clearAttachTray === 'function') clearAttachTray(); } catch {}
+  hideSuggest();
+  const stN = $('agent-steps'); if (stN) stN.innerHTML = '';
+  const chN = $('run-chips'); if (chN) chN.remove();
+  showView('idle');
+  try { maybeSuggest(); } catch {}
   void refreshHistory();
 }
 async function refreshHistory() {
@@ -396,11 +609,12 @@ async function refreshHistory() {
   for (const c of list) {
     const li = document.createElement('li');
     li.textContent = c.title || c.id;
+    li.dataset.cid = c.id;
     li.onclick = async () => {
       convId = c.id; messagesEl.innerHTML = '';
       const msgs = await window.nexio.getMessages(c.id);
       for (const m of msgs) addMsg(m.role === 'user' ? 'user' : 'assistant', m.content);
-      showView('messages');
+      showView('run');
     };
     ul.appendChild(li);
   }
@@ -410,14 +624,6 @@ async function refreshHistory() {
     const s = await window.nexio.getSettings();
     document.documentElement.dataset.theme = 'dark'; // dark-only UI; stored theme untouched
     mode = s.mode === 'agent' ? 'agent' : 'chat';
-    runtime = s.agentRuntime || 'opencode';
-    try {
-      const caps = await window.nexio.runtimeList?.();
-      if (Array.isArray(caps)) {
-        const cur = caps.find((c) => c.id === runtime);
-        if (cur && !cur.available) $('runtime').title = `Agent runtime: ${runtime} (unavailable)`;
-      }
-    } catch { /* runtime list optional */ }
     updateModeUI();
     try {
       if (window.nexio.isEncryptionAvailable && !(await window.nexio.isEncryptionAvailable())) {
@@ -451,26 +657,29 @@ function requestResize() {
 }
 function syncChrome() {
   const hasMsgs = messagesEl.children.length > 0;
-  const palOpen = currentView === 'palette';
-  const panelOpen = currentView === 'settings' || currentView === 'history' || currentView === 'extensions' || currentView === 'onboard';
+  const palOpen = view === 'palette';
+  const panelOpen = view === 'settings' || view === 'history' || view === 'extensions' || view === 'onboard';
   const agentActive = (typeof agentRunning === 'function' && agentRunning()) ||
     ($('agent-steps') && $('agent-steps').children.length > 0);
-  const idle = !inputEl.value && !hasMsgs && !palOpen && !panelOpen && !agentActive;
+  const idle = !inputEl.value && !hasMsgs && !palOpen && !panelOpen && !agentActive && attachPending() === 0;
   if ($('panel')) $('panel').classList.toggle('has-results', hasMsgs || palOpen);
   if ($('hotkey-hint')) $('hotkey-hint').classList.toggle('hidden', !idle);
   if ($('modebar')) $('modebar').classList.toggle('hidden', idle);
   const multi = !palOpen && !hasMsgs && !!inputEl.value && (inputEl.value.includes('\n') || inputEl.scrollHeight > 32);
   if ($('hint-nav')) $('hint-nav').classList.toggle('hidden', multi);
+  if ($('hint-esc')) $('hint-esc').classList.toggle('hidden', !hasMsgs);
   if ($('hint-multi')) $('hint-multi').classList.toggle('hidden', !multi);
-  const hasAnswer = currentView === 'messages' && !!messagesEl.querySelector('.msg.assistant');
+  const hasAnswer = view === 'run' && !!messagesEl.querySelector('.msg.assistant');
   if ($('answer-meta')) $('answer-meta').classList.toggle('hidden', !hasAnswer);
   if ($('actions')) $('actions').classList.toggle('hidden', !hasAnswer);
   if ($('hints')) $('hints').classList.toggle('hidden', idle);
   // single Tab keycap beside the pill: only when composer focused-and-empty (hover handled in CSS)
   document.body.classList.toggle('show-tabkey', document.activeElement === inputEl && !inputEl.value && !inputEl.disabled);
+  updateRunChip();
 }
 // why: keep artboard grouped palette + selected accent + enter cap without touching core logic
 renderPalette = function () {
+  hideSuggest(); // slash palette and starter suggestions never co-show
   paletteEl.innerHTML = '';
   const groups = [['PROMPTS', paletteItems.filter((it) => it.source !== 'workflow' && it.source !== 'skill' && it.source !== 'mcp')], ['WORKFLOWS', paletteItems.filter((it) => it.source === 'workflow')], ['SKILLS', paletteItems.filter((it) => it.source === 'skill')], ['MCP', paletteItems.filter((it) => it.source === 'mcp')]];
   const idxOf = new Map(paletteItems.map((it, i) => [it, i]));
@@ -543,22 +752,26 @@ try { inputEl.focus(); } catch { /* preview */ }
 setTimeout(() => { try { if (document.activeElement !== inputEl) inputEl.focus(); } catch {} }, 60);
 if ($('btn-save-settings')) $('btn-save-settings').addEventListener('click', () => setTimeout(() => { void refreshModelName(); requestResize(); }, 100));
 if ($('btn-copy')) $('btn-copy').addEventListener('click', async () => {
+  const btn = $('btn-copy');
   const divs = messagesEl.querySelectorAll('.msg.assistant');
   const last = divs[divs.length - 1];
   if (!last) return;
   const text = (last.dataset && last.dataset.raw) || last.textContent || '';
   try { await navigator.clipboard.writeText(text); }
-  catch {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    try { document.execCommand('copy'); } catch {}
-    ta.remove();
-  }
+  catch { fallbackCopy(text); }
+  // why: ghost buttons confirm inline; orig stored once so rapid clicks still restore the icon markup
+  if (!btn.dataset.orig) btn.dataset.orig = btn.innerHTML;
+  const orig = btn.dataset.orig;
+  btn.innerHTML = copySvg() + 'Copied';
+  setTimeout(() => { btn.innerHTML = orig; }, 1500);
 });
 if ($('btn-followup')) $('btn-followup').addEventListener('click', () => inputEl.focus());
 if ($('btn-newchat')) $('btn-newchat').addEventListener('click', () => void newChat());
+// why: meta row reads model left, ghost actions right; IDs and handlers move with the node
+(function layoutMetaRow() {
+  const meta = $('answer-meta'), actions = $('actions');
+  if (meta && actions && actions.parentNode !== meta) meta.appendChild(actions);
+})();
 // segmented provider is the only provider control (native select deleted);
 // Base URL row shows only for Custom
 function paintProv() {
@@ -566,11 +779,13 @@ function paintProv() {
   if (seg) seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.prov === settingsProvider));
   const fb = $('fld-baseurl');
   if (fb) fb.classList.toggle('hidden', settingsProvider !== 'compatible');
+  const st = $('fld-sendtemp');
+  if (st) st.classList.toggle('hidden', settingsProvider !== 'compatible');
 }
 (function () {
   const seg = $('set-prov-seg');
   if (!seg) return;
-  seg.querySelectorAll('button').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); settingsProvider = b.dataset.prov; paintProv(); }));
+  seg.querySelectorAll('button').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); settingsProvider = b.dataset.prov; paintProv(); void refreshModelSuggestions(); }));
   paintProv();
 })();
 // Esc: results showing -> collapse + clear; second Esc hides (capture runs before core closer)
@@ -584,25 +799,33 @@ document.addEventListener('keydown', (e) => {
   }
   const palOpen = !paletteEl.classList.contains('hidden');
   if (palOpen) { e.stopPropagation(); hidePalette(); inputEl.focus(); return; }
-  const setOpen = currentView === 'settings';
-  const histOpen = currentView === 'history';
-  const extOpen = currentView === 'extensions';
-  const obOpen = currentView === 'onboard';
+  const setOpen = view === 'settings';
+  const histOpen = view === 'history';
+  const extOpen = view === 'extensions';
+  const obOpen = view === 'onboard';
   const sugBox = $('suggest');
   if (sugBox && !sugBox.classList.contains('hidden')) { e.stopPropagation(); hideSuggest(); inputEl.focus(); return; }
+  if (dismissRootConfirm()) { e.stopPropagation(); if (rootConfirmPrior && document.contains(rootConfirmPrior)) rootConfirmPrior.focus(); else ($('btn-agent-add-root') || inputEl).focus(); rootConfirmPrior = null; return; } // Esc drops the add-folder confirm first, restoring prior focus
   if (setOpen || histOpen || extOpen || obOpen) { // dismiss panels before collapsing results
     e.stopPropagation();
-    if (currentView === 'onboard') { void skipOnboard(); return; }
-    showView(defaultView());
+    if (view === 'onboard') { void skipOnboard(); return; }
+    showView(backTarget());
     syncChrome(); requestResize(); inputEl.focus(); return;
   }
-  if (messagesEl.children.length > 0) {
+  if (hasRun()) {
     e.stopPropagation();
+    if (document.querySelector('#agent-steps .appr')) { flashApproval(); inputEl.focus(); return; } // never bury an undecided approval
     messagesEl.innerHTML = '';
     assistantDiv = null;
-    showView(null);
+    inputEl.value = ''; drafts.chat = ''; drafts.agent = ''; // fresh composer
+    try { if (typeof clearAttachTray === 'function') clearAttachTray(); } catch {}
+    hideSuggest();
+    const stC = $('agent-steps'); if (stC) stC.innerHTML = '';
+    const chC = $('run-chips'); if (chC) chC.remove();
+    showView('idle');
     syncChrome();
     requestResize();
+    try { maybeSuggest(); } catch {}
     inputEl.focus();
   }
 }, true);
@@ -614,8 +837,8 @@ var agentCwd = '';
 function agentRunning() { return !!agentState; }
 
 function agentScroll() {
-  const view = $('view');
-  if (view) view.scrollTop = view.scrollHeight;
+  const $viewEl = $('view');
+  if ($viewEl) $viewEl.scrollTop = $viewEl.scrollHeight;
 }
 
 function syncAgentFooter() {
@@ -628,13 +851,14 @@ function paintChip() {
   const chip = $('agent-cwd');
   if (!chip) return;
   const label = agentCwd ? agentCwd.split(/[\\/]/).filter(Boolean).slice(-2).join('/') : 'home';
-  chip.textContent = '📁 ' + label;
+  chip.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>';
+  chip.appendChild(document.createTextNode(' ' + label));
   chip.title = agentCwd || 'Working folder (default: home) — click to change';
 }
 
 function finalizeSpinners(except) {
   document.querySelectorAll('#agent-steps .ic.spin').forEach((el) => {
-    if (el !== except) { el.classList.remove('spin'); el.textContent = '✓'; }
+    if (el !== except) { el.classList.remove('spin'); el.innerHTML = stepSvg(ICO_OK); }
   });
 }
 
@@ -648,11 +872,19 @@ function addAgentRow(kind, html) {
   return row;
 }
 
+// why: stroke icons keep the renderer emoji-free; same 14px box as the old glyphs
+const ICO_OK = '<path d="M5 12l5 5 9-11"/>';
+const ICO_FAIL = '<path d="M6 6l12 12M18 6L6 18"/>';
+const ICO_WAIT = '<path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/>';
+function stepSvg(path) {
+  return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+}
+
 function iconFor(state) {
   if (state === 'run') return '<span class="ic spin" aria-hidden="true"></span>';
-  if (state === 'ok') return '<span class="ic" aria-hidden="true">✓</span>';
-  if (state === 'fail') return '<span class="ic" aria-hidden="true">✗</span>';
-  if (state === 'wait') return '<span class="ic" aria-hidden="true">⛨</span>';
+  if (state === 'ok') return `<span class="ic" aria-hidden="true">${stepSvg(ICO_OK)}</span>`;
+  if (state === 'fail') return `<span class="ic" aria-hidden="true">${stepSvg(ICO_FAIL)}</span>`;
+  if (state === 'wait') return `<span class="ic" aria-hidden="true">${stepSvg(ICO_WAIT)}</span>`;
   return '<span class="ic" aria-hidden="true">•</span>';
 }
 
@@ -737,10 +969,21 @@ function handleAgentEvent(runId, ev) {
   const st = agentState;
   if (!st) return;
   if (ev.type === 'step') {
-    finalizeSpinners();
-    addAgentRow('step', iconFor('run') + `<div class="tx">${esc(ev.text || 'Working…')}</div>`);
+    // Do-only planning narration: one pending row until tools run (Ask streams via onStream, never here)
+    let row = document.querySelector('#agent-steps .plan-row');
+    if (row) {
+      const tx = row.querySelector('.tx');
+      if (tx) tx.textContent = ev.text || 'Working…';
+    } else {
+      row = addAgentRow('tool',
+        iconFor('run') + `<div class="tx">${esc(ev.text || 'Working…')}</div><span class="dur"></span>`);
+      row.classList.add('plan-row');
+    }
+    finalizeSpinners(row.querySelector('.ic'));
   } else if (ev.type === 'tool_call') {
     finalizeSpinners();
+    // planning narration is replaced by the N-steps header once tools run
+    document.querySelectorAll('#agent-steps .plan-row').forEach((r) => r.remove());
     const row = addAgentRow('tool',
       iconFor('run') + `<div class="tx"><span class="tool-name">${esc(ev.tool)}</span> ` +
       `<span>${esc(ev.summary || '')}</span>` +
@@ -757,16 +1000,18 @@ function handleAgentEvent(runId, ev) {
       st.rows.set(ev.id, row);
     } else {
       const ic = row.querySelector('.ic');
-      if (ic) { ic.classList.remove('spin'); ic.textContent = '⛨'; }
+      if (ic) { ic.classList.remove('spin'); ic.innerHTML = stepSvg(ICO_WAIT); }
     }
     row.appendChild(buildApprovalCard(runId, ev));
+    expandSteps(); // a collapsed run would hide the card (collapsed hides .astep)
+    if (view !== 'run') showView('run'); // yank to run so Deny/Allow is seen; returnTo untouched
     agentScroll();
   } else if (ev.type === 'tool_result') {
     const row = st.rows.get(ev.id);
     const dur = fmtDur(ev.durationMs);
     if (row) {
       const ic = row.querySelector('.ic');
-      if (ic) { ic.classList.remove('spin'); ic.textContent = ev.ok ? '✓' : '✗'; }
+      if (ic) { ic.classList.remove('spin'); ic.innerHTML = stepSvg(ev.ok ? ICO_OK : ICO_FAIL); }
       const d = row.querySelector('.dur');
       if (d && dur) d.textContent = dur;
       const tx = row.querySelector('.tx');
@@ -802,12 +1047,16 @@ function handleAgentEvent(runId, ev) {
     }
     agentScroll();
   } else if (ev.type === 'text_delta') {
+    document.querySelectorAll('#agent-steps .plan-row').forEach((r) => r.remove()); // answer replaces narration
     finalizeSpinners();
     if (!st.answerDiv) st.answerDiv = addMsg('assistant', '');
     st.answerDiv.dataset.raw = (st.answerDiv.dataset.raw || '') + ev.text;
     st.answerDiv.innerHTML = mdLite(st.answerDiv.dataset.raw);
+    decorateCode(st.answerDiv);
     agentScroll();
   } else if (ev.type === 'done') {
+    // why: remove narration first so a zero-tool run keeps no checkmark, then finalize live rows
+    document.querySelectorAll('#agent-steps .plan-row').forEach((r) => r.remove());
     finalizeSpinners();
     if (st.answerDiv) st.answerDiv.classList.remove('streaming');
     collapseSteps();
@@ -818,18 +1067,23 @@ function handleAgentEvent(runId, ev) {
     syncChrome();
     requestResize();
   } else if (ev.type === 'error') {
+    document.querySelectorAll('#agent-steps .plan-row').forEach((r) => r.remove());
     finalizeSpinners();
     addAgentRow('error', iconFor('fail') + `<div class="tx">${esc(ev.message || 'Error')}</div>`);
     setRouteStatus(null);
     clearRunCards(runId);
+    expandSteps();
     endAgentRun();
   } else if (ev.type === 'stopped') {
+    document.querySelectorAll('#agent-steps .plan-row').forEach((r) => r.remove());
     finalizeSpinners();
     addAgentRow('stopped', iconFor('fail') + '<div class="tx">Stopped — nothing is still running.</div>');
     setRouteStatus(null);
     clearRunCards(runId);
+    expandSteps();
     endAgentRun();
   }
+  syncSteps();
   syncAgentFooter();
   syncChrome();
   requestResize();
@@ -849,15 +1103,17 @@ async function startAgentRun(text) {
 
 async function beginRun(userText) {
   const id = await ensureConv();
+  hideSuggest(); // a run is never an empty composer
   agentState = { runId: null, rows: new Map(), answerDiv: null };
   const oldChips = $('run-chips');
   if (oldChips) oldChips.remove();
   const steps = $('agent-steps');
   if (steps) { steps.innerHTML = ''; steps.classList.remove('hidden'); steps.classList.remove('collapsed'); }
-  addMsg('user', userLabel(userText));
+  addMsg('user', userText);
   assistantDiv = null;
-  showView('messages');
+  showView('run');
   if (steps) steps.classList.remove('hidden');
+  syncSteps();
   syncAgentFooter();
   syncChrome();
   requestResize();
@@ -903,11 +1159,13 @@ function clearRunCards(runId) {
 async function showAgentLog() {
   try {
     const log = await window.nexio.agentLog();
-    if (!log) { addMsg('assistant', 'No agent logs yet.'); return; }
+    if (!log) { addMsg('assistant', 'No agent logs yet.'); showView('run'); return; }
     const tail = String(log.content || '').slice(-3000);
     addMsg('assistant', `**Latest agent log:** ${log.path}\n\`\`\`\n${tail}\n\`\`\``);
+    showView('run');
   } catch (e) {
     addMsg('assistant', errText(e));
+    showView('run');
   }
 }
 
@@ -934,6 +1192,71 @@ function paintAgentRoots(roots) {
     li.appendChild(btn);
     ul.appendChild(li);
   });
+}
+
+function dismissRootConfirm() {
+  const old = $('agent-root-confirm');
+  if (old) { old.remove(); requestResize(); return true; }
+  return false;
+}
+// Element focused before the add-folder confirm stole focus (usually the
+// settings "Add folder" button) — Esc restores it instead of the composer.
+var rootConfirmPrior = null;
+
+function rootNotice(text) {
+  const ul = $('agent-roots');
+  if (!ul) return;
+  dismissRootConfirm();
+  const li = document.createElement('li');
+  li.id = 'agent-root-confirm';
+  const span = document.createElement('span');
+  span.textContent = text;
+  const ok = document.createElement('button');
+  ok.type = 'button';
+  ok.textContent = 'Dismiss';
+  ok.onclick = () => { dismissRootConfirm(); };
+  li.appendChild(span);
+  li.appendChild(ok);
+  ul.appendChild(li);
+  requestResize();
+}
+
+// Inline add-folder confirm: touches only the settings list, so the composer
+// draft, scroll position and any running agent are left alone.
+function confirmAddRoot(picked) {
+  const ul = $('agent-roots');
+  if (!ul) return;
+  dismissRootConfirm();
+  const li = document.createElement('li');
+  li.id = 'agent-root-confirm';
+  const span = document.createElement('span');
+  span.textContent = 'Add ' + picked + ' to allowed folders?';
+  span.title = picked;
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.textContent = 'Add';
+  add.onclick = async () => {
+    try {
+      const s = await window.nexio.getSettings();
+      const next = [...(s.agentAllowedRoots || [])];
+      if (!next.includes(picked)) next.push(picked);
+      await window.nexio.setSettings({ agentAllowedRoots: next });
+      paintAgentRoots(next);
+    } catch (err) { rootNotice(errText(err)); return; }
+    dismissRootConfirm();
+    requestResize();
+  };
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = 'Cancel';
+  cancel.onclick = () => { dismissRootConfirm(); };
+  li.appendChild(span);
+  li.appendChild(add);
+  li.appendChild(cancel);
+  ul.appendChild(li);
+  rootConfirmPrior = document.activeElement;
+  add.focus();
+  requestResize();
 }
 
 function ruleLabel(r) {
@@ -1016,7 +1339,7 @@ if (window.nexio && typeof window.nexio.onAgentEvent === 'function') {
       agentState = { runId, rows: new Map(), answerDiv: assistantDiv };
       const steps = $('agent-steps');
       if (steps) steps.classList.remove('hidden');
-      showView('messages');
+      showView('run');
       syncAgentFooter();
     }
     if (agentState.runId && agentState.runId !== runId) return;
@@ -1025,6 +1348,19 @@ if (window.nexio && typeof window.nexio.onAgentEvent === 'function') {
   });
 }
 if ($('btn-stop')) $('btn-stop').onclick = () => { stopAgentRun(); inputEl.focus(); };
+function updateRunChip() {
+  const btn = $('btn-runview');
+  if (!btn) return;
+  const running = typeof agentRunning === 'function' && agentRunning();
+  const viewingRun = typeof view !== 'undefined' && view === 'run';
+  const recent = hasRun();
+  let label = null;
+  if (!viewingRun && running) label = 'Running / View';
+  else if (!viewingRun && recent) label = 'Done / View';
+  if (label) { btn.textContent = label; btn.classList.remove('hidden'); }
+  else btn.classList.add('hidden');
+}
+if ($('btn-runview')) $('btn-runview').onclick = () => { showView('run'); inputEl.focus(); };
 if ($('btn-log')) $('btn-log').onclick = () => void showAgentLog();
 if ($('agent-cwd')) $('agent-cwd').onclick = async () => {
   try {
@@ -1044,10 +1380,9 @@ if ($('btn-agent-add-root')) $('btn-agent-add-root').onclick = async () => {  tr
     if (!picked) return;
     const s = await window.nexio.getSettings();
     const next = [...(s.agentAllowedRoots || [])];
-    if (!next.includes(picked)) next.push(picked);
-    await window.nexio.setSettings({ agentAllowedRoots: next });
-    paintAgentRoots(next);
-  } catch { /* picker cancelled */ }
+    if (next.includes(picked)) return;
+    confirmAddRoot(picked);
+  } catch (err) { rootNotice(errText(err)); }
 };
 (function initAgentChrome() {
   paintChip();
@@ -1083,9 +1418,9 @@ async function refreshExtensions() {
   try {
     extData = await extCall({ action: 'list' });
   } catch (e) {
-    box.innerHTML = `<div class="set-head"><h3>Extensions</h3><button id="btn-ext-back" aria-label="Back">←</button></div>` +
+    box.innerHTML = `<div class="set-head"><h3>Extensions</h3><button id="btn-ext-back" class="btn-icon" aria-label="Back" title="Back (Esc)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button></div>` +
       `<div class="msg assistant">${esc(errText(e))}</div>`;
-    $('btn-ext-back').onclick = () => { showView(defaultView()); inputEl.focus(); };
+    $('btn-ext-back').onclick = () => { showView(backTarget()); inputEl.focus(); };
     syncChrome(); requestResize();
     return;
   }
@@ -1105,13 +1440,13 @@ function dotFor(status) {
 function renderExtensions() {
   const box = $('extensions');
   const tabs = [['skills', 'Skills'], ['mcp', 'MCP'], ['hooks', 'Hooks'], ['workflows', 'Workflows']];
-  let html = `<div class="set-head"><h3>Extensions</h3><button id="btn-ext-back" aria-label="Back" title="Back (Esc)">←</button></div>` +
+  let html = `<div class="set-head"><h3>Extensions</h3><button id="btn-ext-back" class="btn-icon" aria-label="Back" title="Back (Esc)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button></div>` +
     `<div class="seg ext-tabs" role="group" aria-label="Extension kind">` +
     tabs.map(([k, lb]) => `<button data-tab="${k}" class="${k === extTab ? 'on' : ''}">${lb}</button>`).join('') +
     `</div><div id="ext-body"></div>` +
     `<div class="row ext-add-row"><button id="btn-ext-add">Add ${extTab === 'mcp' ? 'server' : extTab.replace(/s$/, '')}</button></div>`;
   box.innerHTML = html;
-  $('btn-ext-back').onclick = () => { showView(defaultView()); inputEl.focus(); };
+  $('btn-ext-back').onclick = () => { showView(backTarget()); inputEl.focus(); };
   box.querySelectorAll('.ext-tabs button').forEach((b) => {
     b.onclick = () => { extTab = b.dataset.tab; extSel = null; extSub = null; renderExtensions(); syncChrome(); requestResize(); };
   });
@@ -1533,6 +1868,7 @@ function renderExtTrust(body, sub) {
 async function runSkillCommand(trigger) {
   const name = trigger.replace(/^\//, '');
   addMsg('user', trigger);
+  showView('run');
   try {
     const body = await extCall({ action: 'skillBody', name });
     addMsg('assistant', body);
@@ -1547,6 +1883,7 @@ async function runSkillCommand(trigger) {
 
 async function runMcpPrompt(trigger) {
   addMsg('user', trigger);
+  showView('run');
   try {
     const m = /^\/mcp-([A-Za-z0-9_-]+)-(.+)$/.exec(trigger);
     const text = await extCall({ action: 'mcpPrompt', server: m ? m[1] : '', prompt: m ? m[2] : '', trigger });
@@ -1562,6 +1899,7 @@ async function runMcpPrompt(trigger) {
 
 function openWorkflowForm(trigger, info) {
   addMsg('user', trigger);
+  showView('run');
   const div = addMsg('assistant', `**${esc(trigger)}** — fill inputs, then Run.`);
   const form = document.createElement('div');
   form.className = 'extform';
@@ -1571,10 +1909,30 @@ function openWorkflowForm(trigger, info) {
     const span = document.createElement('span');
     span.className = 'flab';
     span.textContent = (inp.label || inp.name) + (inp.required ? ' *' : '');
+    if (inp.type === 'boolean') {
+      lab.classList.add('check');
+      const tx = document.createElement('span');
+      tx.className = 'switch-tx';
+      tx.appendChild(span);
+      lab.appendChild(tx);
+      const field = document.createElement('input');
+      field.type = 'checkbox';
+      field.dataset.name = inp.name;
+      field.setAttribute('role', 'switch');
+      lab.appendChild(field);
+      const track = document.createElement('span');
+      track.className = 'switch-track';
+      track.setAttribute('aria-hidden', 'true');
+      const knob = document.createElement('span');
+      knob.className = 'switch-knob';
+      track.appendChild(knob);
+      lab.appendChild(track);
+      form.appendChild(lab);
+      return;
+    }
     lab.appendChild(span);
     let field;
     if (inp.type === 'text') { field = document.createElement('textarea'); field.rows = 3; }
-    else if (inp.type === 'boolean') { field = document.createElement('input'); field.type = 'checkbox'; }
     else { field = document.createElement('input'); field.type = inp.type === 'number' ? 'number' : 'text'; }
     field.dataset.name = inp.name;
     if (inp.default) field.value = inp.default;
@@ -1607,9 +1965,63 @@ function openWorkflowForm(trigger, info) {
 if ($('btn-ext')) $('btn-ext').onclick = () => void openExtensions();
 if ($('btn-open-ext')) $('btn-open-ext').onclick = () => void openExtensions();
 /* --- Launcher (appended): result chips, undo, suggestions, run log, onboarding --- */
+// why: blocked view switches (approval guard) pulse the card so the no-op reads as feedback
+function flashApproval() {
+  const card = document.querySelector('#agent-steps .appr');
+  if (!card) return;
+  card.classList.remove('flash');
+  void card.offsetWidth; // restart the pulse when guards fire repeatedly
+  card.classList.add('flash');
+  setTimeout(() => card.classList.remove('flash'), 900);
+}
 function collapseSteps() {
   const steps = $('agent-steps');
-  if (steps && steps.children.length) steps.classList.add('collapsed');
+  if (!steps || steps.querySelector('.appr')) return; // never bury an undecided approval
+  steps.classList.add('collapsed');
+  syncSteps();
+}
+
+function expandSteps() {
+  const steps = $('agent-steps');
+  if (!steps) return;
+  steps.classList.remove('collapsed');
+  syncSteps();
+}
+
+// why: steps show for any run rows — collapsed with a tool-only N-steps chevron, expanded on failure; no toggle until first tool
+function syncSteps() {
+  const steps = $('agent-steps');
+  if (!steps) return;
+  const tools = steps.querySelectorAll('.tool-name').length;
+  const rows = steps.querySelectorAll('.astep').length;
+  let head = steps.querySelector('.steps-toggle');
+  if (!rows) {
+    steps.classList.add('hidden');
+    if (head) head.remove();
+    return;
+  }
+  steps.classList.remove('hidden');
+  if (!tools) {
+    if (head) head.remove();
+    steps.classList.remove('collapsed');
+    return;
+  }
+  if (!head) {
+    head = document.createElement('button');
+    head.type = 'button';
+    head.className = 'steps-toggle';
+    head.onclick = () => {
+      steps.classList.toggle('collapsed');
+      head.setAttribute('aria-expanded', String(!steps.classList.contains('collapsed')));
+      agentScroll();
+      requestResize();
+    };
+    steps.prepend(head);
+  }
+  head.innerHTML = '<span>' + tools + ' step' + (tools === 1 ? '' : 's') + '</span>' +
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+  head.setAttribute('aria-expanded', String(!steps.classList.contains('collapsed')));
+  head.setAttribute('aria-label', tools + ' execution steps — toggle');
 }
 
 function renderRunChips(runId) {
@@ -1633,11 +2045,9 @@ function renderRunChips(runId) {
     void window.nexio.reveal(sum.folder).catch(() => {});
   }));
   if (sum && sum.undoable) host.appendChild(mk('Undo', 'Undo this run', () => void startUndoRun(runId)));
-  host.appendChild(mk('Show steps', 'Show execution steps', () => {
-    if (steps) steps.classList.toggle('collapsed');
-    requestResize();
-  }));
-  if (steps && steps.parentNode) steps.parentNode.insertBefore(host, steps.nextSibling);
+  const runHost = $('run');
+  if (runHost) runHost.appendChild(host);
+  else if (steps && steps.parentNode) steps.parentNode.insertBefore(host, steps.nextSibling);
   requestResize();
 }
 
@@ -1648,7 +2058,8 @@ async function startUndoRun(runId) {
   if (oldChips) oldChips.remove();
   const steps = $('agent-steps');
   if (steps) { steps.innerHTML = ''; steps.classList.remove('hidden'); steps.classList.remove('collapsed'); }
-  showView('messages');
+  showView('run');
+  syncSteps();
   syncAgentFooter();
   syncChrome();
   requestResize();
@@ -1665,10 +2076,13 @@ async function startUndoRun(runId) {
 // --- Starter suggestions: idle + empty input, fill without executing ---
 var suggestTimer = null;
 var suggestCache = null;
+var suggestSeq = 0; // anti-race: stale timers and in-flight awaits drop their render
 function hideSuggest() {
+  try { suggestSeq = (typeof suggestSeq === 'number' ? suggestSeq : 0) + 1; } catch {}
   clearTimeout(suggestTimer);
   const box = $('suggest');
-  if (box) box.classList.add('hidden');
+  if (box) { box.innerHTML = ''; box.classList.add('hidden'); } // unmount so height collapses
+  try { if (typeof requestResize === 'function') requestResize(); } catch {}
 }
 async function suggestList() {
   if (suggestCache) return suggestCache;
@@ -1688,17 +2102,20 @@ async function suggestList() {
   return suggestCache;
 }
 function maybeSuggest() {
-  hideSuggest();
-  if (inputEl.value || agentRunning()) return;
-  if (currentView === 'settings' || currentView === 'onboard' || currentView === 'extensions') return;
-  if (!paletteEl.classList.contains('hidden')) return;
-  suggestTimer = setTimeout(() => void renderSuggest(), 1000);
+  hideSuggest(); // unmount stale first (bumps suggestSeq)
+  if (view !== 'idle' || !isEmptyUI()) return; // idle + fresh composer only
+  if (!paletteEl.classList.contains('hidden')) return; // slash palette wins
+  const seq = ++suggestSeq;
+  suggestTimer = setTimeout(() => void renderSuggest(seq), 1000);
 }
-async function renderSuggest() {
+async function renderSuggest(seq) {
+  if (seq !== suggestSeq) return; // stale timer
   const box = $('suggest');
-  if (!box || inputEl.value || agentRunning()) return;
+  if (!box || view !== 'idle' || !isEmptyUI()) return;
+  if (!paletteEl.classList.contains('hidden')) return;
   const items = await suggestList();
-  if (!items.length || inputEl.value) return;
+  if (seq !== suggestSeq) return; // cleared or superseded mid-flight
+  if (!items.length || view !== 'idle' || !isEmptyUI() || !paletteEl.classList.contains('hidden')) return;
   box.innerHTML = '';
   for (const text of items.slice(0, 4)) {
     const d = document.createElement('div');
@@ -1706,17 +2123,17 @@ async function renderSuggest() {
     d.setAttribute('role', 'option');
     d.innerHTML = `<span>${esc(text)}</span>`;
     d.onclick = () => {
-      inputEl.value = text;
+      inputEl.value = text; // fill only — the user sends with Enter
       drafts[mode] = text;
       hideSuggest();
       grow();
       inputEl.focus();
+      syncChrome();
     };
     box.appendChild(d);
   }
+  if (seq !== suggestSeq) return;
   box.classList.remove('hidden');
-  const view = $('view');
-  if (view) view.classList.remove('hidden');
   requestResize();
 }
 inputEl.addEventListener('input', () => { if (!inputEl.value) maybeSuggest(); else hideSuggest(); });
@@ -1825,14 +2242,17 @@ function renderOnboard() {
     $('ob-test').onclick = async () => {
       $('ob-status').textContent = 'Testing…';
       try {
-        const r = await window.nexio.testConnectivity(prov, $('ob-key').value, undefined);
+        // (provider, model, baseUrl, key): the stored model fills the missing input.
+        let obModel = '';
+        try { obModel = (await window.nexio.getSettings()).model || ''; } catch {}
+        const r = await window.nexio.testConnectivity(prov, obModel, undefined, $('ob-key').value.trim() || undefined);
         $('ob-status').textContent = r.ok ? 'OK' : ('Fail: ' + (r.error?.code || '') + ' ' + (r.error?.message || ''));
       } catch (e) { $('ob-status').textContent = errText(e); }
     };
     $('ob-next').onclick = async () => {
       try {
         await window.nexio.setSettings({ provider: prov });
-        if ($('ob-key').value) await window.nexio.setApiKey(prov, $('ob-key').value);
+        { const k = $('ob-key').value.trim(); if (k) await window.nexio.setApiKey(prov, k); }
       } catch (e) { $('ob-status').textContent = errText(e); return; }
       obStep = 1;
       renderOnboard();
@@ -1972,8 +2392,608 @@ async function refreshHotkeyStatus() {
 if (window.nexio && typeof window.nexio.onUi === 'function') {
   window.nexio.onUi((ev) => {
     try {
-      if (ev.open === 'settings') { if (currentView !== 'settings') $('btn-settings').click(); }
+      if (ev.open === 'settings') { if (view !== 'settings') $('btn-settings').click(); }
       else if (ev.open === 'log') { void showAgentLog(); }
     } catch { /* preview */ }
   });
 }
+
+/* --- Attachments (appended): tray under input, paste/drop/picker, preview, notices --- */
+(function attachUI() {
+  if (typeof document === 'undefined') return;
+  var trayEl = null, liveEl = null, prevEl = null, inputEl2 = null, panelEl = null, attachBtn = null;
+  try {
+    trayEl = document.getElementById('attach-tray');
+    liveEl = document.getElementById('attach-live');
+    prevEl = document.getElementById('attach-preview');
+    inputEl2 = document.getElementById('input');
+    panelEl = document.getElementById('panel');
+    attachBtn = document.getElementById('btn-attach');
+  } catch (e) { return; }
+  if (!trayEl || !inputEl2) return;
+  var VISION_NOTICE = 'This model does not support images. Switch model to send images — image bytes were not sent.';
+  var DEFAULT_INSTR = 'Describe the attached file(s).';
+  var FIRST_USE = 'Attachments stay on this computer until you send them. Stays on this computer — processing runs on localhost.';
+  var SECRETS_HINT = 'Attachment text may contain secrets — confirm before sharing.';
+  var pending = [];
+  var keySeq = 0;
+  var sentStash = {};
+  var lastUserText = '';
+  var lastHadAttach = false;
+  var previewOpen = false;
+  var previewPrior = null;
+  function base(n) { try { return String(n || 'file').split(/[\\/]/).pop() || 'file'; } catch (e) { return 'file'; } }
+  function fmtSize(b) {
+    b = Number(b) || 0;
+    if (b < 1024) return b + ' B';
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+    return (b / 1024 / 1024).toFixed(1) + ' MB';
+  }
+  function announce(m) {
+    try {
+      if (!liveEl) return;
+      liveEl.classList.remove('hidden');
+      liveEl.textContent = m;
+    } catch (e) { /* live region never breaks sends */ }
+  }
+  function chrome() {
+    try { if (typeof grow === 'function') grow(); } catch (e) {}
+    try { if (typeof syncChrome === 'function') syncChrome(); } catch (e) {}
+    try { if (typeof requestResize === 'function') requestResize(); } catch (e) {}
+  }
+  function fileSvg() {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h9l5 5v15a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><path d="M14 2v6h6"/></svg>';
+  }
+  function showError(msg) {
+    try {
+      var d = document.createElement('div');
+      d.className = 'attach-err';
+      d.textContent = msg;
+      trayEl.appendChild(d);
+      trayEl.classList.remove('hidden');
+      announce(msg);
+      chrome();
+      setTimeout(function () { try { if (d.parentNode) d.parentNode.removeChild(d); chrome(); } catch (e) {} }, 6000);
+    } catch (e) {}
+  }
+  function renderTray(note) {
+    try {
+      trayEl.innerHTML = '';
+      if (!pending.length) {
+        trayEl.classList.add('hidden');
+        try { inputEl2.placeholder = (typeof mode !== 'undefined' && mode === 'agent') ? 'What do you want to do?' : 'Ask anything…'; } catch (e) {}
+        chrome();
+        return;
+      }
+      trayEl.classList.remove('hidden');
+      try { inputEl2.placeholder = 'Add a note, Enter to send…'; } catch (e) {}
+      pending.forEach(function (a) {
+        var item;
+        if (a.kind === 'image' && a.previewUrl) {
+          item = document.createElement('button');
+          item.type = 'button';
+          item.className = 'attach-thumb';
+          item.setAttribute('role', 'listitem');
+          item.setAttribute('aria-label', 'Preview ' + base(a.name));
+          item.title = base(a.name) + ' (' + fmtSize(a.size) + ') — click to preview';
+          var img = document.createElement('img');
+          img.alt = base(a.name);
+          img.src = a.previewUrl;
+          item.appendChild(img);
+        } else {
+          item = document.createElement('div');
+          item.className = 'attach-chip';
+          item.setAttribute('role', 'listitem');
+          item.tabIndex = 0;
+          item.title = base(a.name) + ' (' + fmtSize(a.size) + ')';
+          item.innerHTML = fileSvg() + '<span></span><span class="asz"></span>';
+          item.querySelector('span').textContent = base(a.name);
+          item.querySelector('.asz').textContent = fmtSize(a.size);
+          if (a.verdict === 'approval') {
+            var b = document.createElement('span');
+            b.className = 'aonce';
+            b.textContent = 'Allow once';
+            item.appendChild(b);
+          }
+        }
+        item.dataset.akey = a.key;
+        item.addEventListener('click', function (ev) {
+          if (ev.target && ev.target.classList && ev.target.classList.contains('attach-rm')) return;
+          openPreview(a);
+        });
+        item.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openPreview(a); }
+          else if (ev.key === 'Backspace' || ev.key === 'Delete') { ev.preventDefault(); removeEntry(a.key); }
+        });
+        var rm = document.createElement('button');
+        rm.type = 'button';
+        rm.className = 'attach-rm';
+        rm.setAttribute('aria-label', 'Remove ' + base(a.name));
+        rm.title = 'Remove ' + base(a.name);
+        rm.textContent = '×';
+        rm.addEventListener('click', function (ev) { ev.stopPropagation(); removeEntry(a.key); });
+        if (item.classList.contains('attach-thumb')) item.appendChild(rm);
+        else item.appendChild(rm);
+        trayEl.appendChild(item);
+      });
+      var needSecrets = pending.some(function (a) { return a.kind !== 'image'; });
+      if (needSecrets) {
+        var n = document.createElement('div');
+        n.className = 'attach-note';
+        n.textContent = SECRETS_HINT;
+        trayEl.appendChild(n);
+      }
+      try {
+        if (!window.localStorage.getItem('nexio-attach-notice')) {
+          var f = document.createElement('div');
+          f.className = 'attach-note';
+          f.textContent = FIRST_USE;
+          trayEl.appendChild(f);
+          window.localStorage.setItem('nexio-attach-notice', '1');
+        }
+      } catch (e) {}
+      if (note) announce(note);
+      chrome();
+    } catch (e) { /* tray never breaks the composer */ }
+  }
+  function removeEntry(key) {
+    try {
+      var ix = -1, nm = '';
+      for (var i = 0; i < pending.length; i++) if (pending[i].key === key) { ix = i; nm = base(pending[i].name); break; }
+      if (ix >= 0) pending.splice(ix, 1);
+      renderTray('Removed ' + nm);
+      try { inputEl2.focus(); } catch (e) {}
+    } catch (e) {}
+  }
+  function clearTray() { try { pending = []; renderTray(); } catch (e) {} }
+  function toSendEntry(a) {
+    var o = { name: base(a.name), mime: a.mime, size: a.size };
+    if (a.path) o.path = a.path;
+    else if (a.dataBase64) o.dataBase64 = a.dataBase64;
+    return o;
+  }
+  function drainToSend() { return pending.map(toSendEntry); }
+  function addEntries(list) {
+    try {
+      for (var i = 0; i < list.length; i++) {
+        var a = list[i];
+        if (pending.length >= 5) { showError('Too many attachments (max 5)'); break; }
+        if ((a.size || 0) > 20 * 1024 * 1024) { showError('Attachment too large: ' + base(a.name) + ' (max 20MB per file)'); continue; }
+        if (/\.exe$/i.test(a.name || '')) { showError('Rejected ' + base(a.name) + ': executable files are not allowed'); continue; }
+        a.key = 'k' + (++keySeq);
+        if (!a.kind) a.kind = (a.mime || '').indexOf('image/') === 0 ? 'image' : 'file';
+        pending.push(a);
+      }
+      renderTray(pending.length ? pending.length + ' attachment(s) added' : undefined);
+      try { if (typeof hideSuggest === 'function') hideSuggest(); } catch (e) {} // attached: never an empty composer
+      try { inputEl2.focus(); } catch (e) {}
+    } catch (e) {}
+  }
+  function readFiles(files, asDrop) {
+    try {
+      var arr = [];
+      for (var i = 0; i < files.length; i++) arr.push(files[i]);
+      if (!arr.length) return;
+      if (pending.length + arr.length > 5) { showError('Too many attachments (max 5)'); arr = arr.slice(0, Math.max(0, 5 - pending.length)); }
+      var started = 0;
+      arr.forEach(function (f) {
+        var name = base(f.name || 'pasted-image.png');
+        var mime = f.type || 'application/octet-stream';
+        if ((f.size || 0) > 20 * 1024 * 1024) { showError('Attachment too large: ' + name + ' (max 20MB per file)'); return; }
+        if (/\.exe$/i.test(name)) { showError('Rejected ' + name + ': executable files are not allowed'); return; }
+        started++;
+        try {
+          var r = new FileReader();
+          r.onload = function () {
+            try {
+              var url = String(r.result || '');
+              var b64 = url.indexOf(',') >= 0 ? url.slice(url.indexOf(',') + 1) : '';
+              var isImg = mime.indexOf('image/') === 0;
+              addEntries([{ name: name, mime: mime, size: f.size || b64.length, dataBase64: b64, previewUrl: isImg ? url : undefined, kind: isImg ? 'image' : 'file' }]);
+            } catch (e) {}
+          };
+          r.onerror = function () { showError('Attachment unreadable: ' + name); };
+          r.readAsDataURL(f);
+        } catch (e) { showError('Attachment unreadable: ' + name); }
+      });
+      void asDrop;
+      if (!started) chrome();
+    } catch (e) {}
+  }
+  function insertTextAtCursor(text) {
+    try {
+      var s = inputEl2.selectionStart || inputEl2.value.length;
+      var e2 = inputEl2.selectionEnd || s;
+      inputEl2.value = inputEl2.value.slice(0, s) + text + inputEl2.value.slice(e2);
+      try { if (typeof grow === 'function') grow(); } catch (e) {}
+    } catch (e) { inputEl2.value += text; }
+  }
+  // Paste: image/files + text+image; text-only falls through to the default paste.
+  try {
+    inputEl2.addEventListener('paste', function (e) {
+      try {
+        var cd = e.clipboardData;
+        if (!cd) return;
+        var files = [];
+        if (cd.files) for (var i = 0; i < cd.files.length; i++) files.push(cd.files[i]);
+        var text = '';
+        try { text = cd.getData ? (cd.getData('text/plain') || cd.getData('text') || '') : ''; } catch (e2) {}
+        var kind = files.length && text ? 'mixed' : files.length ? (files.length === 1 ? 'image-only' : 'files-only') : text ? 'text-only' : 'empty';
+        if (kind === 'text-only' || kind === 'empty') return;
+        e.preventDefault();
+        if (kind === 'mixed' && text) insertTextAtCursor(text);
+        readFiles(files, false);
+      } catch (e2) {}
+    });
+  } catch (e) {}
+  // Drop: dashed accent + Drop to attach; always prevent navigate.
+  try {
+    window.addEventListener('dragover', function (e) { try { e.preventDefault(); } catch (e2) {} }, false);
+    window.addEventListener('drop', function (e) { try { e.preventDefault(); } catch (e2) {} }, false);
+    if (panelEl) {
+      panelEl.addEventListener('dragenter', function (e) {
+        try {
+          if (e.dataTransfer && Array.from(e.dataTransfer.types || []).indexOf('Files') >= 0) {
+            e.preventDefault();
+            trayEl.classList.remove('hidden');
+            trayEl.classList.add('dragover');
+          }
+        } catch (e2) {}
+      });
+      panelEl.addEventListener('dragover', function (e) { try { e.preventDefault(); } catch (e2) {} });
+      panelEl.addEventListener('dragleave', function (e) {
+        try { if (e.target === panelEl) trayEl.classList.remove('dragover'); } catch (e2) {}
+      });
+      panelEl.addEventListener('drop', function (e) {
+        try {
+          e.preventDefault();
+          trayEl.classList.remove('dragover');
+          var dt = e.dataTransfer;
+          if (dt && dt.files && dt.files.length) readFiles(dt.files, true);
+          else renderTray();
+        } catch (e2) {}
+      });
+    }
+  } catch (e) {}
+  // Paperclip: multi picker through the dialog lock (main keeps the popup visible).
+  try {
+    if (attachBtn) attachBtn.addEventListener('click', function () {
+      if (!window.nexio || !window.nexio.attachPick) return;
+      attachBtn.disabled = true;
+      window.nexio.attachPick().then(function (res) {
+        attachBtn.disabled = false;
+        try {
+          var list = res || [];
+          if (typeof list === 'string') list = [list];
+          var ok = [];
+          (Array.isArray(list) ? list : []).forEach(function (r) {
+            if (typeof r === 'string') { ok.push({ name: base(r), mime: 'application/octet-stream', size: 0, path: r, kind: 'file', verdict: 'approval' }); return; }
+            if (r && r.verdict === 'deny') { showError('Attachment refused: ' + base(r.name) + (r.reason ? ' — ' + r.reason : '')); return; }
+            if (!r || !r.path) return;
+            ok.push({
+              name: base(r.name || r.path), mime: r.mime || 'application/octet-stream', size: r.size || 0,
+              path: r.path, previewUrl: r.previewDataUrl,
+              kind: (r.mime || '').indexOf('image/') === 0 ? 'image' : 'file',
+              verdict: r.verdict === 'approval' ? 'approval' : undefined,
+            });
+          });
+          if (ok.length) addEntries(ok);
+          else chrome();
+        } catch (e2) {}
+        try { inputEl2.focus(); } catch (e2) {}
+      }).catch(function (err) {
+        attachBtn.disabled = false;
+        var m = 'Attach failed';
+        try { m = (err && err.message) || m; } catch (e2) {}
+        showError(m);
+      });
+    });
+  } catch (e) {}
+  // In-panel preview; window-capture Esc closes it first (before the core closer).
+  function openPreview(a) {
+    try {
+      if (!prevEl) return;
+      previewPrior = document.activeElement;
+      prevEl.innerHTML = '';
+      if (a.kind === 'image' && a.previewUrl) {
+        var img = document.createElement('img');
+        img.alt = base(a.name);
+        img.src = a.previewUrl;
+        prevEl.appendChild(img);
+      } else {
+        var d = document.createElement('div');
+        d.className = 'attach-chip';
+        d.innerHTML = fileSvg() + '<span></span><span class="asz"></span>';
+        d.querySelector('span').textContent = base(a.name);
+        d.querySelector('.asz').textContent = fmtSize(a.size) + ' ' + (a.mime || '');
+        prevEl.appendChild(d);
+      }
+      var cap = document.createElement('div');
+      cap.className = 'ap-cap';
+      cap.textContent = base(a.name) + ' — Esc to close';
+      prevEl.appendChild(cap);
+      var x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'btn';
+      x.textContent = 'Close';
+      x.setAttribute('aria-label', 'Close preview');
+      x.addEventListener('click', closePreview);
+      prevEl.appendChild(x);
+      prevEl.classList.remove('hidden');
+      previewOpen = true;
+      try { if (typeof showView === 'function' && view !== 'run') showView('run'); } catch (e2) {}
+      chrome();
+      try { x.focus(); } catch (e2) {}
+    } catch (e) {}
+  }
+  function closePreview() {
+    try {
+      if (!previewOpen) return false;
+      prevEl.classList.add('hidden');
+      prevEl.innerHTML = '';
+      previewOpen = false;
+      chrome();
+      try { if (previewPrior && document.contains(previewPrior)) previewPrior.focus(); else inputEl2.focus(); } catch (e) {}
+      previewPrior = null;
+      return true;
+    } catch (e) { return false; }
+  }
+  try {
+    window.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && previewOpen) { e.preventDefault(); e.stopPropagation(); closePreview(); }
+    }, true);
+  } catch (e) {}
+  // Tray keyboard: Backspace/Delete removes focused chip, or the last one.
+  try {
+    trayEl.addEventListener('keydown', function (e) {
+      if (e.key !== 'Backspace' && e.key !== 'Delete') return;
+      try {
+        var t = e.target;
+        var holder = t && t.closest ? t.closest('[data-akey]') : null;
+        var key = holder ? holder.dataset.akey : (pending.length ? pending[pending.length - 1].key : null);
+        if (key) { e.preventDefault(); removeEntry(key); }
+      } catch (e2) {}
+    });
+    inputEl2.addEventListener('keydown', function (e) {
+      if (e.key === 'Backspace' && !inputEl2.value && pending.length && !e.isComposing) {
+        e.preventDefault();
+        removeEntry(pending[pending.length - 1].key);
+      }
+    });
+  } catch (e) {}
+  // Empty + attach Enter sends the default instruction (core sendInner returns on '').
+  function emptyAttachEnter(e) {
+    try {
+      if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+      if (inputEl2.value.trim() !== '' || !pending.length) return;
+      e.preventDefault();
+      inputEl2.value = DEFAULT_INSTR;
+      try { if (typeof grow === 'function') grow(); } catch (e2) {}
+      try { if (typeof send === 'function') void send(); } catch (e2) {}
+    } catch (e2) {}
+  }
+  try {
+    inputEl2.addEventListener('keydown', emptyAttachEnter);
+    var sendBtn = document.getElementById('btn-send');
+    if (sendBtn) sendBtn.addEventListener('click', function () {
+      try {
+        if (inputEl2.value.trim() === '' && pending.length) {
+          inputEl2.value = DEFAULT_INSTR;
+          try { if (typeof grow === 'function') grow(); } catch (e2) {}
+        }
+      } catch (e2) {}
+    });
+  } catch (e) {}
+  // Bridge: merge pending into every send/agentStart; stash for history; clear after.
+  function stashFor(cid) {
+    try {
+      if (!cid) return;
+      var cur = sentStash[cid] || [];
+      pending.forEach(function (a) { cur.push({ name: base(a.name), mime: a.mime, size: a.size, previewUrl: a.previewUrl, kind: a.kind }); });
+      sentStash[cid] = cur.slice(-10);
+      lastHadAttach = pending.length > 0;
+    } catch (e) {}
+  }
+  try {
+    if (window.nexio) {
+      if (window.nexio.send) {
+        var _send = window.nexio.send.bind(window.nexio);
+        window.nexio.send = function (cid, text, opts) {
+          opts = opts || {};
+          if (pending.length && !opts.attachments) {
+            var merged = [];
+            try { merged = drainToSend(); } catch (e) {}
+            if (merged.length) opts = Object.assign({}, opts, { attachments: merged });
+          }
+          var had = pending.length;
+          lastHadAttach = false;
+          var p = _send(cid, text, opts);
+          if (had) {
+            try { stashFor(cid); } catch (e) {}
+            clearTray();
+          }
+          return p;
+        };
+      }
+      if (window.nexio.agentStart) {
+        var _astart = window.nexio.agentStart.bind(window.nexio);
+        window.nexio.agentStart = function (cid, text, opts) {
+          opts = opts || {};
+          if (pending.length && !opts.attachments) {
+            var merged2 = [];
+            try { merged2 = drainToSend(); } catch (e) {}
+            if (merged2.length) opts = Object.assign({}, opts, { attachments: merged2 });
+          }
+          var had2 = pending.length;
+          lastHadAttach = false;
+          var p2 = _astart(cid, text, opts);
+          if (had2) {
+            try { stashFor(cid); } catch (e) {}
+            clearTray();
+          }
+          return p2;
+        };
+      }
+    }
+  } catch (e) {}
+  // Ask history: 160px thumbs + chips + Delete attachments menu.
+  function paintHistAttach() {
+    try {
+      var ul = document.getElementById('history-list');
+      if (!ul) return;
+      var items = ul.querySelectorAll('li');
+      items.forEach(function (li) {
+        if (li.dataset.attachDone) return;
+        li.dataset.attachDone = '1';
+        var cid = li.dataset.cid;
+        if (!cid) return;
+        var bag = sentStash[cid] || [];
+        if (!bag.length) return;
+        var wrap = document.createElement('div');
+        wrap.className = 'attach-menu';
+        bag.forEach(function (a) {
+          if (a.kind === 'image' && a.previewUrl) {
+            var im = document.createElement('img');
+            im.className = 'hist-thumb';
+            im.alt = base(a.name);
+            im.src = a.previewUrl;
+            wrap.appendChild(im);
+          } else {
+            var c = document.createElement('span');
+            c.className = 'attach-chip';
+            c.textContent = base(a.name) + ' (' + fmtSize(a.size) + ')';
+            wrap.appendChild(c);
+          }
+        });
+        var del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'linklike';
+        del.textContent = 'Delete attachments';
+        del.setAttribute('aria-label', 'Delete attachments');
+        del.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          // why: the menu stays until the main-process delete lands — a
+          // failure keeps its Retry (this button), never a fake "cleared".
+          function done() {
+            delete sentStash[cid];
+            if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+            announce('Delete attachments — cleared');
+          }
+          try {
+            if (window.nexio && window.nexio.attachClear && cid) {
+              window.nexio.attachClear(cid).then(done, function () {
+                showError('Delete attachments failed — Retry');
+              });
+            } else done();
+          } catch (e2) {}
+        });
+        wrap.appendChild(del);
+        li.appendChild(wrap);
+      });
+    } catch (e) {}
+  }
+  try {
+    if (typeof refreshHistory === 'function') {
+      var _rh = refreshHistory;
+      refreshHistory = function () {
+        var p = _rh.apply(this, arguments);
+        if (p && p.then) p.then(function () { paintHistAttach(); chrome(); }).catch(function () {});
+        else { try { paintHistAttach(); } catch (e) {} }
+        return p;
+      };
+    }
+  } catch (e) {}
+  // Decorate just-sent user bubbles with thumbs/chips (Ask view).
+  try {
+    if (typeof addMsg === 'function' && typeof messagesEl !== 'undefined' && messagesEl) {
+      var _addMsg = addMsg;
+      addMsg = function (role, content) {
+        var div = _addMsg(role, content);
+        try {
+          if (role === 'user' && pending.length) {
+            var bag = pending.map(function (a) { return { name: a.name, previewUrl: a.previewUrl, kind: a.kind, size: a.size }; });
+            bag.forEach(function (a) {
+              if (a.kind === 'image' && a.previewUrl) {
+                var im = document.createElement('img');
+                im.className = 'hist-thumb';
+                im.alt = base(a.name);
+                im.src = a.previewUrl;
+                div.appendChild(im);
+              } else {
+                var c = document.createElement('span');
+                c.className = 'attach-chip';
+                c.textContent = base(a.name) + ' (' + fmtSize(a.size) + ')';
+                div.appendChild(c);
+              }
+            });
+            try { lastUserText = String(content || ''); } catch (e2) {}
+          } else if (role === 'user') {
+            try { lastUserText = String(content || ''); } catch (e2) {}
+          }
+        } catch (e2) {}
+        return div;
+      };
+    }
+  } catch (e) {}
+  // Non-vision notice: one-click Switch model + single recovery resend (bytes were never sent).
+  function maybeVisionNotice(node) {
+    try {
+      if (!node || !node.classList || !node.classList.contains('assistant')) return;
+      var t = node.textContent || '';
+      if (t.indexOf('does not support images') < 0) return;
+      if (node.dataset.visionBtn) return;
+      node.dataset.visionBtn = '1';
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn';
+      b.textContent = 'Switch model';
+      b.setAttribute('aria-label', 'Switch model');
+      b.addEventListener('click', function () {
+        if (node.dataset.recovered) return;
+        node.dataset.recovered = '1';
+        b.disabled = true;
+        try {
+          // Never silently replace the user's provider/model; confirm first.
+          if (!window.confirm('Switch model to OpenAI gpt-4o-mini so images can send? Your current provider and model will be replaced.')) {
+            node.dataset.recovered = '';
+            b.disabled = false;
+            return;
+          }
+          (window.nexio.setSettings({ provider: 'openai', model: 'gpt-4o-mini' }) || Promise.resolve()).then(function () {
+            try { if (typeof refreshModelName === 'function') refreshModelName(); } catch (e2) {}
+            try {
+              if (lastUserText && typeof send === 'function') {
+                inputEl2.value = lastUserText;
+                try { if (typeof grow === 'function') grow(); } catch (e3) {}
+                // The failed send cleared the tray, so image bytes are gone:
+                // restore the text but never resend it alone — warn to re-attach.
+                if (lastHadAttach) {
+                  lastHadAttach = false;
+                  showError('Images were not sent — re-attach them, then send.');
+                } else {
+                  void send();
+                }
+              }
+            } catch (e2) {}
+          }).catch(function () { b.disabled = false; });
+        } catch (e2) { b.disabled = false; }
+      });
+      node.appendChild(b);
+      chrome();
+    } catch (e) {}
+  }
+  try {
+    if (typeof MutationObserver !== 'undefined' && messagesEl) {
+      new MutationObserver(function (muts) {
+        muts.forEach(function (m) {
+          (m.addedNodes || []).forEach(function (n) { maybeVisionNotice(n); });
+        });
+      }).observe(messagesEl, { childList: true });
+    }
+  } catch (e) {}
+  // why: isEmptyUI gates suggestions on pending attachments without reaching into the tray closure
+  try {
+    window.attachPendingCount = function () { try { return pending.length; } catch (e) { return 0; } };
+    window.clearAttachTray = function () { try { clearTray(); } catch (e) {} };
+  } catch (e) {}
+})();

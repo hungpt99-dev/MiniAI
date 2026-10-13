@@ -1,3 +1,6 @@
+<!-- Banner spans the full README width on purpose: width="100%", no max-width cap. -->
+<img src="assets/banner.svg" width="100%" alt="Nexio — a new way to interact with your computer." />
+
 # Nexio
 
 A new way to interact with your computer.
@@ -41,6 +44,20 @@ Recycle Bin so they can be undone. Bring your own keys, keep history in a local 
 - Keys are entered in the settings panel and stored via `safeStorage` / DPAPI in the SQLite `secrets` table. Fallback XOR obfuscation warns only (dev).
 - `redact()` masks `sk-` / `Bearer` / `api_key` before logging. Dev-only env fallback: `OPENAI_API_KEY`, etc.
 - Answers stream with cancel. Provider usage may incur charges.
+- Attachments: paste (`Ctrl+V`/`Cmd+V`), drag-drop ("Drop to attach"), or the
+  paperclip button stages images/files in a tray under the composer.
+  `Enter` with attachments alone sends "Describe the attached file(s)."
+  Types are sniffed by magic bytes (max 5, 20MB/file, 50MB total); images are
+  EXIF-stripped and capped at 2048px via Electron `nativeImage` (outside
+  Electron the original bytes are kept, JPEG EXIF-stripped only), text is
+  BOM-decoded and truncated at 200KB. Temp files live under
+  `<data>/attachments/<conversation>` and are deleted on conversation
+  delete/Clear or swept after 7 days; files outside the working folder need
+  per-file Allow once. Non-vision models get a notice with a "Switch model"
+  button that confirms before replacing your provider/model and warns to
+  re-attach images (image bytes are never sent); logs keep name/type/size/SHA256
+  only. Details: `docs/providers.md` (vision), `docs/configuration.md`
+  (`compatibleImages`), `SECURITY.md`.
 
 **Slash commands and prompt templates**
 
@@ -95,12 +112,11 @@ See [docs/architecture/local-agent.md](docs/architecture/local-agent.md).
 
 See [docs/architecture/extensions.md](docs/architecture/extensions.md).
 
-**Agent Mode (external runtimes: implemented, needs real-runtime verification)**
+**Do mode (built-in only, no external runtimes)**
 
-- Adapters exist for OpenCode (HTTP-SSE) and Claude / Codex (CLI-JSONL). Router never falls back silently. Sessions are tracked per runtime.
-- This is implemented but not live-verified: tests are mocked only, no real runtime has been connected. Do not treat it as done.
-
-See [docs/architecture/agent-runtime-adapters.md](docs/architecture/agent-runtime-adapters.md) and [docs/agents/compatibility.md](docs/agents/compatibility.md).
+- Do mode runs only the built-in tool-calling loop in the main process — no
+  external agent CLI, no runtime picker. Old `agentRuntime` / `agentBackend` /
+  `engine` settings fall back to built-in and are purged on read.
 
 ## When to use it
 
@@ -149,18 +165,15 @@ Setup details: [docs/development/setup.md](docs/development/setup.md). Testing d
 
 v0.1.0 pre-release / experimental.
 
-**Working:** popup / hotkey / tray, Ask + streaming + cancel, slash + templates, workflows, history, `Tab` switching, router.
+**Working:** popup / hotkey / tray, Ask + streaming + cancel, slash + templates, workflows, history, `Tab` switching, router, built-in Do loop.
 
-**Implemented, needs real-runtime verification:** Agent Mode adapters (OpenCode HTTP-SSE, Claude / Codex CLI-JSONL) versus live runtimes. Mocked tests only, no real runtime connected.
-
-**Planned:** live runtime verification, installer release, PNG icon.
+**Planned:** installer release.
 
 **Known issues:**
 
 - Packaged app fails to open SQLite: Electron 33 bundles Node 20.18.x, but `node:sqlite` needs 22.5+. Dev and tests on Node >= 22.5 work.
-- Tray icon missing until PNG ships (`assets/icon.svg` is a placeholder).
 
-**Screenshots wanted:** no screenshots exist yet (`assets/` has only the `icon.svg` placeholder). Contributions welcome for: popup, slash palette, workflow run.
+**Screenshots wanted:** brand assets ship in `assets/` (icon, banner, social preview); no app screenshots exist yet. Contributions welcome for: popup, slash palette, workflow run. GitHub social preview is a manual upload (no automation): Repository Settings > General > Social preview > Upload `assets/social-preview.png` (1280x640, <1MB).
 
 Details: [docs/product/implementation-status.md](docs/product/implementation-status.md).
 

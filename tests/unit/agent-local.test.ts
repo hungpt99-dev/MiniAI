@@ -65,7 +65,8 @@ function fakeTool(def: Partial<Tool> & { name: string }): Tool {
 
 describe('permissions: path normalization', () => {
   it('resolves relative paths against cwd', () => {
-    expect(normalizeAndResolve('a/../b.txt', '/tmp/w')).toBe(path.normalize('/tmp/w/b.txt'));
+    const cwd = path.join(os.tmpdir(), 'w');
+    expect(normalizeAndResolve('a/../b.txt', cwd)).toBe(path.normalize(path.join(cwd, 'b.txt')));
   });
   it('rejects empty, null bytes, UNC and device paths', () => {
     expect(() => normalizeAndResolve('', '/tmp')).toThrow(/path-rejected/);

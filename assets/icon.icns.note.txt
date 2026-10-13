@@ -1,0 +1,4 @@
+icon.icns is built on macOS only (iconutil). This host is win32.
+Fallback icon.icns.png (1024) is committed for reference.
+To finish on a Mac: npm run assets, then commit assets/icon.icns.
+GitHub upload path: release assets accept the .dmg/.zip without a separate icon upload.
