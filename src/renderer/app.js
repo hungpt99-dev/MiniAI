@@ -8,7 +8,11 @@ let settingsProvider = 'openai';
 // True once the user explicitly picks a pill this session (wins over intent routing).
 let modeExplicitSession = false;
 function selectMode(m) { modeExplicitSession = true; setMode(m); }
-let currentView = null; // single-panel flow: 'palette'|'messages'|'settings'|'history'|null
+let view = 'idle'; // single view: 'idle'|'palette'|'run'|'settings'|'extensions'|'history'|'onboard'
+let returnTo = 'idle'; // idle|run origin for Esc/Back (mirrors shared/view.ts openView/goBack)
+let currentView = null; // legacy alias: 'palette'|'messages'|'settings'|'history'|'extensions'|'onboard'|null
+function hasRun() { return messagesEl.children.length > 0 || ($('agent-steps') && $('agent-steps').children.length > 0); }
+function backTarget() { return returnTo === 'run' && !hasRun() ? 'idle' : returnTo; }
 let drafts = { chat: '', agent: '' };
 
 // Fail visibly, not half-wired, if the preload bridge did not load.
@@ -142,7 +146,9 @@ function addMsg(role, content) {
   messagesEl.appendChild(div);
   const view = $('view');
   if (view) view.scrollTop = view.scrollHeight; // .view is the only scroller
-  if (currentView !== 'messages') showView('messages');
+  // Background runs must not yank panels: only auto-switch when no run is active.
+  // Explicit sends switch via sendInner/beginRun; extension errors keep legacy yank.
+  if (view !== 'run' && !(typeof agentRunning === 'function' && agentRunning())) showView('run');
   return div;
 }
 
@@ -213,6 +219,17 @@ async function sendInner() {
   if (inputEl.disabled) return; // settings/onboard own the composer; Esc/Back re-enables
   const text = inputEl.value.trim();
   if (!text) return;
+  // View-only slashes work during a run (background continues): clear + hide before router/agent.
+  {
+    const early = text.split(' ')[0];
+    if (early === '/extensions' || early === '/settings' || early === '/history' || early === '/log') {
+      inputEl.value = ''; drafts[mode] = ''; hideSuggest(); grow(); hidePalette();
+      if (early === '/extensions') return void openExtensions();
+      if (early === '/settings') return void togglePanel('settings');
+      if (early === '/history') return void togglePanel('history');
+      return void showAgentLog();
+    }
+  }
   if (agentRunning()) return; // one run at a time; Stop first
   inputEl.value = '';
   hideSuggest();
@@ -257,15 +274,12 @@ async function sendInner() {
       if (r.found.source === 'skill') return void runSkillCommand(trigger);
       if (r.found.source === 'mcp') return void runMcpPrompt(trigger);
       if (trigger === '/new') return void newChat();
-      if (trigger === '/clear') { messagesEl.innerHTML = ''; assistantDiv = null; showView(null); return; }
+      if (trigger === '/clear') { messagesEl.innerHTML = ''; assistantDiv = null; const st0 = $('agent-steps'); if (st0) st0.innerHTML = ''; const ch0 = $('run-chips'); if (ch0) ch0.remove(); showView('idle'); syncChrome(); requestResize(); return; }
       if (trigger === '/help') {
         addMsg('assistant', '**Commands:** /help /new /clear /model /history /settings /log /extensions + prompt templates + workflows + skills.\nType `/` to browse.');
         return;
       }
-      if (trigger === '/log') return void showAgentLog();
-      if (trigger === '/extensions') return void openExtensions();
-      if (trigger === '/history') return void togglePanel('history');
-      if (trigger === '/settings') return void togglePanel('settings');
+      // view-only slashes handled before router/agent at the top of sendInner
       if (trigger === '/model') {
         if (rest[0]) { await window.nexio.setSettings({ model: rest[0] }); addMsg('assistant', `Model → ${esc(rest[0])}`); }
         else { const s = await window.nexio.getSettings(); addMsg('assistant', `Current model: ${esc(s.model)}`); }
@@ -394,28 +408,47 @@ document.addEventListener('keydown', (e) => {
   else if (e.altKey && e.key === '1') { e.preventDefault(); selectMode('chat'); }
   else if (e.altKey && e.key === '2') { e.preventDefault(); selectMode('agent'); }
 });
-function defaultView() { return messagesEl.children.length ? 'messages' : null; }
-// why: single-panel flow — exactly one view visible; every switch re-syncs chrome + size
+function defaultView() { return hasRun() ? 'run' : 'idle'; }
+// why: single-view — exactly one node in .view; every switch re-syncs chrome + size
 function showView(name) {
-  currentView = name;
+  if (name == null) name = 'idle';
+  if (name === 'messages') name = 'run'; // legacy alias
+  if (name !== 'run' && document.querySelector('#agent-steps .appr')) return; // never bury an undecided approval
+  if (name !== 'idle' && name !== 'run' && (view === 'idle' || view === 'run')) returnTo = view;
+  view = name;
+  currentView = name === 'run' ? 'messages' : name === 'idle' ? null : name; // legacy alias
   paletteEl.classList.toggle('hidden', name !== 'palette');
-  messagesEl.classList.toggle('hidden', name !== 'messages');
+  const runEl = $('run');
+  if (runEl) runEl.classList.toggle('hidden', name !== 'run');
+  messagesEl.classList.toggle('hidden', name !== 'run');
   $('settings').classList.toggle('hidden', name !== 'settings');
   $('history').classList.toggle('hidden', name !== 'history');
   $('extensions').classList.toggle('hidden', name !== 'extensions');
   $('onboard').classList.toggle('hidden', name !== 'onboard');
-  if ($('view')) $('view').classList.toggle('hidden', !name);
+  if ($('view')) $('view').classList.toggle('hidden', name === 'idle');
   const wasDisabled = inputEl.disabled;
   inputEl.disabled = name === 'settings' || name === 'onboard';
   if (name === 'settings') {
     inputEl.placeholder = 'Settings';
     hidePalette(); hideSuggest(); // clear /c: no slash palette or suggestions behind settings
   } else if (wasDisabled) updateModeUI(); // restores mode placeholder
+  updateRunChip();
   syncChrome();
   requestResize();
+  assertSingleView();
 }
+// dev-only: exactly one top-level view node (.view hidden only when idle)
+function assertSingleView() {
+  try {
+    const ids = ['palette', 'run', 'settings', 'history', 'extensions', 'onboard'];
+    const vis = ids.filter((id) => { const el = $(id); return el && !el.classList.contains('hidden'); });
+    const expect = view === 'idle' ? 0 : 1;
+    if (vis.length !== expect) console.assert(false, 'single-view: expected ' + expect + ' visible, got ' + vis.join(','));
+  } catch {}
+}
+function backTo() { showView(backTarget()); }
 function togglePanel(which) {
-  if (currentView === which) showView(defaultView());
+  if (view === which) showView(backTarget());
   else { showView(which); if (which === 'history') void refreshHistory(); }
 }
 $('btn-settings').onclick = async () => {
@@ -440,8 +473,8 @@ $('btn-settings').onclick = async () => {
   paintAgentRules(s.agentAlwaysAllow || []);
   document.documentElement.dataset.theme = 'dark'; // dark-only UI; stored theme untouched
 };
-$('btn-settings-back').onclick = () => { showView(defaultView()); inputEl.focus(); };
-$('btn-history-back').onclick = () => { showView(defaultView()); inputEl.focus(); };
+$('btn-settings-back').onclick = () => { showView(backTarget()); inputEl.focus(); };
+$('btn-history-back').onclick = () => { showView(backTarget()); inputEl.focus(); };
 $('btn-history').onclick = () => togglePanel('history');
 $('btn-save-settings').onclick = async () => {
   const patch = {
@@ -545,7 +578,9 @@ $('btn-new').onclick = () => void newChat();
 async function newChat() {
   const c = await window.nexio.createConversation('New chat');
   convId = c.id; messagesEl.innerHTML = ''; assistantDiv = null;
-  showView(null);
+  const stN = $('agent-steps'); if (stN) stN.innerHTML = '';
+  const chN = $('run-chips'); if (chN) chN.remove();
+  showView('idle');
   void refreshHistory();
 }
 async function refreshHistory() {
@@ -560,7 +595,7 @@ async function refreshHistory() {
       convId = c.id; messagesEl.innerHTML = '';
       const msgs = await window.nexio.getMessages(c.id);
       for (const m of msgs) addMsg(m.role === 'user' ? 'user' : 'assistant', m.content);
-      showView('messages');
+      showView('run');
     };
     ul.appendChild(li);
   }
@@ -603,8 +638,8 @@ function requestResize() {
 }
 function syncChrome() {
   const hasMsgs = messagesEl.children.length > 0;
-  const palOpen = currentView === 'palette';
-  const panelOpen = currentView === 'settings' || currentView === 'history' || currentView === 'extensions' || currentView === 'onboard';
+  const palOpen = view === 'palette';
+  const panelOpen = view === 'settings' || view === 'history' || view === 'extensions' || view === 'onboard';
   const agentActive = (typeof agentRunning === 'function' && agentRunning()) ||
     ($('agent-steps') && $('agent-steps').children.length > 0);
   const idle = !inputEl.value && !hasMsgs && !palOpen && !panelOpen && !agentActive;
@@ -615,12 +650,13 @@ function syncChrome() {
   if ($('hint-nav')) $('hint-nav').classList.toggle('hidden', multi);
   if ($('hint-esc')) $('hint-esc').classList.toggle('hidden', !hasMsgs);
   if ($('hint-multi')) $('hint-multi').classList.toggle('hidden', !multi);
-  const hasAnswer = currentView === 'messages' && !!messagesEl.querySelector('.msg.assistant');
+  const hasAnswer = view === 'run' && !!messagesEl.querySelector('.msg.assistant');
   if ($('answer-meta')) $('answer-meta').classList.toggle('hidden', !hasAnswer);
   if ($('actions')) $('actions').classList.toggle('hidden', !hasAnswer);
   if ($('hints')) $('hints').classList.toggle('hidden', idle);
   // single Tab keycap beside the pill: only when composer focused-and-empty (hover handled in CSS)
   document.body.classList.toggle('show-tabkey', document.activeElement === inputEl && !inputEl.value && !inputEl.disabled);
+  updateRunChip();
 }
 // why: keep artboard grouped palette + selected accent + enter cap without touching core logic
 renderPalette = function () {
@@ -743,24 +779,27 @@ document.addEventListener('keydown', (e) => {
   }
   const palOpen = !paletteEl.classList.contains('hidden');
   if (palOpen) { e.stopPropagation(); hidePalette(); inputEl.focus(); return; }
-  const setOpen = currentView === 'settings';
-  const histOpen = currentView === 'history';
-  const extOpen = currentView === 'extensions';
-  const obOpen = currentView === 'onboard';
+  const setOpen = view === 'settings';
+  const histOpen = view === 'history';
+  const extOpen = view === 'extensions';
+  const obOpen = view === 'onboard';
   const sugBox = $('suggest');
   if (sugBox && !sugBox.classList.contains('hidden')) { e.stopPropagation(); hideSuggest(); inputEl.focus(); return; }
   if (dismissRootConfirm()) { e.stopPropagation(); if (rootConfirmPrior && document.contains(rootConfirmPrior)) rootConfirmPrior.focus(); else ($('btn-agent-add-root') || inputEl).focus(); rootConfirmPrior = null; return; } // Esc drops the add-folder confirm first, restoring prior focus
   if (setOpen || histOpen || extOpen || obOpen) { // dismiss panels before collapsing results
     e.stopPropagation();
-    if (currentView === 'onboard') { void skipOnboard(); return; }
-    showView(defaultView());
+    if (view === 'onboard') { void skipOnboard(); return; }
+    showView(backTarget());
     syncChrome(); requestResize(); inputEl.focus(); return;
   }
-  if (messagesEl.children.length > 0) {
+  if (hasRun()) {
     e.stopPropagation();
+    if (document.querySelector('#agent-steps .appr')) { inputEl.focus(); return; } // never bury an undecided approval
     messagesEl.innerHTML = '';
     assistantDiv = null;
-    showView(null);
+    const stC = $('agent-steps'); if (stC) stC.innerHTML = '';
+    const chC = $('run-chips'); if (chC) chC.remove();
+    showView('idle');
     syncChrome();
     requestResize();
     inputEl.focus();
@@ -990,6 +1029,7 @@ function handleAgentEvent(runId, ev) {
     agentScroll();
   } else if (ev.type === 'done') {
     finalizeSpinners();
+    document.querySelectorAll('#agent-steps .plan-row').forEach((r) => r.remove());
     if (st.answerDiv) st.answerDiv.classList.remove('streaming');
     collapseSteps();
     clearRunCards(runId);
@@ -1040,7 +1080,7 @@ async function beginRun(userText) {
   if (steps) { steps.innerHTML = ''; steps.classList.remove('hidden'); steps.classList.remove('collapsed'); }
   addMsg('user', userText);
   assistantDiv = null;
-  showView('messages');
+  showView('run');
   if (steps) steps.classList.remove('hidden');
   syncSteps();
   syncAgentFooter();
@@ -1266,7 +1306,7 @@ if (window.nexio && typeof window.nexio.onAgentEvent === 'function') {
       agentState = { runId, rows: new Map(), answerDiv: assistantDiv };
       const steps = $('agent-steps');
       if (steps) steps.classList.remove('hidden');
-      showView('messages');
+      showView('run');
       syncAgentFooter();
     }
     if (agentState.runId && agentState.runId !== runId) return;
@@ -1275,6 +1315,19 @@ if (window.nexio && typeof window.nexio.onAgentEvent === 'function') {
   });
 }
 if ($('btn-stop')) $('btn-stop').onclick = () => { stopAgentRun(); inputEl.focus(); };
+function updateRunChip() {
+  const btn = $('btn-runview');
+  if (!btn) return;
+  const running = typeof agentRunning === 'function' && agentRunning();
+  const viewingRun = typeof view !== 'undefined' && view === 'run';
+  const recent = hasRun();
+  let label = null;
+  if (!viewingRun && running) label = 'Running / View';
+  else if (!viewingRun && recent) label = 'Done / View';
+  if (label) { btn.textContent = label; btn.classList.remove('hidden'); }
+  else btn.classList.add('hidden');
+}
+if ($('btn-runview')) $('btn-runview').onclick = () => { showView('run'); inputEl.focus(); };
 if ($('btn-log')) $('btn-log').onclick = () => void showAgentLog();
 if ($('agent-cwd')) $('agent-cwd').onclick = async () => {
   try {
@@ -1334,7 +1387,7 @@ async function refreshExtensions() {
   } catch (e) {
     box.innerHTML = `<div class="set-head"><h3>Extensions</h3><button id="btn-ext-back" class="btn-icon" aria-label="Back" title="Back (Esc)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button></div>` +
       `<div class="msg assistant">${esc(errText(e))}</div>`;
-    $('btn-ext-back').onclick = () => { showView(defaultView()); inputEl.focus(); };
+    $('btn-ext-back').onclick = () => { showView(backTarget()); inputEl.focus(); };
     syncChrome(); requestResize();
     return;
   }
@@ -1360,7 +1413,7 @@ function renderExtensions() {
     `</div><div id="ext-body"></div>` +
     `<div class="row ext-add-row"><button id="btn-ext-add">Add ${extTab === 'mcp' ? 'server' : extTab.replace(/s$/, '')}</button></div>`;
   box.innerHTML = html;
-  $('btn-ext-back').onclick = () => { showView(defaultView()); inputEl.focus(); };
+  $('btn-ext-back').onclick = () => { showView(backTarget()); inputEl.focus(); };
   box.querySelectorAll('.ext-tabs button').forEach((b) => {
     b.onclick = () => { extTab = b.dataset.tab; extSel = null; extSub = null; renderExtensions(); syncChrome(); requestResize(); };
   });
@@ -1947,7 +2000,9 @@ function renderRunChips(runId) {
     void window.nexio.reveal(sum.folder).catch(() => {});
   }));
   if (sum && sum.undoable) host.appendChild(mk('Undo', 'Undo this run', () => void startUndoRun(runId)));
-  if (steps && steps.parentNode) steps.parentNode.insertBefore(host, steps.nextSibling);
+  const runHost = $('run');
+  if (runHost) runHost.appendChild(host);
+  else if (steps && steps.parentNode) steps.parentNode.insertBefore(host, steps.nextSibling);
   requestResize();
 }
 
@@ -1958,7 +2013,7 @@ async function startUndoRun(runId) {
   if (oldChips) oldChips.remove();
   const steps = $('agent-steps');
   if (steps) { steps.innerHTML = ''; steps.classList.remove('hidden'); steps.classList.remove('collapsed'); }
-  showView('messages');
+  showView('run');
   syncSteps();
   syncAgentFooter();
   syncChrome();
@@ -2001,7 +2056,7 @@ async function suggestList() {
 function maybeSuggest() {
   hideSuggest();
   if (inputEl.value || agentRunning()) return;
-  if (currentView === 'settings' || currentView === 'onboard' || currentView === 'extensions') return;
+  if (view === 'settings' || view === 'onboard' || view === 'extensions') return;
   if (!paletteEl.classList.contains('hidden')) return;
   suggestTimer = setTimeout(() => void renderSuggest(), 1000);
 }
@@ -2286,7 +2341,7 @@ async function refreshHotkeyStatus() {
 if (window.nexio && typeof window.nexio.onUi === 'function') {
   window.nexio.onUi((ev) => {
     try {
-      if (ev.open === 'settings') { if (currentView !== 'settings') $('btn-settings').click(); }
+      if (ev.open === 'settings') { if (view !== 'settings') $('btn-settings').click(); }
       else if (ev.open === 'log') { void showAgentLog(); }
     } catch { /* preview */ }
   });
@@ -2614,7 +2669,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
       prevEl.appendChild(x);
       prevEl.classList.remove('hidden');
       previewOpen = true;
-      try { if (typeof showView === 'function' && currentView !== 'messages') showView('messages'); } catch (e2) {}
+      try { if (typeof showView === 'function' && view !== 'run') showView('run'); } catch (e2) {}
       chrome();
       try { x.focus(); } catch (e2) {}
     } catch (e) {}

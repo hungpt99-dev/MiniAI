@@ -119,3 +119,7 @@ Reversible tool ops are journaled per run (`undo/<runId>.json`,
 `src/main/agent/undo.ts`) and reversed in reverse order through the same
 permission layer. Run outcomes land in `runs.jsonl` (`src/main/agent/runs.ts`)
 for the History â†’ Run Log view.
+
+## Popup views (single-view)
+
+`src/shared/view.ts` owns the view state (`idle|palette|run|settings|extensions|history` + `returnTo`); `src/renderer/app.js showView()` mounts exactly one node in `.view` (dev asserts) with the run unit (`#messages/#agent-steps/#answer-meta/#actions/chips`) wrapped in `#run`. View-only slashes (`/extensions /settings /history /log`) and the footer buttons never submit/route/start runs; background runs surface a single `Running/Done / View` footer chip. Planning rows exist only while active; failures expand steps; approvals block view switches so cards are never buried.
