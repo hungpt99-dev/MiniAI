@@ -31,8 +31,14 @@ function iconImage(): Electron.NativeImage {
     }
     // Artwork TODO (see report): fall back to the app icon so the tray still works.
   }
-  const img = nativeImage.createFromPath(path.join(__dirname, '../assets/icon.png'));
-  return img.isEmpty() ? nativeImage.createEmpty() : img;
+  // Windows prefers the size-matched tray art; macOS fallback and Linux use the full icon.
+  for (const name of ['tray/tray-32.png', 'tray/tray-24.png', 'icon.png']) {
+    try {
+      const img = nativeImage.createFromPath(path.join(__dirname, '../assets', name));
+      if (!img.isEmpty()) return img;
+    } catch { /* try next */ }
+  }
+  return nativeImage.createEmpty();
 }
 
 export function createTray(): Tray {

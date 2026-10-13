@@ -29,6 +29,7 @@ export function createPopup(): BrowserWindow {
     alwaysOnTop: true,
     skipTaskbar: true,
     show: false,
+    icon: path.join(__dirname, '../assets/icon.png'),
     transparent: true,
     backgroundColor: '#00000000',
     ...(mac ? { visibleOnAllWorkspaces: true } : {}),

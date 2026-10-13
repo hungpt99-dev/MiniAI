@@ -29,6 +29,7 @@ files:
   - node_modules/zod/**/*
   - node_modules/zod-to-json-schema/**/*
 win:
+  icon: assets/icon.ico
   signAndEditExecutable: false
   target:
     - target: nsis
@@ -36,6 +37,7 @@ win:
     - target: portable
       arch: [x64]
 mac:
+  icon: assets/icon.icns
   category: public.app-category.productivity
   minimumSystemVersion: '13.0'
   hardenedRuntime: true
@@ -56,6 +58,13 @@ mac:
     NSAppleEventsUsageDescription: Nexio sends Apple Events only if you enable an automation tool that needs them.
 nsis:
   oneClick: false
+  installerIcon: assets/icon.ico
+  uninstallerIcon: assets/icon.ico
   allowToChangeInstallationDirectory: true
+dmg:
+  icon: assets/icon.icns
+linux:
+  icon: assets/icons
+  category: Utility
 portable:
   artifactName: Nexio-portable.exe
