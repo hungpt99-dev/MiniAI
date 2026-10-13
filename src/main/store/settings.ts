@@ -5,15 +5,30 @@ export const PROVIDERS: ProviderId[] = ['openai', 'anthropic', 'gemini', 'compat
 const HOTKEY_RE = /^[A-Za-z0-9+ ]+$/;
 const URL_RE = /^https?:\/\/[^\s/$.?#].[^\s]*$/i;
 
+export const DEFAULT_SUGGESTIONS = [
+  'Find files I changed today',
+  'Open my last downloaded file',
+  'Organize Downloads by type',
+  "What's using my disk space?",
+];
+
 export const DEFAULT_SETTINGS: Settings = {
   provider: 'openai',
   model: 'gpt-4o-mini',
   temperature: 0.7,
   theme: 'light',
   hotkey: 'Alt+Space',
-  mode: 'chat',
+  mode: 'agent',
   agentRuntime: 'opencode',
   modeHotkey: 'Alt+M',
+  agentAllowedRoots: [],
+  agentAlwaysAllow: [],
+  agentStopHotkey: 'Ctrl+Alt+Esc',
+  agentMaxCalls: 25,
+  requireApprovalForWrites: true,
+  onboarded: false,
+  suggestions: [...DEFAULT_SUGGESTIONS],
+  launchAtLogin: false,
 };
 
 export function validateSettings(s: Partial<Settings>): string[] {
@@ -33,6 +48,14 @@ export function validateSettings(s: Partial<Settings>): string[] {
   if (s.claudeBin !== undefined && s.claudeBin !== '' && (typeof s.claudeBin !== 'string' || !s.claudeBin.trim())) errors.push('claudeBin must be non-empty');
   if (s.codexBin !== undefined && s.codexBin !== '' && (typeof s.codexBin !== 'string' || !s.codexBin.trim())) errors.push('codexBin must be non-empty');
   if (s.agentCwd !== undefined && s.agentCwd !== '' && typeof s.agentCwd !== 'string') errors.push('agentCwd must be a string path');
+  if (s.agentAllowedRoots !== undefined && !Array.isArray(s.agentAllowedRoots)) errors.push('agentAllowedRoots must be an array');
+  if (s.agentAlwaysAllow !== undefined && !Array.isArray(s.agentAlwaysAllow)) errors.push('agentAlwaysAllow must be an array');
+  if (s.agentStopHotkey !== undefined && (typeof s.agentStopHotkey !== 'string' || !s.agentStopHotkey.trim())) errors.push('agentStopHotkey must be non-empty');
+  if (s.agentMaxCalls !== undefined && (typeof s.agentMaxCalls !== 'number' || s.agentMaxCalls < 1 || s.agentMaxCalls > 100)) errors.push('agentMaxCalls must be 1..100');
+  if (s.requireApprovalForWrites !== undefined && typeof s.requireApprovalForWrites !== 'boolean') errors.push('requireApprovalForWrites must be boolean');
+  if (s.onboarded !== undefined && typeof s.onboarded !== 'boolean') errors.push('onboarded must be boolean');
+  if (s.suggestions !== undefined && (!Array.isArray(s.suggestions) || s.suggestions.length > 8 || !s.suggestions.every((x) => typeof x === 'string' && x.trim()))) errors.push('suggestions must be up to 8 non-empty strings');
+  if (s.launchAtLogin !== undefined && typeof s.launchAtLogin !== 'boolean') errors.push('launchAtLogin must be boolean');
   return errors;
 }
 

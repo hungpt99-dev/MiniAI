@@ -1,4 +1,4 @@
-import { PROVIDER_DEFS, mapHttpError, toMiniAIError, type ChatOptions } from './providers';
+import { PROVIDER_DEFS, mapHttpError, toNexioError, type ChatOptions } from './providers';
 import type { ProviderId } from '../../shared/types';
 
 /** Parse SSE `data:` lines from a chunk, invoking cb for each JSON payload. Returns pending tail. */
@@ -25,7 +25,7 @@ export async function streamChat(provider: ProviderId, opts: ChatOptions): Promi
       headers: def.headers(opts.apiKey),
       body: JSON.stringify(def.buildBody(opts.model, opts.messages, opts.temperature)),
       signal: opts.signal ? anySignal([opts.signal, ctrl.signal]) : ctrl.signal,
-    }).catch((e) => { throw toMiniAIError(e); });
+    }).catch((e) => { throw toNexioError(e); });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       throw mapHttpError(res.status, text);
@@ -34,6 +34,7 @@ export async function streamChat(provider: ProviderId, opts: ChatOptions): Promi
       // Non-streaming fallback
       const json = await res.json().catch(() => undefined);
       const msg = def.extractMessage(json) || '';
+      if (!msg) throw { code: 'unknown', message: 'Empty response from provider' };
       opts.onToken?.(msg);
       return msg;
     }
@@ -41,6 +42,7 @@ export async function streamChat(provider: ProviderId, opts: ChatOptions): Promi
     const decoder = new TextDecoder();
     let buf = '';
     let full = '';
+    let sawPayload = false;
     for (;;) {
       if (opts.signal?.aborted) throw { code: 'aborted', message: 'Aborted' };
       const { done, value } = await reader.read();
@@ -50,14 +52,16 @@ export async function streamChat(provider: ProviderId, opts: ChatOptions): Promi
         if (data === '[DONE]') return;
         try {
           const json = JSON.parse(data);
+          sawPayload = true;
           const delta = def.extractDelta(json) || '';
           if (delta) { full += delta; opts.onToken?.(delta); }
         } catch { /* ignore keep-alive */ }
       });
     }
+    if (!sawPayload) throw { code: 'unknown', message: 'Empty response from provider' };
     return full;
   } catch (e) {
-    throw toMiniAIError(e);
+    throw toNexioError(e);
   } finally {
     clearTimeout(timer);
     opts.signal?.removeEventListener('abort', onAbort);

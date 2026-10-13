@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { platform } from '../platform/index';
 
 // safeStorage is only available in Electron main; lazy-require so unit tests (plain node) still run.
 interface SafeStorageLike {
@@ -9,9 +10,11 @@ interface SafeStorageLike {
 
 function loadSafeStorage(): SafeStorageLike | null {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { safeStorage } = require('electron') as { safeStorage: SafeStorageLike };
-    return safeStorage && safeStorage.isEncryptionAvailable() ? safeStorage : null;
+    return platform().secrets.available() ? {
+      isEncryptionAvailable: () => true,
+      encryptString: (s: string) => platform().secrets.encrypt(s),
+      decryptString: (b: Buffer) => platform().secrets.decrypt(b),
+    } : null;
   } catch {
     return null;
   }
@@ -38,7 +41,7 @@ export function isEncryptionAvailable(): boolean {
 
 export function setSecret(db: DatabaseSync, service: string, value: string): void {
   const ss = loadSafeStorage();
-  if (!ss) console.warn('[MiniAI] safeStorage unavailable — persisting secret with insecure fallback obfuscation (dev only)');
+  if (!ss) console.warn('[Nexio] safeStorage unavailable — persisting secret with insecure fallback obfuscation (dev only)');
   const enc: Buffer = ss ? ss.encryptString(value) : Buffer.concat([Buffer.from(FALLBACK_PREFIX), xorBuf(value)]);
   db.prepare('INSERT INTO secrets (service, value, updatedAt) VALUES (?, ?, ?) ON CONFLICT(service) DO UPDATE SET value=excluded.value, updatedAt=excluded.updatedAt').run(service, enc, Date.now());
 }
@@ -48,7 +51,7 @@ export function getSecret(db: DatabaseSync, service: string): string | undefined
   if (!row) return undefined;
   const buf = Buffer.from(row.value as Uint8Array);
   if (buf.subarray(0, FALLBACK_PREFIX.length).toString() === FALLBACK_PREFIX) {
-    console.warn('[MiniAI] safeStorage unavailable — reading secret stored with insecure fallback obfuscation');
+    console.warn('[Nexio] safeStorage unavailable — reading secret stored with insecure fallback obfuscation');
     return unxorBuf(buf.subarray(FALLBACK_PREFIX.length));
   }
   const ss = loadSafeStorage();
@@ -58,6 +61,18 @@ export function getSecret(db: DatabaseSync, service: string): string | undefined
 
 export function deleteSecret(db: DatabaseSync, service: string): void {
   db.prepare('DELETE FROM secrets WHERE service = ?').run(service);
+}
+
+/** Remove every secret owned by one extension (uninstall cleanup). */
+export function deleteSecretsByPrefix(db: DatabaseSync, prefix: string): number {
+  try {
+    const r = db.prepare('DELETE FROM secrets WHERE service LIKE ? ESCAPE \'\\\'').run(
+      `${prefix.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')}%`,
+    ) as unknown as { changes?: unknown };
+    return typeof r?.changes === 'number' ? r.changes : 0;
+  } catch {
+    return 0;
+  }
 }
 
 /** Redact anything that looks like an API key / bearer token. Safe to log the result. */

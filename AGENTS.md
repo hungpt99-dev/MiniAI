@@ -1,7 +1,8 @@
-# AGENTS.md — MiniAI
+# AGENTS.md — Nexio
 
-Popup AI assistant (BYOK), Electron. Status: v0.1.0, Windows-only,
-pre-remote. Packaged app cannot open SQLite — see README Known Limitation.
+Popup AI assistant (BYOK), Electron. Status: v0.1.0, Windows 10/11 +
+macOS 13+ (arm64/x64), pre-remote. Packaged app cannot open SQLite —
+see README Known Limitation.
 
 ## Stack
 
@@ -11,14 +12,14 @@ Zero runtime deps. `node:sqlite` via `process.getBuiltinModule`
 
 ## Dir map
 
-- `src/main/` — Electron main: IPC, DB, providers, agent, slash, store
+- `src/main/` — Electron main: IPC, DB, providers, agent, slash, store, `platform/` OS adapter
 - `src/shared/` — IPC channels, types, mode-utils (main+renderer safe)
 - `src/renderer/` — plain JS/CSS popup UI (no framework)
 - `scripts/` — copy-renderer build step
 - `tests/unit/` — vitest suites
 - `docs/` — product, architecture, development, agents docs
 
-## Commands (Windows, PowerShell)
+## Commands (Windows PowerShell / macOS zsh)
 
 `npm ci` · `npm run typecheck` · `npx vitest run`
 `npm run build:main` · `npm run build:renderer` · `npm run dist`
@@ -30,8 +31,9 @@ Smallest diff; reuse existing helper/pattern; no new deps w/o reason.
 
 ## Security
 
-Keys in `safeStorage`/DPAPI, `redact()` before log, XOR fallback
-warns only. Env `${PROVIDER}_API_KEY` dev-only. Never commit secrets.
+Keys in `safeStorage` (DPAPI/Keychain), `redact()` before log, XOR fallback
+warns only. Env `${PROVIDER}_API_KEY` dev-only. Never commit secrets. OS
+differences live in `src/main/platform/` — nowhere else checks the OS.
 
 ## Testing / docs rules
 

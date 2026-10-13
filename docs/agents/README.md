@@ -5,4 +5,4 @@
 - `compatibility.md` — which external AI tools are known to work; unverified live.
 - `workflows.md` — 2-step workflow authoring notes.
 
-No AI tool is required to use or contribute to MiniAI.
+No AI tool is required to use or contribute to Nexio.

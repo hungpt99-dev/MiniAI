@@ -14,13 +14,19 @@ for (const f of fs.readdirSync(src)) {
   }
 }
 console.log('renderer copied to', dst);
-// assets -> dist/assets (tray icon, installer)
+// assets -> dist/assets (tray icon, installer, bundled example extensions)
 const aSrc = path.join(__dirname, '..', 'assets');
 const aDst = path.join(__dirname, '..', 'dist', 'assets');
-if (fs.existsSync(aSrc)) {
-  fs.mkdirSync(aDst, { recursive: true });
-  for (const f of fs.readdirSync(aSrc)) {
-    fs.copyFileSync(path.join(aSrc, f), path.join(aDst, f));
+function copyTree(s, d) {
+  fs.mkdirSync(d, { recursive: true });
+  for (const f of fs.readdirSync(s)) {
+    const ps = path.join(s, f);
+    const pd = path.join(d, f);
+    if (fs.statSync(ps).isDirectory()) copyTree(ps, pd);
+    else fs.copyFileSync(ps, pd);
   }
+}
+if (fs.existsSync(aSrc)) {
+  copyTree(aSrc, aDst);
   console.log('assets copied to', aDst);
 }

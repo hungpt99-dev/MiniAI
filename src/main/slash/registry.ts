@@ -13,6 +13,8 @@ const BUILTINS: SlashEntry[] = [
   { trigger: '/model', label: 'Model', description: 'Switch model (usage: /model <name>)', source: 'builtin', action: 'model', scope: 'chat' },
   { trigger: '/history', label: 'History', description: 'Show conversation history', source: 'builtin', action: 'history', scope: 'all' },
   { trigger: '/settings', label: 'Settings', description: 'Open settings', source: 'builtin', action: 'settings', scope: 'all' },
+  { trigger: '/log', label: 'Agent log', description: 'Open the latest agent run log', source: 'builtin', action: 'log', scope: 'all' },
+  { trigger: '/extensions', label: 'Extensions', description: 'Manage skills, MCP servers, hooks, workflows', source: 'builtin', action: 'extensions', scope: 'all' },
 ];
 
 function isSubsequence(query: string, target: string): boolean {
@@ -25,6 +27,8 @@ export interface RegistrySources {
   prompts?: SlashEntry[];
   workflows?: SlashEntry[];
   user?: SlashEntry[];
+  skills?: SlashEntry[];
+  mcp?: SlashEntry[];
 }
 
 /** Merge builtin + prompt + workflow + user entries. Later sources do not override builtins. */
@@ -40,6 +44,8 @@ export function buildRegistry(sources: RegistrySources = {}): SlashEntry[] {
   (sources.prompts || []).forEach((e) => push({ ...e, source: 'prompt' as SlashSource }));
   (sources.workflows || []).forEach((e) => push({ ...e, source: 'workflow' as SlashSource }));
   (sources.user || []).forEach((e) => push({ ...e, source: 'user' as SlashSource }));
+  (sources.skills || []).forEach((e) => push({ ...e, source: 'skill' as SlashSource }));
+  (sources.mcp || []).forEach((e) => push({ ...e, source: 'mcp' as SlashSource }));
   return out;
 }
 

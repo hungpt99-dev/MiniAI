@@ -10,5 +10,5 @@ support beyond what is tested here.
 | codex CLI (JSONL) | Implemented, requires CLI installed |
 | Other CLIs / IDE agents | Unverified — file an issue with logs |
 
-No AI tool is required to run MiniAI; chat providers (BYOK) are the
+No AI tool is required to run Nexio; chat providers (BYOK) are the
 only runtime dependency.

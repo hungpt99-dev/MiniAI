@@ -1,18 +1,27 @@
-# MiniAI — Your AI, One Shortcut Away.
+# Nexio
 
-Lightweight Windows desktop assistant for direct AI chat, reusable prompts, workflows, path toward integrated coding agents.
+A new way to interact with your computer.
+
+Nexio is the smart layer between you and your computer. Press a hotkey, say what
+you want, and AI finds, opens, organizes and does it. Risky actions need your approval.
+
+Say what you want. Nexio does it on your computer.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform: Windows x64](https://img.shields.io/badge/Platform-Windows_x64-lightgrey.svg)](docs/development/setup.md)
+[![Platform: macOS 13+](https://img.shields.io/badge/Platform-macOS_13+-lightgrey.svg)](docs/platforms.md)
 [![Status: v0.1.0 pre-release experimental](https://img.shields.io/badge/Status-v0.1.0_pre--release_experimental-orange.svg)](docs/product/implementation-status.md)
 
-[Why MiniAI](#why-miniai) · [Features](#features) · [When to use it](#when-to-use-it) · [Quick Start](#quick-start) · [Build / Dev](#build--dev) · [Status](#status) · [Contributing](#contributing) · [License](#license) · [Docs](docs/README.md)
+[Why Nexio](#why-nexio) · [Features](#features) · [When to use it](#when-to-use-it) · [Quick Start](#quick-start) · [Build / Dev](#build--dev) · [Status](#status) · [Contributing](#contributing) · [License](#license) · [Docs](docs/README.md)
 
-## Why MiniAI
+## Why Nexio
 
-Most AI tools live in a browser tab. MiniAI lives on a hotkey.
+Most AI tools live in a browser tab. Nexio lives on a hotkey.
 
-Press `Alt+Space`, type, get an answer, dismiss. No tab-switching, no copy-paste round-trip. Reusable slash prompts and small multi-step workflows handle the repeatable work. Bring your own keys, keep history in a local SQLite file.
+Press `Alt+Space`, say what you want done, dismiss. Nexio finds files, opens apps,
+and organizes things for you. Risky actions pause for your approval, every action is
+shown exactly before it runs, every run is written to a log, and deletes go to the
+Recycle Bin so they can be undone. Bring your own keys, keep history in a local SQLite file.
 
 ## Features
 
@@ -21,21 +30,25 @@ Press `Alt+Space`, type, get an answer, dismiss. No tab-switching, no copy-paste
 - Global `Alt+Space` (default, configurable) toggles a frameless `480x640` popup.
 - Popup hides on blur (launcher behavior). Tray has Show / Hide + Quit.
 - Single-instance app. Mode toggle with `Tab` in the composer or `Alt+M`.
+- Opens in Do mode by default. Do acts on your computer (find, open, organize, run);
+  Ask answers plain questions. When you have not picked a mode, Nexio routes
+  automatically (heuristic first, one cheap model call when uncertain) and shows
+  `Doing` / `Answering` in the footer. An explicit mode pick always wins.
 
-**Bring your own key (BYOK) chat**
+**Ask mode (BYOK answers)**
 
 - Providers: `openai` (default model `gpt-4o-mini`), `anthropic`, `gemini`, `compatible` (default `http://localhost:11434/v1`, e.g. Ollama).
 - Keys are entered in the settings panel and stored via `safeStorage` / DPAPI in the SQLite `secrets` table. Fallback XOR obfuscation warns only (dev).
 - `redact()` masks `sk-` / `Bearer` / `api_key` before logging. Dev-only env fallback: `OPENAI_API_KEY`, etc.
-- Chat streams with cancel. Provider usage may incur charges.
+- Answers stream with cancel. Provider usage may incur charges.
 
 **Slash commands and prompt templates**
 
-- Builtins: `/help` `/new` `/clear` `/model` (chat-only) `/history` `/settings`.
+- Builtins: `/help` `/new` `/clear` `/model` (Ask-only) `/history` `/settings` `/log` `/extensions`.
 - Templates: `/translate` `/rewrite` `/summarize` `/explain` `/analyze` `/reply`.
 - Workflows: `/email-reply` `/requirement-review`.
 - Palette: type `/`, ranked exact > prefix > substring > fuzzy. Arrows + `Enter` + `Esc` + click. Unknown commands show top-3 suggestions.
-- Scopes (`chat` / `agent` / `all`) follow the active mode.
+- Scopes (`Ask` / `Do` / `all`) follow the active mode.
 
 See [docs/agents/README.md](docs/agents/README.md).
 
@@ -50,10 +63,39 @@ See [docs/agents/workflows.md](docs/agents/workflows.md).
 
 **Local history**
 
-- Stored in `%APPDATA%\MiniAI\miniai.db` (WAL mode). Override with `MINIAI_DATA_DIR`.
+- Stored in `%APPDATA%\Nexio\nexio.db` (WAL mode). Override with `NEXIO_DATA_DIR`.
 - Note: message text is sent to the configured provider on each request.
+- History has two tabs: Run Log (prompt, one-line outcome, timestamp, status, Undo
+  where supported) and Ask (existing chat transcripts; nothing is discarded).
 
-**Agent Mode (implemented, needs real-runtime verification)**
+**Undo journal**
+
+- Reversible operations (`fs_move`, `fs_copy`, new-file `fs_write`, `clipboard_write`)
+  are journaled per run; `fs_trash` notes manual Recycle Bin restore.
+- Undo reverses in reverse order, verifies preconditions, never overwrites changed
+  files, goes through the normal approval flow, and cannot run twice on the same
+  operations. `shell_run` and MCP tools are never presented as undoable.
+
+**First-run onboarding**
+
+- New installs get a skippable 3-step flow: AI provider + key, allowed folders
+  (Desktop, Documents, Downloads suggested), then example prompts. Existing
+  installations skip it automatically.
+
+**Do mode (built-in computer-use)**
+
+- Do mode runs a built-in tool-calling loop in the main process on top of your configured chat provider — no external agent CLI. The model plans, calls file/clipboard/app/shell tools, you approve risky actions, everything is logged and stoppable (`Ctrl+Alt+Esc`).
+- Approval policy: reads auto-run inside allowed folders, writes need approval, shell commands need approval every time. Trash-only deletes, secrets redacted, `/log` opens the latest run log.
+
+See [docs/architecture/local-agent.md](docs/architecture/local-agent.md).
+
+**Extensions (skills, MCP, hooks, workflows)**
+
+- Install and manage Agent-Skills-compatible skills, MCP servers (official SDK, stdio + Streamable HTTP/SSE), event hooks, and reusable workflows from `/extensions` or the 🧩 footer button. Everything installs OFF until reviewed; skills load progressively, MCP tools join the same registry as `mcp__server__tool`, hooks can only make permissions stricter, and workflows run through the same approval layer. Ships with 2 example skills + 2 example workflows (disabled).
+
+See [docs/architecture/extensions.md](docs/architecture/extensions.md).
+
+**Agent Mode (external runtimes: implemented, needs real-runtime verification)**
 
 - Adapters exist for OpenCode (HTTP-SSE) and Claude / Codex (CLI-JSONL). Router never falls back silently. Sessions are tracked per runtime.
 - This is implemented but not live-verified: tests are mocked only, no real runtime has been connected. Do not treat it as done.
@@ -71,9 +113,11 @@ See [docs/architecture/agent-runtime-adapters.md](docs/architecture/agent-runtim
 
 No releases exist. Run from source.
 
-Prerequisites: Node >= 22.5, Windows x64.
+Prerequisites: Node >= 22.5, Windows 10/11 x64 or macOS 13+ (Apple Silicon or Intel).
 
 ```powershell
+git clone https://github.com/<owner>/nexio.git  # placeholder URL; the repo has not been renamed
+cd nexio
 npm ci
 npm run dev
 ```
@@ -91,6 +135,7 @@ Commands from `package.json`:
 ```powershell
 npm run build:main      # compile Electron main (tsc)
 npm run build:renderer  # copy renderer assets
+npm run build             # build main + renderer
 npm run dev             # build + run Electron
 npx vitest run          # tests (npm test runs vitest run)
 npm test                # tests (vitest run)
@@ -104,7 +149,7 @@ Setup details: [docs/development/setup.md](docs/development/setup.md). Testing d
 
 v0.1.0 pre-release / experimental.
 
-**Working:** popup / hotkey / tray, chat + streaming + cancel, slash + templates, workflows, history, `Tab` switching, router.
+**Working:** popup / hotkey / tray, Ask + streaming + cancel, slash + templates, workflows, history, `Tab` switching, router.
 
 **Implemented, needs real-runtime verification:** Agent Mode adapters (OpenCode HTTP-SSE, Claude / Codex CLI-JSONL) versus live runtimes. Mocked tests only, no real runtime connected.
 

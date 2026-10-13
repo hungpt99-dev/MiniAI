@@ -1,10 +1,33 @@
-appId: com.miniai.app
-productName: MiniAI
+appId: com.nexio.app
+productName: Nexio
 directories:
   output: release
 files:
   - dist/**/*
   - package.json
+  # MCP client runtime (official SDK + the deps its client transports require)
+  - node_modules/@modelcontextprotocol/sdk/**/*
+  - node_modules/ajv/**/*
+  - node_modules/ajv-formats/**/*
+  - node_modules/content-type/**/*
+  - node_modules/cross-spawn/**/*
+  - node_modules/eventsource/**/*
+  - node_modules/eventsource-parser/**/*
+  - node_modules/fast-deep-equal/**/*
+  - node_modules/fast-uri/**/*
+  - node_modules/isexe/**/*
+  - node_modules/json-schema-traverse/**/*
+  - node_modules/json-schema-typed/**/*
+  - node_modules/fast-json-stable-stringify/**/*
+  - node_modules/path-key/**/*
+  - node_modules/pkce-challenge/**/*
+  - node_modules/shebang-command/**/*
+  - node_modules/shebang-regex/**/*
+  - node_modules/uri-js/**/*
+  - node_modules/punycode/**/*
+  - node_modules/which/**/*
+  - node_modules/zod/**/*
+  - node_modules/zod-to-json-schema/**/*
 win:
   signAndEditExecutable: false
   target:
@@ -12,8 +35,27 @@ win:
       arch: [x64]
     - target: portable
       arch: [x64]
+mac:
+  category: public.app-category.productivity
+  minimumSystemVersion: '13.0'
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  target:
+    - target: dmg
+      arch: [universal]
+    - target: zip
+      arch: [universal]
+  extendInfo:
+    # Menu-bar app: no Dock icon, no Cmd+Tab entry (LSUIElement / accessory policy).
+    LSUIElement: true
+    NSDesktopFolderUsageDescription: Nexio reads files on your Desktop only when you ask it to find, open, or organize something there.
+    NSDocumentsFolderUsageDescription: Nexio reads files in Documents only when your request needs them.
+    NSDownloadsFolderUsageDescription: Nexio reads files in Downloads only when your request needs them.
+    NSAppleEventsUsageDescription: Nexio sends Apple Events only if you enable an automation tool that needs them.
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
 portable:
-  artifactName: MiniAI-portable.exe
+  artifactName: Nexio-portable.exe

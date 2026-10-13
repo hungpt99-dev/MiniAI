@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { streamChat, feedSSE } from '../../src/main/ai/stream';
-import { mapHttpError, toMiniAIError } from '../../src/main/ai/providers';
+import { mapHttpError, toNexioError } from '../../src/main/ai/providers';
 import { sseResponse, openAIChunks, mockFetchStatus } from '../mocks/providers.mock';
 
 describe('SSE parser', () => {
@@ -36,6 +36,21 @@ describe('streamChat', () => {
   });
   it('maps AbortError to aborted', () => {
     const e = new Error('aborted'); e.name = 'AbortError';
-    expect(toMiniAIError(e)).toMatchObject({ code: 'aborted' });
+    expect(toNexioError(e)).toMatchObject({ code: 'aborted' });
+  });
+  it('rejects malformed SSE with an empty-response error, not silent content', async () => {
+    await expect(streamChat('openai', {
+      apiKey: 'k', model: 'm',
+      messages: [{ id: '1', role: 'user', content: 'hi', createdAt: 0 }],
+      fetchFn: (async () => sseResponse(['this is not json {{{'])) as unknown as typeof fetch,
+    })).rejects.toMatchObject({ code: 'unknown', message: /Empty response/ });
+  });
+  it('rejects empty non-streaming bodies instead of returning blank', async () => {
+    const empty = new Response(JSON.stringify({ choices: [{ message: { content: '' } }] }), { status: 200 });
+    await expect(streamChat('openai', {
+      apiKey: 'k', model: 'm',
+      messages: [{ id: '1', role: 'user', content: 'hi', createdAt: 0 }],
+      fetchFn: (async () => empty) as unknown as typeof fetch,
+    })).rejects.toMatchObject({ message: /Empty response/ });
   });
 });

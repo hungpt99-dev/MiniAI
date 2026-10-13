@@ -10,17 +10,37 @@
 ## Secret handling (how this project stores keys)
 
 - API keys are stored in SQLite via Electron `safeStorage`
-  (DPAPI on Windows).
+  (DPAPI on Windows, Keychain on macOS).
 - When `safeStorage` is unavailable, the app falls back to a plain
   XOR-obfuscated local value and logs a `console.warn` (dev only).
   Do not rely on this fallback for real secrets.
 - `redact()` masks `sk-…`, `Bearer …`, `api_key=…` before logging.
 - Dev-only env fallback: `${PROVIDER}_API_KEY` (e.g. `OPENAI_API_KEY`)
   is read in `ipc.ts`. Never commit `.env` files.
-- DB lives at `%APPDATA%/MiniAI/miniai.db` (WAL mode) or
-  `MINIAI_DATA_DIR` override. Back it up carefully — it holds secrets.
+- DB lives at `%APPDATA%/Nexio/nexio.db` (WAL mode),
+  `~/Library/Application Support/Nexio` on macOS, or
+  `NEXIO_DATA_DIR` override. Back it up carefully — it holds secrets.
 - No telemetry found in the codebase; network calls go only to
   configured providers.
+
+## macOS permissions (TCC)
+
+- Reading Desktop, Documents, Downloads, iCloud Drive and removable volumes
+  triggers system prompts. Denials (EPERM/EACCES) surface as normal,
+  non-fatal tool errors naming the exact System Settings pane; Settings has
+  an Open Privacy Settings button. Onboarding explains this before folders
+  are chosen.
+- Never requested by default: Full Disk Access, Accessibility,
+  Screen Recording, Automation. Each is asked for only when a feature needs
+  it, with an explanation first, then the exact pane.
+- Always refused unless the user explicitly adds the folder in Settings:
+  `/System`, `/Library`, `/usr`, `/bin`, `/sbin`, `/private`, `/etc`,
+  `~/Library/Keychains`, `~/Library/Mail`, `~/Library/Messages`,
+  `~/.ssh`, `~/.aws`, `~/.gnupg`, browser profiles under
+  `~/Library/Application Support` and `~/Library/Safari`.
+  `/Applications` is write-protected (reads allowed).
+- Same rule on Windows: `C:\Windows`, Program Files, Program Files (x86),
+  ProgramData, `.ssh`, browser profiles. UNC/device paths stay rejected.
 
 ## Reporting a vulnerability
 

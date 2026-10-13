@@ -1,5 +1,7 @@
 import { BrowserWindow, screen } from 'electron';
 import path from 'node:path';
+import { IpcChannels } from '../shared/ipc-channels';
+import { platform } from './platform/index';
 
 let win: BrowserWindow | null = null;
 
@@ -14,17 +16,21 @@ export function getPopup(): BrowserWindow | null {
 
 export function createPopup(): BrowserWindow {
   if (win) return win;
+  const mac = platform().key === 'darwin';
   win = new BrowserWindow({
+    ...(mac ? { type: 'panel' as const } : {}),
     width: POPUP_CONTENT_WIDTH,
     height: POPUP_MIN_H,
     frame: false,
     hasShadow: false,
     resizable: false,
+    // macOS fullscreen visibility comes from setVisibleOnAllWorkspaces at show time.
     alwaysOnTop: true,
     skipTaskbar: true,
     show: false,
     transparent: true,
     backgroundColor: '#00000000',
+    ...(mac ? { visibleOnAllWorkspaces: true } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -76,6 +82,10 @@ export function togglePopup(): void {
     );
     w.show();
     w.focus();
+    try {
+      if (platform().key === 'darwin') w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    } catch { /* older Electron */ }
+    try { w.webContents.send(IpcChannels.popupShown); } catch { /* webcontents not ready */ }
   }
 }
 

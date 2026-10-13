@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "id": "wf-weekly-review",
+  "trigger": "/weekly-review",
+  "title": "Weekly review",
+  "description": "Summarize a week from a notes file, then confirm before writing the summary back.",
+  "inputs": [
+    { "name": "notes_file", "label": "Notes file", "type": "string", "required": true },
+    { "name": "week", "label": "Week label", "type": "string", "default": "this week" }
+  ],
+  "steps": [
+    { "kind": "tool", "id": "notes", "tool": "fs_read", "args": { "path": "{{input.notes_file}}" }, "output": "notes" },
+    { "kind": "llm", "id": "draft", "text": "Summarize these notes for {{input.week}} in under 150 words:\n\n{{steps.notes}}", "output": "summary" },
+    { "kind": "confirm", "id": "ok", "text": "Write this summary next to the notes file?", "output": "confirmed" },
+    { "kind": "tool", "id": "save", "tool": "fs_write", "when": "steps.ok == \"yes\"", "args": { "path": "{{input.notes_file}}.summary.md", "content": "{{steps.draft}}" }, "output": "saved" }
+  ]
+}

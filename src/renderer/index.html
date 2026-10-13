@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>MiniAI</title>
+<title>Nexio</title>
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -11,18 +11,21 @@
   <div class="panel" id="panel">
     <header class="bar">
       <svg id="search-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#B8F26B" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="M16 16l4.5 4.5"></path></svg>
-      <textarea id="input" rows="1" placeholder="Ask MiniAI anything…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Prompt" class="scroll"></textarea>
+      <textarea id="input" rows="1" placeholder="Ask anything…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Prompt" class="scroll"></textarea>
+      <button id="agent-cwd" class="hidden" title="Working folder — click to change" aria-label="Working folder"></button>
       <span id="hotkey-hint" aria-hidden="true"><span class="k">Alt</span> <span class="k">Space</span></span>
       <div id="modebar" role="tablist" aria-label="Mode" class="hidden">
-        <button id="tab-chat" role="tab" aria-selected="true" class="tab active">Chat</button>
-        <button id="tab-agent" role="tab" aria-selected="false" class="tab">Agent</button>
+        <button id="tab-chat" role="tab" aria-selected="true" class="tab active">Ask</button>
+        <button id="tab-agent" role="tab" aria-selected="false" class="tab">Do</button>
         <button id="runtime" title="Agent runtime" class="hidden" aria-label="Agent runtime">opencode</button>
         <span id="mode-hint" title="Tab switches mode"><span class="k">Tab</span></span>
       </div>
     </header>
     <div class="view scroll hidden" id="view">
       <div id="palette" class="scroll hidden" role="listbox" aria-label="Commands"></div>
+      <div id="suggest" class="scroll hidden" role="listbox" aria-label="Suggestions"></div>
       <div id="answer-meta" class="hidden"><span class="dot" aria-hidden="true"></span><span id="model-name">gpt-4o-mini</span></div>
+      <div id="agent-steps" class="hidden" aria-live="polite"></div>
       <div id="messages" class="scroll hidden" aria-live="polite"></div>
       <div id="actions" class="hidden">
         <button id="btn-copy">Copy</button>
@@ -35,14 +38,29 @@
           <button data-prov="openai" class="on">OpenAI</button><button data-prov="anthropic">Anthropic</button><button data-prov="gemini">Gemini</button><button data-prov="compatible">Custom</button>
         </div></div>
         <label class="fld"><span class="flab">API key</span><input id="set-apikey" type="password" placeholder="sk-…" class="mono" /></label>
-        <div class="note">Encrypted on this device with Windows DPAPI.</div>
+        <div class="note" id="enc-note">Encrypted on this device with Windows DPAPI.</div>
         <label class="fld"><span class="flab">Model</span><input id="set-model" class="mono" /></label>
         <label class="fld hidden" id="fld-baseurl"><span class="flab">Base URL</span><input id="set-baseurl" placeholder="optional" class="mono" /></label>
         <label class="fld"><span class="flab">OpenCode URL</span><input id="set-opencode" placeholder="http://localhost:4096" class="mono" /></label>
         <label class="fld"><span class="flab">Claude bin</span><input id="set-claudebin" placeholder="claude" class="mono" /></label>
         <label class="fld"><span class="flab">Codex bin</span><input id="set-codexbin" placeholder="codex" class="mono" /></label>
         <label class="fld"><span class="flab">Agent cwd</span><input id="set-agentcwd" placeholder="optional" class="mono" /></label>
-        <div class="hotkey-row"><span>Global hotkey</span><span><span class="k">Alt</span> <span class="k">Space</span></span></div>
+        <div class="fld"><span class="flab">Agent — allowed folders</span><ul id="agent-roots" class="agent-list"></ul><div class="row"><button id="btn-agent-add-root">Add folder</button></div></div>
+        <div class="fld"><span class="flab">Agent — always-allow rules</span><ul id="agent-rules" class="agent-list"></ul></div>
+        <label class="fld"><span class="flab">Agent stop hotkey</span><input id="set-stophotkey" placeholder="Ctrl+Alt+Esc" class="mono" /></label>
+        <label class="fld"><span class="flab">Max tool calls per run</span><input id="set-maxcalls" type="number" min="1" max="100" class="mono" /></label>
+        <label class="fld check"><input id="set-reqapprove" type="checkbox" /><span class="flab">Require approval for file writes</span></label>
+        <label class="fld"><span class="flab">Starter suggestions (one per line)</span><textarea id="set-suggest" class="mono" rows="4"></textarea></label>
+        <div class="row"><button id="btn-open-ext">🧩 Manage extensions</button></div>
+        <div class="fld"><span class="flab">Global hotkey</span>
+          <div class="row"><input id="set-hotkey" class="mono" placeholder="Alt+Space" aria-label="Global hotkey" /></div>
+          <div class="note hidden" id="hotkey-warn" role="alert"></div>
+        </div>
+        <div class="fld hidden" id="fld-privacy"><span class="flab">File access (macOS)</span>
+          <div class="row"><button id="btn-privacy">Open Privacy Settings</button></div>
+          <div class="note">If macOS blocked a folder, allow Nexio under Files and Folders.</div>
+        </div>
+        <label class="fld check"><input id="set-login" type="checkbox" /><span class="flab">Launch at login</span></label>
         <div class="row save-row">
           <button id="btn-save-settings">Save changes</button>
         </div>
@@ -53,11 +71,19 @@
       </aside>
       <aside id="history" class="hidden" aria-label="History">
         <div class="set-head"><h3>History</h3><button id="btn-history-back" aria-label="Back" title="Back (Esc)">←</button></div>
-        <div class="row"><button id="btn-new">+ New chat</button></div>
-        <ul id="history-list"></ul>
+        <div class="seg hist-tabs" role="group" aria-label="History view">
+          <button data-ht="runs" class="on">Run Log</button><button data-ht="ask">Ask</button>
+        </div>
+        <div id="hist-runs"><ul id="runlog-list"></ul></div>
+        <div id="hist-ask" class="hidden">
+          <div class="row"><button id="btn-new">+ New chat</button></div>
+          <ul id="history-list"></ul>
+        </div>
       </aside>
+      <aside id="onboard" class="hidden" aria-label="Onboarding"></aside>
+      <aside id="extensions" class="hidden" aria-label="Extensions"></aside>
     </div>
-    <footer id="hints"><span id="hint-nav"><span class="k">↑↓</span> navigate <span class="k">↵</span> select <span class="k">Esc</span> close</span><span id="hint-multi" class="hidden"><span class="k">Enter</span> send <span class="k">Shift Enter</span> new line</span> <span class="sp"></span><span id="hist-note">Local history on</span><button id="btn-history" class="fbtn" aria-label="History" title="History">☰</button><button id="btn-settings" class="fbtn" aria-label="Settings" title="Settings">⚙</button><button id="btn-send" class="fbtn send" aria-label="Send" title="Send (Enter)">➤</button></footer>
+    <footer id="hints"><span id="hint-nav"><span class="k">Tab</span> switch mode <span class="k">Enter</span> run <span class="k">Esc</span> stop/close</span><span id="hint-multi" class="hidden"><span class="k">Enter</span> send <span class="k">Shift Enter</span> new line</span> <span class="sp"></span><span id="route-status" class="hidden" role="status"></span><button id="btn-stop" class="fbtn danger hidden" aria-label="Stop agent run" title="Stop">Stop</button><span id="stop-hint" class="hidden"><span class="k">Ctrl</span> <span class="k">Alt</span> <span class="k">Esc</span></span><span id="hist-note">Local history on</span><button id="btn-log" class="fbtn textbtn" aria-label="Agent log" title="Open latest agent log (/log)">Log</button><button id="btn-ext" class="fbtn" aria-label="Extensions" title="Extensions (/extensions)">🧩</button><button id="btn-history" class="fbtn" aria-label="History" title="History">☰</button><button id="btn-settings" class="fbtn" aria-label="Settings" title="Settings">⚙</button><button id="btn-send" class="fbtn send" aria-label="Send" title="Send (Enter)">➤</button></footer>
   </div>
 </div>
 <script src="app.js"></script>

@@ -1,4 +1,4 @@
-# Contributing to MiniAI
+# Contributing to Nexio
 
 Windows-first project. Small, focused PRs welcome.
 

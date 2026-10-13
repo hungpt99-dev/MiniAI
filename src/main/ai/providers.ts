@@ -1,4 +1,4 @@
-import type { ChatMessage, MiniAIError, ProviderId } from '../../shared/types';
+import type { ChatMessage, NexioError, ProviderId } from '../../shared/types';
 
 export interface ChatOptions {
   apiKey: string;
@@ -66,7 +66,7 @@ export const PROVIDER_DEFS: Record<ProviderId, ProviderDef> = {
   },
 };
 
-export function mapHttpError(status: number, bodyText: string): MiniAIError {
+export function mapHttpError(status: number, bodyText: string): NexioError {
   if (status === 401 || status === 403) return { code: 'auth', message: `Authentication failed (${status})` };
   if (status === 429) return { code: 'rate-limit', message: 'Rate limited (429)' };
   if (status === 404 || status === 400) {
@@ -77,8 +77,8 @@ export function mapHttpError(status: number, bodyText: string): MiniAIError {
   return { code: 'unknown', message: `Request failed (${status}): ${bodyText.slice(0, 200)}` };
 }
 
-export function toMiniAIError(e: unknown): MiniAIError {
-  if (e && typeof e === 'object' && 'code' in e) return e as MiniAIError;
+export function toNexioError(e: unknown): NexioError {
+  if (e && typeof e === 'object' && 'code' in e) return e as NexioError;
   const err = e as Error;
   if (err?.name === 'AbortError') return { code: 'aborted', message: 'Aborted' };
   if (err?.name === 'TimeoutError' || /timeout|aborted/i.test(err?.message || '')) return { code: 'timeout', message: err.message };
@@ -86,7 +86,7 @@ export function toMiniAIError(e: unknown): MiniAIError {
   return { code: 'unknown', message: err?.message || String(e) };
 }
 
-export async function testConnectivity(provider: ProviderId, apiKey: string, model: string, baseUrl?: string, fetchFn: typeof fetch = fetch): Promise<{ ok: boolean; error?: MiniAIError }> {
+export async function testConnectivity(provider: ProviderId, apiKey: string, model: string, baseUrl?: string, fetchFn: typeof fetch = fetch): Promise<{ ok: boolean; error?: NexioError }> {
   try {
     const def = PROVIDER_DEFS[provider];
     const res = await fetchFn(def.chatEndpoint(baseUrl || def.defaultBaseUrl), {
@@ -99,6 +99,6 @@ export async function testConnectivity(provider: ProviderId, apiKey: string, mod
     // 400 on ping often means auth OK but payload rejected — treat as reachable but report model error distinctly.
     return { ok: false, error: mapHttpError(res.status, text) };
   } catch (e) {
-    return { ok: false, error: toMiniAIError(e) };
+    return { ok: false, error: toNexioError(e) };
   }
 }

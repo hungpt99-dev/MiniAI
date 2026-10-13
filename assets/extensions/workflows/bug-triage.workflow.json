@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "id": "wf-bug-triage",
+  "trigger": "/bug-triage",
+  "title": "Bug triage",
+  "description": "Classify a bug report and draft a fix plan with an agent sub-task.",
+  "inputs": [
+    { "name": "report", "label": "Bug report", "type": "text", "required": true }
+  ],
+  "steps": [
+    { "kind": "llm", "id": "severity", "text": "Classify severity (low/medium/high) with one line of reasoning:\n\n{{input.report}}", "output": "sev" },
+    { "kind": "agent", "id": "plan", "goal": "Draft a minimal fix plan for this {{steps.severity}} bug:\n\n{{input.report}}", "tools": ["fs_read", "fs_list", "fs_search"], "output": "plan" },
+    { "kind": "condition", "id": "hot", "when": "steps.sev contains \"high\"", "output": "is_hot" }
+  ]
+}

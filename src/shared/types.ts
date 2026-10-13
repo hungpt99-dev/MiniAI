@@ -11,7 +11,7 @@ export interface ChatMessage {
   createdAt: number;
 }
 
-export type SlashSource = 'builtin' | 'prompt' | 'workflow' | 'user';
+export type SlashSource = 'builtin' | 'prompt' | 'workflow' | 'user' | 'skill' | 'mcp';
 
 export interface SlashMatch {
   trigger: string;
@@ -49,6 +49,13 @@ export interface Workflow {
   steps: WorkflowStep[];
 }
 
+export interface AgentAlwaysRule {
+  scope: 'tool-dir' | 'exact-command';
+  tool?: string;
+  dir?: string;
+  command?: string;
+}
+
 export interface Settings {
   provider: ProviderId;
   model: string;
@@ -63,9 +70,48 @@ export interface Settings {
   claudeBin?: string;
   codexBin?: string;
   agentCwd?: string;
+  agentAllowedRoots?: string[];
+  agentAlwaysAllow?: AgentAlwaysRule[];
+  agentStopHotkey?: string;
+  agentMaxCalls?: number;
+  requireApprovalForWrites?: boolean;
+  onboarded?: boolean;
+  suggestions?: string[];
+  /** Launch at login via app.setLoginItemSettings. Off by default. */
+  launchAtLogin?: boolean;
 }
 
-export interface MiniAIError {
+export interface NexioError {
   code: 'auth' | 'rate-limit' | 'timeout' | 'network' | 'model' | 'unknown' | 'validation' | 'aborted';
   message: string;
 }
+
+/** Single-channel extension management (nexio:ext). Renderer-safe: plain data only. */
+export interface ExtSourceInput {
+  sourceType: 'folder' | 'zip' | 'git' | 'paste' | 'file';
+  path?: string;
+  url?: string;
+  kind?: 'skill' | 'mcp' | 'hook' | 'workflow';
+  text?: string;
+}
+
+export type ExtAction =
+  | { action: 'list' }
+  | { action: 'preview'; source: ExtSourceInput }
+  | { action: 'install'; source: ExtSourceInput; enable?: boolean }
+  | { action: 'enable'; id: string; trustAccepted?: boolean }
+  | { action: 'trust'; id: string }
+  | { action: 'disable'; id: string }
+  | { action: 'updatePreview'; id: string; source: ExtSourceInput }
+  | { action: 'update'; id: string; source: ExtSourceInput }
+  | { action: 'remove'; id: string }
+  | { action: 'source'; id: string }
+  | { action: 'skillBody'; name: string }
+  | { action: 'mcp'; op: 'restart' | 'stop' | 'trust-start' | 'info'; server: string }
+  | { action: 'mcpToolPolicy'; server: string; tool: string; policy: 'ask' | 'allow' | 'block' }
+  | { action: 'mcpPrompt'; server?: string; prompt?: string; trigger?: string }
+  | { action: 'workflowInfo'; trigger: string }
+  | { action: 'workflowRun'; trigger: string; inputs: Record<string, string> }
+  | { action: 'hookSet'; event: string; command: string | { win32?: string; darwin?: string }; matcher?: string; extId?: string; enabled: boolean }
+  | { action: 'export'; id: string }
+  | { action: 'pickFile' };
