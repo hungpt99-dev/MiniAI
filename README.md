@@ -45,11 +45,14 @@ Recycle Bin so they can be undone. Bring your own keys, keep history in a local 
   paperclip button stages images/files in a tray under the composer.
   `Enter` with attachments alone sends "Describe the attached file(s)."
   Types are sniffed by magic bytes (max 5, 20MB/file, 50MB total); images are
-  EXIF-stripped and capped at 2048px via Electron `nativeImage`, text is
+  EXIF-stripped and capped at 2048px via Electron `nativeImage` (outside
+  Electron the original bytes are kept, JPEG EXIF-stripped only), text is
   BOM-decoded and truncated at 200KB. Temp files live under
-  `<data>/attachments/<run>` and are deleted on run delete/Clear or swept
-  after 7 days. Non-vision models get a notice with a one-click
-  "Switch model" (image bytes are never sent); logs keep name/type/size/SHA256
+  `<data>/attachments/<conversation>` and are deleted on conversation
+  delete/Clear or swept after 7 days; files outside the working folder need
+  per-file Allow once. Non-vision models get a notice with a "Switch model"
+  button that confirms before replacing your provider/model and warns to
+  re-attach images (image bytes are never sent); logs keep name/type/size/SHA256
   only. Details: `docs/providers.md` (vision), `docs/configuration.md`
   (`compatibleImages`), `SECURITY.md`.
 

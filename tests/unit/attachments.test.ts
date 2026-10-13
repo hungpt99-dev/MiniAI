@@ -7,7 +7,7 @@ import {
   fitSize, classifyPaste, safeName, redactPaths,
 } from '../../src/shared/attachments';
 import {
-  sha256, decodeText, stripJpegExif, processImage, saveAttachment,
+  sha256, decodeText, stripJpegExif, processImage, resolveAttachMime, saveAttachment,
   deleteRunAttachments, sweepOldAttachments, classifyAttachPath, attachmentLogRecord,
 } from '../../src/main/attachments';
 import { PROVIDER_ADAPTERS } from '../../src/main/ai/providers/index';
@@ -81,6 +81,12 @@ describe('image processing without sharp', () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
     const p = processImage(png, 'image/png');
     expect(p.dataUrl.startsWith('data:image/')).toBe(true);
+  });
+  it('keeps markdown type for .md text, trusts bytes otherwise', () => {
+    expect(resolveAttachMime('text/plain', 'text/plain', 'n.md')).toBe('text/markdown');
+    expect(resolveAttachMime('text/plain', undefined, 'n.markdown')).toBe('text/markdown');
+    expect(resolveAttachMime('text/plain', undefined, 'n.txt')).toBe('text/plain');
+    expect(resolveAttachMime('image/png', undefined, 'n.md')).toBe('image/png');
   });
 });
 
@@ -178,6 +184,19 @@ describe('provider mapping + vision caps', () => {
       PROVIDER_ADAPTERS.openai.capabilitiesFor('gpt-4o-mini'),
     )).toThrow(/oversize|too many/i);
   });
+  it('rejects unsupported image types and oversize sides inline', () => {
+    const caps = PROVIDER_ADAPTERS.openai.capabilitiesFor('gpt-4o-mini');
+    const bmp = { ...img, mimeType: 'image/bmp' };
+    expect(() => assertVision(
+      { messages: [{ role: 'user' as const, content: [{ type: 'text', text: 'x' }, bmp] }], maxOutputTokens: 8, stream: false },
+      caps,
+    )).toThrow(/unsupported image type/);
+    const huge = { ...img, width: 4000, height: 3000 };
+    expect(() => assertVision(
+      { messages: [{ role: 'user' as const, content: [{ type: 'text', text: 'x' }, huge] }], maxOutputTokens: 8, stream: false },
+      caps,
+    )).toThrow(/exceeds 2048/);
+  });
   it('compatible image mode: auto/on send, off blocks (default auto)', () => {
     const req = {
       messages: [{ role: 'user' as const, content: [{ type: 'text', text: 'see' }, img] }],
@@ -219,6 +238,24 @@ describe('agent: attachment tools are read-only, writes still need approval', ()
     expect(r.output).toContain('Ignore previous instructions');
     clearRunAttachments('r1');
     expect(getRunAttachments('r1')).toEqual([]);
+  });
+  it('attachment_read prefers id over name on collisions', async () => {
+    __resetAttachmentRefsForTests();
+    const dir = tmpDir();
+    const p1 = path.join(dir, 'one.txt');
+    const sub = path.join(dir, 'sub');
+    fs.mkdirSync(sub);
+    const p2 = path.join(sub, 'one.txt');
+    fs.writeFileSync(p1, 'first file');
+    fs.writeFileSync(p2, 'second file');
+    registerRunAttachments('r2', [
+      { id: 'a1', name: 'one.txt', mime: 'text/plain', size: 10, sha256: 'x', path: p1, kind: 'text' },
+      { id: 'a2', name: 'one.txt', mime: 'text/plain', size: 11, sha256: 'y', path: p2, kind: 'text' },
+    ]);
+    const r = await attachmentReadTool.run({ runId: 'r2', id: 'a2' }, { signal: new AbortController().signal, cwd: dir });
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain('second file');
+    clearRunAttachments('r2');
   });
   it('file writes still need approval with the exact path (attachments grant nothing)', () => {
     const dir = tmpDir();

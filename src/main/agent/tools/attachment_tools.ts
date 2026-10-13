@@ -57,7 +57,7 @@ export const attachmentReadTool: Tool = {
     const runId = String(input.runId || '');
     const id = String(input.id || '');
     const refs = RUN_REFS.get(runId) || [];
-    const ref = refs.find((r) => r.id === id || r.name === id);
+    const ref = refs.find((r) => r.id === id) || refs.find((r) => r.name === id);
     if (!ref) return { ok: false, output: `unknown attachment: ${id}` };
     if (ref.kind === 'image') {
       return { ok: true, output: `[image ${ref.name} (${ref.mime}, ${ref.size} bytes) — pixels are in the message, not this text]`, untrusted: true, source: ref.name };

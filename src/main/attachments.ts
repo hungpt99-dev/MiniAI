@@ -49,6 +49,12 @@ export function decodeText(buf: Buffer): { text: string; truncated: boolean } {
   return { text, truncated: false };
 }
 
+/** Trust sniffed bytes over the claimed extension, except text stays text; .md names keep their markdown type. */
+export function resolveAttachMime(sniffed: string, claimed: string | undefined, name: string): string {
+  const mime = sniffed.startsWith('text/') && claimed?.startsWith('text/') ? claimed : sniffed;
+  if (mime === 'text/plain' && /\.m(d|arkdown)$/i.test(name)) return 'text/markdown';
+  return mime;
+}
 /** Strip JPEG APP1 (EXIF) segments so orientation/metadata never leaves the device raw. */
 export function stripJpegExif(buf: Buffer): Buffer {
   if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) return buf;
@@ -89,11 +95,14 @@ function tryNativeImage(buf: Buffer): { dataUrl: string; w: number; h: number } 
   } catch { return null; }
 }
 
-/** Re-encode images via Electron nativeImage when present; else EXIF-strip bytes. No sharp dependency. */
+/** Re-encode images via Electron nativeImage when present (2048px cap, EXIF dropped).
+ * Fallback (plain Node/tests): original bytes, JPEG EXIF-stripped only — PNG/WebP/GIF
+ * metadata is retained and no resize applies. No sharp dependency. */
 export function processImage(buf: Buffer, mime: string): { bytes: Buffer; mime: string; width?: number; height?: number; dataUrl: string } {
   const stripped = mime === 'image/jpeg' ? stripJpegExif(buf) : buf;
   const native = tryNativeImage(stripped);
   if (native) return { bytes: Buffer.from(native.dataUrl.split(',')[1], 'base64'), mime: 'image/png', width: native.w, height: native.h, dataUrl: native.dataUrl };
+  if (stripped.length > ATTACH_LIMITS.maxFileBytes) throw new Error(`Attachment too large (max 20MB per file)`);
   const b64 = stripped.toString('base64');
   return { bytes: stripped, mime, dataUrl: `data:${mime};base64,${b64}` };
 }
@@ -102,7 +111,7 @@ export function saveAttachment(baseDir: string, runId: string, name: string, mim
   const dir = attachmentDir(baseDir, runId);
   fs.mkdirSync(dir, { recursive: true });
   const safe = safeName(name);
-  const id = `a-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const id = `a-${crypto.randomUUID()}`;
   const filePath = path.join(dir, `${id}-${safe}`);
   fs.writeFileSync(filePath, bytes);
   const kind = mime.startsWith('image/') ? 'image' : mime.startsWith('text/') || mime.includes('markdown') ? 'text' : 'file';

@@ -23,9 +23,9 @@ export interface RouterContext {
  * ipc (runBuiltInAgent) â€” never an external runtime, never a fallback.
  */
 export async function routeRequest(input: RouteInput, ctx: RouterContext): Promise<string> {
-  const { mode, sessionId, requestId, prompt, cwd, signal, onToken } = { ...input };
+  const { mode, sessionId, requestId, prompt, cwd, signal, onToken, attachmentsMeta } = { ...input };
   void sessionId;
   void requestId;
-  if (mode === 'chat') return ctx.chat({ mode, sessionId, requestId, prompt, cwd, signal, onToken });
+  if (mode === 'chat') return ctx.chat({ mode, sessionId, requestId, prompt, cwd, signal, onToken, ...(attachmentsMeta ? { attachmentsMeta } : {}) });
   throw new Error('agent-direct: Do mode runs the built-in loop (see runBuiltInAgent in ipc)');
 }

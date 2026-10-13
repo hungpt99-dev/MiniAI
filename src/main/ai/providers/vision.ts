@@ -39,16 +39,18 @@ export function fileRefText(name: string, mime: string, size: number, sha: strin
  * or a plain Error on oversize/overcount (caller surfaces inline, never silent).
  */
 export function assertVision(req: NormalizedRequest, caps: ProviderCapabilities): void {
-  const images: Array<{ bytes?: number }> = [];
+  const images: Array<{ bytes?: number; mimeType?: string; width?: number; height?: number }> = [];
   for (const m of req.messages) {
     const c = (m as { content?: unknown }).content;
-    if (Array.isArray(c)) for (const p of c as Array<{ type?: string; bytes?: number }>) if (p?.type === 'image') images.push(p);
+    if (Array.isArray(c)) for (const p of c as Array<{ type?: string; bytes?: number; mimeType?: string; width?: number; height?: number }>) if (p?.type === 'image') images.push(p);
   }
   if (!images.length) return;
   if (!caps.supportsVision) throw new VisionNotSupportedError(images.length);
   if (images.length > caps.maxImages) throw new Error(`oversize: too many images (${images.length} > ${caps.maxImages})`);
   for (const im of images) {
+    if (im.mimeType && caps.supportedTypes.length && !caps.supportedTypes.includes(im.mimeType)) throw new Error(`unsupported image type: ${im.mimeType} (supported: ${caps.supportedTypes.join(', ')})`);
     if (typeof im.bytes === 'number' && im.bytes > caps.maxBytes) throw new Error('oversize: image exceeds per-image byte cap');
+    if (typeof im.width === 'number' && typeof im.height === 'number' && Math.max(im.width, im.height) > caps.maxSide) throw new Error(`oversize: image side exceeds ${caps.maxSide}px — resize and re-attach`);
   }
 }
 

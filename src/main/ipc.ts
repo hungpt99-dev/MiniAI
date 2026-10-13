@@ -35,8 +35,8 @@ import { setPopupHeight, togglePopup, getPopup } from './popup';
 import { openExternalUrl, pickAttachFiles, pickFile, pickFolder, revealPath, withDialogLock } from './app/dialogs';
 import { resolveDbPath } from './db/db';
 import { ATTACH_LIMITS, ATTACH_STRINGS, sniffMime, validateLimits } from '../shared/attachments';
-import { attachmentLogRecord, classifyAttachPath, decodeText, deleteRunAttachments, processImage, saveAttachment, sha256, sweepOldAttachments } from './attachments';
-import { registerRunAttachments } from './agent/tools/attachment_tools';
+import { attachmentLogRecord, classifyAttachPath, decodeText, deleteRunAttachments, processImage, resolveAttachMime, saveAttachment, sha256, sweepOldAttachments } from './attachments';
+import { clearRunAttachments, registerRunAttachments } from './agent/tools/attachment_tools';
 import { VisionNotSupportedError } from './ai/providers/vision';
 import type { ContentPart } from './ai/providers/types';
 import type { ChatMessage, Mode, Settings } from '../shared/types';
@@ -284,8 +284,10 @@ export interface PreparedAttachment {
 
 /**
  * Validate + process staged attachments (magic bytes, limits, EXIF strip,
- * 2048 resize, BOM, 200KB truncation). Rejections throw inline errors —
- * never silent. Returns provider parts + log-safe records (never bytes).
+ * 2048 resize when Electron nativeImage is present, BOM, 200KB truncation).
+ * Temp files live under the given scope id (conversation id, so Clear /
+ * conversation delete removes agent temps too). Rejections throw inline
+ * errors — never silent. Returns provider parts + log-safe records (never bytes).
  */
 export function prepareAttachments(
   runId: string,
@@ -314,8 +316,8 @@ export function prepareAttachments(
     const u8 = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length);
     const sniffed = sniffMime(u8, origName);
     if (sniffed === 'exe' || sniffed === null) throw new Error(`Rejected ${origName}: executable or unknown content (type checked, not extension)`);
-    // Trust sniffed bytes over the claimed extension, except text stays text.
-    const mime = sniffed.startsWith('text/') && a.mime?.startsWith('text/') ? (a.mime as string) : sniffed;
+    // Trust sniffed bytes over the claimed extension (markdown names keep text/markdown).
+    const mime = resolveAttachMime(sniffed, a.mime, origName);
     if (mime.startsWith('image/')) {
       const proc = processImage(bytes, mime);
       const stored = saveAttachment(appBaseDir(), runId, origName, proc.mime, proc.bytes, { width: proc.width, height: proc.height, dataUrl: proc.dataUrl });
@@ -362,6 +364,7 @@ function finishRun(
   outcome: string, status: 'done' | 'error' | 'stopped', cwd: string,
 ): void {
   const undoable = undoAvailable(runId);
+  try { clearRunAttachments(runId); } catch { /* refs are run-scoped memory only */ }
   try {
     recordRun({ runId, kind, prompt, outcome: oneLineOutcome(outcome), ts: Date.now(), status, undoable, engine: 'builtin' });
   } catch { /* history must never break runs */ }
@@ -931,7 +934,9 @@ export function registerIpc(): void {
         let userParts: ContentPart[] | undefined;
         let attachMeta: string | undefined;
         if (staged.length) {
-          const prepared = prepareAttachments(runId, staged, cwd, policyFor(s, cwd));
+          // Temps live under the conversation id so Clear / conversation delete
+          // removes agent temps too; tools re-key refs under the run id.
+          const prepared = prepareAttachments(conversationId, staged, cwd, policyFor(s, cwd));
           registerRunAttachments(runId, prepared.map((p) => p.ref));
           try {
             const wlog = createRunLog(undefined, runId);
@@ -1241,7 +1246,7 @@ export function registerIpc(): void {
     // Paperclip picker: multi-select through the dialog lock (no blur-hide).
     let picked: string[] = [];
     try {
-      picked = await pickAttachFiles(getPopup(), ATTACH_LIMITS.maxCount);
+      picked = await pickAttachFiles(getPopup());
     } catch { picked = []; }
     try {
       const s = getSettings(db());
@@ -1286,21 +1291,22 @@ export function registerIpc(): void {
   ipcMain.handle(IpcChannels.attachProcess, async (_e, input: { runId: string; name: string; dataBase64: string }) => {
     try {
       const runId = String(input.runId || `run-${Date.now()}`);
+      // Pre-cap the base64 payload before decoding so oversize input never allocates.
+      if ((input.dataBase64 || '').length > Math.ceil(ATTACH_LIMITS.maxFileBytes * 4 / 3) + 64) throw new Error(`${ATTACH_STRINGS.oversizeError}: ${input.name} (max 20MB per file)`);
       const bytes = Buffer.from(input.dataBase64 || '', 'base64');
       if (!bytes.length) throw new Error(`Rejected ${input.name}: empty file`);
       if (bytes.length > ATTACH_LIMITS.maxFileBytes) throw new Error(`${ATTACH_STRINGS.oversizeError}: ${input.name} (max 20MB per file)`);
       const u8 = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length);
       const sniffed = sniffMime(u8, input.name);
       if (sniffed === 'exe' || sniffed === null) throw new Error(`Rejected ${input.name}: executable or unknown content (type checked, not extension)`);
-      const mime = sniffed;
+      const mime = resolveAttachMime(sniffed, undefined, input.name);
       if (mime.startsWith('image/')) {
         const proc = processImage(bytes, mime);
         const stored = saveAttachment(appBaseDir(), runId, input.name, proc.mime, proc.bytes, { width: proc.width, height: proc.height, dataUrl: proc.dataUrl });
         return { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, kind: 'image', width: stored.width, height: stored.height, previewDataUrl: stored.previewDataUrl, sha256: stored.sha256 };
       }
       const { text, truncated } = decodeText(bytes);
-      void truncated;
-      const stored = saveAttachment(appBaseDir(), runId, input.name, mime, Buffer.from(text, 'utf8'));
+      const stored = saveAttachment(appBaseDir(), runId, input.name, mime, Buffer.from(text, 'utf8'), { truncated });
       return { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, kind: stored.kind, sha256: stored.sha256 };
     } catch (e) { throw asError(e); }
   });

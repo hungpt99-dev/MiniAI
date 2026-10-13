@@ -555,6 +555,7 @@ async function refreshHistory() {
   for (const c of list) {
     const li = document.createElement('li');
     li.textContent = c.title || c.id;
+    li.dataset.cid = c.id;
     li.onclick = async () => {
       convId = c.id; messagesEl.innerHTML = '';
       const msgs = await window.nexio.getMessages(c.id);
@@ -2312,6 +2313,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
   var keySeq = 0;
   var sentStash = {};
   var lastUserText = '';
+  var lastHadAttach = false;
   var previewOpen = false;
   var previewPrior = null;
   function base(n) { try { return String(n || 'file').split(/[\\/]/).pop() || 'file'; } catch (e) { return 'file'; } }
@@ -2451,7 +2453,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
         var a = list[i];
         if (pending.length >= 5) { showError('Too many attachments (max 5)'); break; }
         if ((a.size || 0) > 20 * 1024 * 1024) { showError('Attachment too large: ' + base(a.name) + ' (max 20MB per file)'); continue; }
-        if (/\.exe$/i.test(a.name || '')) { showError('Rejected ' + base(a.name) + ': executable content detected'); continue; }
+        if (/\.exe$/i.test(a.name || '')) { showError('Rejected ' + base(a.name) + ': executable files are not allowed'); continue; }
         a.key = 'k' + (++keySeq);
         if (!a.kind) a.kind = (a.mime || '').indexOf('image/') === 0 ? 'image' : 'file';
         pending.push(a);
@@ -2471,7 +2473,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
         var name = base(f.name || 'pasted-image.png');
         var mime = f.type || 'application/octet-stream';
         if ((f.size || 0) > 20 * 1024 * 1024) { showError('Attachment too large: ' + name + ' (max 20MB per file)'); return; }
-        if (/\.exe$/i.test(name)) { showError('Rejected ' + name + ': executable content detected'); return; }
+        if (/\.exe$/i.test(name)) { showError('Rejected ' + name + ': executable files are not allowed'); return; }
         started++;
         try {
           var r = new FileReader();
@@ -2682,6 +2684,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
       var cur = sentStash[cid] || [];
       pending.forEach(function (a) { cur.push({ name: base(a.name), mime: a.mime, size: a.size, previewUrl: a.previewUrl, kind: a.kind }); });
       sentStash[cid] = cur.slice(-10);
+      lastHadAttach = pending.length > 0;
     } catch (e) {}
   }
   try {
@@ -2696,6 +2699,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
             if (merged.length) opts = Object.assign({}, opts, { attachments: merged });
           }
           var had = pending.length;
+          lastHadAttach = false;
           var p = _send(cid, text, opts);
           if (had) {
             try { stashFor(cid); } catch (e) {}
@@ -2714,6 +2718,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
             if (merged2.length) opts = Object.assign({}, opts, { attachments: merged2 });
           }
           var had2 = pending.length;
+          lastHadAttach = false;
           var p2 = _astart(cid, text, opts);
           if (had2) {
             try { stashFor(cid); } catch (e) {}
@@ -2730,12 +2735,12 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
       var ul = document.getElementById('history-list');
       if (!ul) return;
       var items = ul.querySelectorAll('li');
-      items.forEach(function (li, ix) {
+      items.forEach(function (li) {
         if (li.dataset.attachDone) return;
         li.dataset.attachDone = '1';
-        var keys = Object.keys(sentStash);
-        if (!keys.length) return;
-        var bag = sentStash[keys[Math.min(ix, keys.length - 1)]] || [];
+        var cid = li.dataset.cid;
+        if (!cid) return;
+        var bag = sentStash[cid] || [];
         if (!bag.length) return;
         var wrap = document.createElement('div');
         wrap.className = 'attach-menu';
@@ -2761,10 +2766,9 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
         del.addEventListener('click', function (ev) {
           ev.stopPropagation();
           try {
-            delete sentStash[keys[Math.min(ix, keys.length - 1)]];
-            if (window.nexio && window.nexio.attachClear) {
-              Object.keys(sentStash).forEach(function () {});
-              window.nexio.attachClear(keys[Math.min(ix, keys.length - 1)]).catch(function () {});
+            delete sentStash[cid];
+            if (window.nexio && window.nexio.attachClear && cid) {
+              window.nexio.attachClear(cid).catch(function () {});
             }
             if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
             announce('Delete attachments — cleared');
@@ -2836,13 +2840,26 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
         node.dataset.recovered = '1';
         b.disabled = true;
         try {
+          // Never silently replace the user's provider/model; confirm first.
+          if (!window.confirm('Switch model to OpenAI gpt-4o-mini so images can send? Your current provider and model will be replaced.')) {
+            node.dataset.recovered = '';
+            b.disabled = false;
+            return;
+          }
           (window.nexio.setSettings({ provider: 'openai', model: 'gpt-4o-mini' }) || Promise.resolve()).then(function () {
             try { if (typeof refreshModelName === 'function') refreshModelName(); } catch (e2) {}
             try {
               if (lastUserText && typeof send === 'function') {
                 inputEl2.value = lastUserText;
                 try { if (typeof grow === 'function') grow(); } catch (e3) {}
-                void send();
+                // The failed send cleared the tray, so image bytes are gone:
+                // restore the text but never resend it alone — warn to re-attach.
+                if (lastHadAttach) {
+                  lastHadAttach = false;
+                  showError('Images were not sent — re-attach them, then send.');
+                } else {
+                  void send();
+                }
               }
             } catch (e2) {}
           }).catch(function () { b.disabled = false; });

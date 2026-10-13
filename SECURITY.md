@@ -49,6 +49,8 @@
 - Limits: max 5 files, 20MB per file, 200KB text truncation, 50MB total.
 - Images are re-encoded via Electron `nativeImage` (no extra dependency):
   EXIF is stripped, orientation applied, longest edge capped at 2048px.
+  Outside Electron (fallback) the original bytes are kept with JPEG EXIF
+  stripped only — PNG/WebP/GIF metadata is retained and no resize applies.
   Text is decoded with UTF-8/UTF-16 BOM handling.
 - Attached paths go through the same realpath + allowed/protected policy as
   agent tools: outside-root files need per-file "Allow once", protected or
@@ -57,8 +59,8 @@
 - Attachment content is untrusted data (delimited, system-prompt rule, and
   "Requested after reading \<name\>" on follow-up approvals). Tray text shows
   "Attachment text may contain secrets — confirm before sharing."
-- Temp files live in `<data>/attachments/<runId>` with safe names and are
-  deleted on run delete/Clear, plus a 7-day orphan sweep. Run logs keep
+- Temp files live in `<data>/attachments/<conversationId>` with safe names and are
+  deleted on conversation delete/Clear, plus a 7-day orphan sweep. Run logs keep
   name/type/size/SHA256 only — never bytes. First use shows
   "Attachments stay on this computer … (localhost processing)".
 

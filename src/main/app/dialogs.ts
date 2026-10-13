@@ -207,8 +207,9 @@ export async function pickFolder(
   });
 }
 
-/** Parent-modal multi file picker for attachments. Cancel resolves [], never rejects. */
-export async function pickAttachFiles(win: BrowserWindow | null | undefined, maxCount = 5): Promise<string[]> {
+/** Parent-modal multi file picker for attachments. No silent cap: every pick is
+ * returned and the tray enforces the 5-file limit with a visible error. Cancel resolves [], never rejects. */
+export async function pickAttachFiles(win: BrowserWindow | null | undefined): Promise<string[]> {
   return withDialogLock(win, async () => {
     const lowered = lowerForDialog(win);
     try {
@@ -221,7 +222,7 @@ export async function pickAttachFiles(win: BrowserWindow | null | undefined, max
         ? await dialog.showOpenDialog(parent, options)
         : await dialog.showOpenDialog(options);
       if (r.canceled) return [];
-      const picked = (r.filePaths || []).slice(0, Math.max(1, maxCount));
+      const picked = (r.filePaths || []).slice();
       try {
         if (picked[0]) lastUsedDir = path.dirname(picked[0]);
       } catch { /* keep previous */ }
