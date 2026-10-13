@@ -88,7 +88,3 @@ export function togglePopup(): void {
     try { w.webContents.send(IpcChannels.popupShown); } catch { /* webcontents not ready */ }
   }
 }
-
-export function hidePopup(): void {
-  win?.hide();
-}

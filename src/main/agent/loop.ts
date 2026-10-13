@@ -26,10 +26,6 @@ import { capturePreOp, recordOp } from './undo';
 import { platform } from '../platform/index';
 
 export { DEFAULT_LIMITS };
-export const MAX_TOOL_CALLS_DEFAULT = DEFAULT_LIMITS.maxToolCalls;
-export const RUN_TIMEOUT_MS = DEFAULT_LIMITS.runTimeoutMs;
-export const TOOL_TIMEOUT_MS = DEFAULT_LIMITS.toolTimeoutMs;
-export const MAX_OUTPUT_CHARS = DEFAULT_LIMITS.maxOutputChars;
 
 export interface RunAgentOpts {
   provider: ProviderId;

@@ -59,10 +59,6 @@ export function getSecret(db: DatabaseSync, service: string): string | undefined
   return ss.decryptString(buf);
 }
 
-export function deleteSecret(db: DatabaseSync, service: string): void {
-  db.prepare('DELETE FROM secrets WHERE service = ?').run(service);
-}
-
 /** Remove every secret owned by one extension (uninstall cleanup). */
 export function deleteSecretsByPrefix(db: DatabaseSync, prefix: string): number {
   try {
