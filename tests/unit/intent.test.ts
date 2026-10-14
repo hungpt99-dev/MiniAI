@@ -58,4 +58,21 @@ describe('intent model fallback', () => {
     expect(q.length).toBeLessThan(220);
     expect(q).toMatch(/do it|just answer/i);
   });
+  it('prompt carries multilingual few-shots (meaning, not English verbs)', () => {
+    expect(CLASSIFY_PROMPT).toMatch(/abre mi archivo/);
+    expect(CLASSIFY_PROMPT).toMatch(/打开我的文件/);
+    expect(CLASSIFY_PROMPT).toMatch(/mở file của tôi/);
+    expect(CLASSIFY_PROMPT).toMatch(/افتح الملف/);
+    expect(CLASSIFY_PROMPT).toMatch(/in any language/);
+  });
+  it('non-English requests fall through to the model call', async () => {
+    // Heuristic has no Spanish/Chinese verbs: uncertain -> exactly one model call.
+    const seen: string[] = [];
+    const askModel = async (p: string) => { seen.push(p); return 'ACT'; };
+    expect(await classifyIntent('abre mi archivo', { askModel })).toBe('act');
+    expect(seen.length).toBe(1);
+    expect(seen[0]).toContain('abre mi archivo');
+    const askModel2 = async () => 'ANSWER';
+    expect(await classifyIntent('法国的首都是哪里？', { askModel: askModel2 })).toBe('answer');
+  });
 });

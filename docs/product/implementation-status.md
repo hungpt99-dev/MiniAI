@@ -18,6 +18,7 @@ Verified from source; packaged-SQLite caveat in main README.
 | Do loop | Built-in tool loop in main, approvals, redacted JSONL + runs.jsonl |
 | Ask loop | Same loop, read-only: askSafe tools only, MODE_READ_ONLY guard, 8 calls / 60 s, no approvals, secrets redacted |
 | Memory | Local SQLite (memories/FTS/events), retrieval ≤8 items/~1200 tokens, enforced prohibitions, incognito; embeddings reserved |
+| Memory recall | One-tap rows for names/preferences, honesty rule + live status in prompt, identity-query boost, no step rows for lookups |
 | Attachments | Content detection (ZIP/OLE structure) + policy table; docx/xlsx/pptx/odt/rtf text extraction; PDF reference-only (extraction Planned) |
 
 ## Planned / known gaps

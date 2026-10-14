@@ -1,0 +1,6 @@
+{
+  "locale": "tr",
+  "remember": ["lütfen hatırla", "hatırla ki", "hatırla", "unutma ki", "bundan sonra", "unutma", "asla unutma"],
+  "forget": ["unut ki", "unut"],
+  "strip": ["^(lütfen\\s+)?hatırla(\\s+ki)?", "\\bbundan sonra[,:]?\\s*"]
+}

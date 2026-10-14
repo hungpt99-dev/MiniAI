@@ -82,6 +82,7 @@ const api = {
   },
   ext: (a: ExtAction) => invoke(IpcChannels.ext, a),
   memory: (a: MemoryAction) => invoke(IpcChannels.memory, a),
+  getLocale: () => invoke(IpcChannels.locale),
   onMemoryEvent: (cb: (ev: { runId?: string; requestId?: string; conversationId?: string; event: MemoryPush }) => void) => {
     const fn = (_e: unknown, data: { runId?: string; requestId?: string; conversationId?: string; event: MemoryPush }) => cb(data);
     ipcRenderer.on(IpcChannels.memoryEvent, fn);

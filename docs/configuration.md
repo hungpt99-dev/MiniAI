@@ -18,6 +18,7 @@ Settings live in the app SQLite DB (`getSettings`/`updateSettings` in
 | `memoryEnabled` | `false` | Master switch for long-term memory (asks in onboarding). |
 | `memoryKinds` | all `true` | Per-kind opt-ins: preference, fact, folder_rule, procedure, episode. |
 | `memorySuggest` | `false` | Suggest memories after runs (user messages only, one cheap call). |
+| `memoryOneTap` | `true` | One-tap save rows for identity/preference statements (needs master on to store). |
 | `memorySemantic` | `false` | Reserved: retrieval stays FTS keyword search until embeddings are wired. |
 | `memoryUseInAsk` | `true` | Retrieve memory in Ask mode (read-only). |
 | `memoryMaxItems` | `500` | 10–5000 stored memories; full asks for cleanup, never drops. |

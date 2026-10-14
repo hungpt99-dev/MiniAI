@@ -23,6 +23,60 @@ function isEmptyUI() {
 }
 let drafts = { chat: '', agent: '' };
 
+// --- i18n: locale dict over IPC, mirrored t() (see src/shared/i18n.ts) ---
+var L = { tag: 'en', dir: 'ltr', dict: {}, fallback: {}, available: [] };
+function tv(v, vars) {
+  if (typeof v === 'string') {
+    return String(v).replace(/\{(\w+)\}/g, function (_, k) {
+      return vars && vars[k] !== undefined ? String(vars[k]) : '{' + k + '}';
+    });
+  }
+  return v;
+}
+function t(key, vars) {
+  try {
+    var raw = (L.dict && L.dict[key] !== undefined) ? L.dict[key]
+      : (L.fallback && L.fallback[key] !== undefined) ? L.fallback[key] : key;
+    if (typeof raw === 'string') return tv(raw, vars);
+    var n = vars && typeof vars.count === 'number' ? vars.count : 1;
+    var form = 'other';
+    try { form = new Intl.PluralRules(L.tag).select(n); } catch (e) { form = n === 1 ? 'one' : 'other'; }
+    return tv(raw[form] !== undefined ? raw[form] : raw.other !== undefined ? raw.other : key, vars);
+  } catch (e) { return key; }
+}
+async function loadLocale() {
+  try {
+    if (!window.nexio || !window.nexio.getLocale) return;
+    var r = await window.nexio.getLocale();
+    if (r && r.tag) {
+      L = { tag: r.tag, dir: r.dir || 'ltr', dict: r.dict || {}, fallback: r.fallback || {}, available: r.available || [] };
+    }
+  } catch (e) { /* English fallback */ }
+}
+/** Apply locale to shell chrome: <html> lang/dir + every data-i18n node. */
+function applyLocale() {
+  try {
+    document.documentElement.lang = L.tag || 'en';
+    document.documentElement.dir = L.dir || 'ltr';
+    document.querySelectorAll('[data-i18n]').forEach(function (el) {
+      el.textContent = t(el.getAttribute('data-i18n'));
+    });
+    document.querySelectorAll('[data-i18n-aria]').forEach(function (el) {
+      el.setAttribute('aria-label', t(el.getAttribute('data-i18n-aria')));
+    });
+    document.querySelectorAll('[data-i18n-title]').forEach(function (el) {
+      el.setAttribute('title', t(el.getAttribute('data-i18n-title')));
+    });
+    document.querySelectorAll('[data-i18n-ph]').forEach(function (el) {
+      el.setAttribute('placeholder', t(el.getAttribute('data-i18n-ph')));
+    });
+    updateModeUI();
+    if (typeof paintIncognito === 'function') { try { incognitoOn = incognitoOn; paintIncognito(true); } catch (e) {} }
+    syncChrome();
+    requestResize();
+  } catch (e) { /* locale never breaks chrome */ }
+}
+
 // Fail visibly, not half-wired, if the preload bridge did not load.
 if (!window.nexio) {
   messagesEl.innerHTML = '<div class="msg">Error: app bridge failed to load. Restart Nexio.</div>';
@@ -528,7 +582,17 @@ $('btn-settings').onclick = async () => {
   if ($('set-askread')) $('set-askread').checked = s.askReadEnabled !== false;
   void paintAskMcp(s.askMcpTools || []);
   if ($('set-mem')) $('set-mem').checked = s.memoryEnabled === true;
-  paintMemKinds(s.memoryKinds);
+  paintMemKinds(s.memoryKinds, s.memoryEnabled === true);
+  if ($('set-mem') && !$('set-mem').dataset.memwired) {
+    $('set-mem').dataset.memwired = '1';
+    $('set-mem').addEventListener('change', () => {
+      const host = $('set-mem-kinds');
+      if (!host || !$('set-mem')) return;
+      const on = $('set-mem').checked;
+      host.setAttribute('aria-disabled', String(!on));
+      host.querySelectorAll('input[data-memkind]').forEach((c) => { c.disabled = !on; });
+    });
+  }
   if ($('set-mem-suggest')) $('set-mem-suggest').checked = s.memorySuggest === true;
   if ($('set-mem-semantic')) $('set-mem-semantic').checked = s.memorySemantic === true;
   if ($('set-mem-ask')) $('set-mem-ask').checked = s.memoryUseInAsk !== false;
@@ -1095,11 +1159,14 @@ function handleAgentEvent(runId, ev) {
     finalizeSpinners();
     // planning narration is replaced by the N-steps header once tools run
     document.querySelectorAll('#agent-steps .plan-row').forEach((r) => r.remove());
+    // Memory lookups are not user-facing steps: no row, no toggle.
+    // The "Used N memories" row covers them instead.
+    if (ev.tool === 'memory_search') { memSuppressed.add(ev.id); return; }
     // Ask mode is read-only: tag tool names in muted text, never approval cards.
     const askTag = (typeof mode !== 'undefined' && mode === 'chat')
       ? ' <span class="ask-tag">Read-only</span>' : '';
     const row = addAgentRow('tool',
-      iconFor('run') + `<div class="tx"><span class="tool-name">${esc(ev.tool)}</span>${askTag} ` +
+      iconFor('run') + `<div class="tx"><span class="tool-name" title="${esc(ev.tool)}">${esc(toolLabel(ev.tool))}</span>${askTag} ` +
       `<span>${esc(ev.summary || '')}</span>` +
       (ev.afterUntrusted ? `<div class="untrusted-note" style="font-size:12px;color:var(--warn)">Requested after reading ${esc(ev.afterUntrusted)}</div>` : '') +
       `</div><span class="dur"></span>`);
@@ -1109,7 +1176,7 @@ function handleAgentEvent(runId, ev) {
     let row = st.rows.get(ev.id);
     if (!row) {
       row = addAgentRow('tool',
-        iconFor('wait') + `<div class="tx"><span class="tool-name">${esc(ev.tool)}</span> ` +
+        iconFor('wait') + `<div class="tx"><span class="tool-name" title="${esc(ev.tool)}">${esc(toolLabel(ev.tool))}</span> ` +
         `<span>${esc(ev.summary || '')}</span></div><span class="dur"></span>`);
       st.rows.set(ev.id, row);
     } else {
@@ -1121,6 +1188,7 @@ function handleAgentEvent(runId, ev) {
     if (view !== 'run') showView('run'); // yank to run so Deny/Allow is seen; returnTo untouched
     agentScroll();
   } else if (ev.type === 'tool_result') {
+    if (memSuppressed.has(ev.id)) { memSuppressed.delete(ev.id); agentScroll(); return; }
     const row = st.rows.get(ev.id);
     const dur = fmtDur(ev.durationMs);
     // A blocked Ask call shows a failed step with a switch chip, never an approval card.
@@ -1286,6 +1354,7 @@ function stopAgentRun() {
 function endAgentRun() {
   agentState = null;
   assistantDiv = null;
+  memSuppressed.clear();
   syncAgentFooter();
   syncChrome();
   requestResize();
@@ -1417,12 +1486,22 @@ async function paintAskMcp(allowed) {
     }
   } catch { /* extensions optional */ }
   const known = defs.length ? defs : [...allow];
+  const oldNote = document.getElementById('ask-mcp-note');
+  if (oldNote) oldNote.remove();
   if (!known.length) {
-    const li = document.createElement('li');
-    const span = document.createElement('span');
-    span.textContent = 'No MCP tools known — start a server in Extensions to browse them.';
-    li.appendChild(span);
-    ul.appendChild(li);
+    const note = document.createElement('div');
+    note.className = 'form-note';
+    note.id = 'ask-mcp-note';
+    note.appendChild(document.createTextNode('No MCP tools known — start a server in '));
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'textlink';
+    link.textContent = 'Extensions';
+    link.setAttribute('aria-label', 'Open Extensions to browse MCP tools');
+    link.onclick = () => { try { void openExtensions(); } catch {} };
+    note.appendChild(link);
+    note.appendChild(document.createTextNode(' to browse them.'));
+    ul.after(note);
     return;
   }
   for (const full of known) {
@@ -1541,16 +1620,35 @@ function updateRunChip() {
   const running = typeof agentRunning === 'function' && agentRunning();
   const viewingRun = typeof view !== 'undefined' && view === 'run';
   const recent = hasRun();
-  let label = null;
-  if (!viewingRun && running) label = 'Running / View';
-  else if (!viewingRun && recent) label = 'Done / View';
-  if (label) {
-    if (btn.textContent !== label) btn.textContent = label;
-    if (btn.classList.contains('hidden')) btn.classList.remove('hidden');
-  } else if (!btn.classList.contains('hidden')) btn.classList.add('hidden');
-  // why: classList.add/remove rewrite the class attribute (and textContent
-  // replaces children) even when nothing changed, which re-triggers the
+  // why: chip DOM (dot + Done | View) is rebuilt only on state change;
+  // textContent writes would clobber the child nodes and re-trigger the
   // panel MutationObserver into an infinite loop. Only touch the DOM on change.
+  const state = !viewingRun && running ? 'running' : (!viewingRun && recent ? 'done' : null);
+  if (!state) {
+    if (btn.dataset.rstate) delete btn.dataset.rstate;
+    if (!btn.classList.contains('hidden')) btn.classList.add('hidden');
+    return;
+  }
+  if (btn.dataset.rstate !== state) {
+    btn.dataset.rstate = state;
+    btn.setAttribute('aria-label', state === 'running' ? 'Run in progress. View run' : 'Run finished. View result');
+    btn.innerHTML = '';
+    const dot = document.createElement('span');
+    dot.className = 'rundot' + (state === 'running' ? ' spin' : '');
+    dot.setAttribute('aria-hidden', 'true');
+    const main = document.createElement('span');
+    main.textContent = state === 'running' ? 'Running' : 'Done';
+    const sep = document.createElement('span');
+    sep.className = 'runsep';
+    sep.setAttribute('aria-hidden', 'true');
+    const vw = document.createElement('span');
+    vw.textContent = 'View';
+    btn.appendChild(dot);
+    btn.appendChild(main);
+    btn.appendChild(sep);
+    btn.appendChild(vw);
+  }
+  if (btn.classList.contains('hidden')) btn.classList.remove('hidden');
 }
 if ($('btn-runview')) $('btn-runview').onclick = () => { showView('run'); inputEl.focus(); };
 if ($('btn-log')) $('btn-log').onclick = () => void showAgentLog();
@@ -2450,21 +2548,22 @@ function renderOnboard() {
       renderOnboard();
     };
   } else if (obStep === 1) {
-    box.innerHTML = obShell('Let Nexio remember your preferences?',
-      `<div class="ext-empty">Names, preferences, folder rules — kept on this computer, shown before anything is saved. You can edit or forget them anytime in Settings &gt; Memory.</div>` +
+    box.innerHTML = obShell('Let Nexio remember things you tell it?',
+      `<div class="ext-empty">Names, preferences, folder rules — kept on this computer. Nexio always asks before saving anything. You can edit or forget them anytime in Settings &gt; Memory.</div>` +
       `<div class="ext-addmenu">` +
-      `<button data-mem="suggest">Yes, and suggest memories</button>` +
-      `<button data-mem="ask" class="on">Only when I say "remember"</button>` +
+      `<button data-mem="yes" class="on">Yes, ask me each time</button>` +
+      `<button data-mem="ask">Only when I say "remember"</button>` +
       `<button data-mem="no">No</button></div>` +
       `<div class="row"><button id="ob-next" class="primary">Continue</button></div>`);
-    let memChoice = 'ask';
+    let memChoice = 'yes';
     const paintMem = () => box.querySelectorAll('[data-mem]').forEach((b) => b.classList.toggle('on', b.dataset.mem === memChoice));
     box.querySelectorAll('[data-mem]').forEach((b) => { b.onclick = () => { memChoice = b.dataset.mem; paintMem(); }; });
     paintMem();
     $('ob-next').onclick = async () => {
       try {
-        if (memChoice === 'no') await window.nexio.setSettings({ memoryEnabled: false, memorySuggest: false });
-        else await window.nexio.setSettings({ memoryEnabled: true, memorySuggest: memChoice === 'suggest' });
+        if (memChoice === 'no') await window.nexio.setSettings({ memoryEnabled: false, memorySuggest: false, memoryOneTap: false });
+        else if (memChoice === 'ask') await window.nexio.setSettings({ memoryEnabled: true, memorySuggest: false, memoryOneTap: false });
+        else await window.nexio.setSettings({ memoryEnabled: true, memorySuggest: false, memoryOneTap: true });
       } catch (e) { say('Could not save memory choice'); return; }
       obStep = 2;
       renderOnboard();
@@ -2534,6 +2633,21 @@ function renderOnboard() {
 }
 /* --- Memory (appended): Memory view, settings section, run-view rows --- */
 var lastRequestId = '';
+var memSuppressed = new Set(); // memory_search call ids: never step rows
+// Human step labels for real file/system tools (raw name stays in title).
+var TOOL_LABELS = {
+  fs_read: 'Read file', fs_write: 'Write file', fs_list: 'List files', fs_search: 'Searched files',
+  fs_move: 'Moved file', fs_copy: 'Copied file', fs_trash: 'Trashed file', shell_run: 'Ran command',
+  app_open: 'Opened app', apps_list: 'Listed apps', clipboard_read: 'Read clipboard', clipboard_write: 'Wrote clipboard',
+  web_search: 'Searched web', web_fetch: 'Fetched page', attachment_list: 'Listed attachments',
+  attachment_read: 'Read attachment', skill_load: 'Loaded skill',
+};
+function toolLabel(t) {
+  if (!t) return '';
+  if (t.indexOf('mcp__') === 0) return 'Used ' + (t.split('__')[1] || 'MCP') + ' tool';
+  if (t.indexOf('memory_') === 0) return 'Checked memory';
+  return TOOL_LABELS[t] || t;
+}
 var memTab = 'all', memQuery = '', memEditId = null, memFormMode = null; // memFormMode: null | 'add'
 var incognitoOn = false;
 var pendingMemPushes = [];
@@ -2866,10 +2980,69 @@ function renderSuggestRow(candidates) {
   say(`${candidates.length} memor${candidates.length === 1 ? 'y' : 'ies'} suggested`);
   syncChrome(); requestResize();
 }
+function renderOneTapRow(ev) {
+  const host = memoryHost(null);
+  if (!host) { pendingMemPushes.push({ event: ev }); return; }
+  const save = ghostBtn('Save', `Save memory: ${ev.text.slice(0, 60)}`);
+  save.onclick = async () => {
+    try {
+      const cur = await window.nexio.getSettings();
+      if (!cur.memoryEnabled) {
+        // Memory is off: inline turn-on prompt, no view switch.
+        row.innerHTML = '';
+        const span = document.createElement('span');
+        span.textContent = 'Memory is off. Turn it on?';
+        const on = ghostBtn('Turn on', 'Turn on memory and save');
+        on.onclick = async () => {
+          try {
+            const s2 = await window.nexio.getSettings();
+            await window.nexio.setSettings({
+              memoryEnabled: true,
+              memoryKinds: { ...(s2.memoryKinds || {}), [ev.kind]: true },
+            });
+            await doOneTapSave(row, ev);
+          } catch (e) { say(errText(e)); }
+        };
+        const cancel = ghostBtn('Cancel', 'Keep memory off');
+        cancel.onclick = () => row.remove();
+        row.appendChild(span);
+        row.appendChild(on);
+        row.appendChild(cancel);
+        syncChrome(); requestResize();
+        return;
+      }
+      await doOneTapSave(row, ev);
+    } catch (e) { say(errText(e)); }
+  };
+  const notnow = ghostBtn('Not now', `Don't save: ${ev.text.slice(0, 60)}`);
+  notnow.onclick = async () => { try { await memCall({ action: 'dismiss', hash: ev.hash }); } catch {} row.remove(); };
+  const row = memConfirmRow(`Remember: ${ev.text}?`, [save, notnow]);
+  host.appendChild(row);
+  say(`Remember this? ${ev.text}`);
+  syncChrome(); requestResize();
+}
+async function doOneTapSave(row, ev) {
+  try {
+    const r = await memCall({ action: 'save', kind: ev.kind, text: ev.text, pinned: !!ev.pin, ...(ev.lang ? { lang: ev.lang } : {}) });
+    if (r.status === 'saved' || r.status === 'updated') {
+      row.remove();
+      renderRememberedRow(r.memory, r.status);
+      if (view === 'memory') await renderMemoryView();
+    } else if (r.status === 'conflict') {
+      row.remove();
+      renderConflictRow(ev.text, r.conflicts, { kind: ev.kind });
+    } else if (r.status === 'full') {
+      say('Memory is full — forget something first.');
+    } else {
+      say(`Not saved: ${r.reason || 'blocked'}`);
+    }
+  } catch (e) { say(errText(e)); }
+}
 async function renderMemoryPush({ runId, requestId, event }) {
   const host = memoryHost({ runId, requestId });
   if (!host) { pendingMemPushes.push({ event }); return; }
   if (event.type === 'saved') renderRememberedRow({ id: event.id, kind: event.kind, text: event.text }, 'saved');
+  else if (event.type === 'onetap') renderOneTapRow(event);
   else if (event.type === 'suggest') renderSuggestRow(event.candidates || []);
   else if (event.type === 'conflict') renderConflictRow(event.text, event.conflicts || [], null);
   else if (event.type === 'blocked') {
@@ -3017,20 +3190,29 @@ async function refreshIncognito() {
 void refreshIncognito();
 
 // --- settings: Memory section ---
-function paintMemKinds(kinds) {
+function paintMemKinds(kinds, enabled) {
   const host = $('set-mem-kinds');
   if (!host) return;
   host.innerHTML = '';
+  host.setAttribute('aria-disabled', String(enabled === false));
+  const labels = { preference: 'Preferences', fact: 'Facts', folder_rule: 'Folder rules', procedure: 'Procedures', episode: 'Episodes' };
   for (const k of ['preference', 'fact', 'folder_rule', 'procedure', 'episode']) {
     const lab = document.createElement('label');
-    lab.className = 'fld check';
-    lab.innerHTML = `<span class="switch-tx"><span class="flab">${esc(memKindLabel(k))}</span></span>`;
+    lab.className = 'chip-toggle';
     const box = document.createElement('input');
     box.type = 'checkbox';
     box.dataset.memkind = k;
     box.checked = !kinds || kinds[k] !== false;
-    box.setAttribute('role', 'switch');
+    box.disabled = enabled === false;
+    box.setAttribute('aria-label', 'Remember ' + (labels[k] || k).toLowerCase());
+    const tx = document.createElement('span');
+    tx.className = 'chip-tx';
+    tx.innerHTML = '<svg class="chip-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-11"/></svg>';
+    const name = document.createElement('span');
+    name.textContent = labels[k] || k;
+    tx.appendChild(name);
     lab.appendChild(box);
+    lab.appendChild(tx);
     host.appendChild(lab);
   }
 }
@@ -3039,7 +3221,9 @@ async function refreshMemInfo() {
   if (!el) return;
   try {
     const info = await memCall({ action: 'info' });
-    el.textContent = `${info.count} memories · ${info.bytes >= 1024 ? (info.bytes / 1024).toFixed(1) + ' KB' : info.bytes + ' B'} · ${info.encrypted ? 'encrypted' : 'not encrypted — enable device encryption'}${info.stale ? ` · ${info.stale} to review` : ''}`;
+    const s = await window.nexio.getSettings();
+    const status = !s.memoryEnabled ? 'Off' : s.memoryOneTap === false ? 'On: only when I say remember' : 'On: asks before saving';
+    el.textContent = `${status} · ${info.count} memories · ${info.bytes >= 1024 ? (info.bytes / 1024).toFixed(1) + ' KB' : info.bytes + ' B'} · ${info.encrypted ? 'encrypted' : 'not encrypted — enable device encryption'}${info.stale ? ` · ${info.stale} to review` : ''}`;
     const desc = $('set-mem-semdesc');
     if (desc) desc.textContent = 'Off: keyword search only. On: still keyword search (embeddings not wired yet).';
   } catch { el.textContent = 'Memory unavailable.'; }

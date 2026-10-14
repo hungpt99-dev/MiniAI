@@ -15,12 +15,14 @@ import {
   normalizeMemoryText,
   type Memory,
 } from './types';
+import { graphemeLength, takeGraphemes } from '../../shared/text';
 
 /** Single access layer for long-term memory. No other module touches these tables. */
 
-const ftsOkCache = new WeakMap<DatabaseSync, boolean>();
+const ftsOkCache = new WeakMap<DatabaseSync, { main: boolean; tri: boolean }>();
+const ftsReady = new WeakSet<DatabaseSync>();
 
-/** Idempotent tables (+ best-effort FTS5 mirror for plaintext rows). */
+/** Idempotent tables (+ best-effort FTS5 mirrors for plaintext rows). */
 export function ensureMemoryTables(db: DatabaseSync): boolean {
   db.exec(`
     CREATE TABLE IF NOT EXISTS memories (
@@ -28,24 +30,55 @@ export function ensureMemoryTables(db: DatabaseSync): boolean {
       scope TEXT NOT NULL DEFAULT '{"type":"global"}', source TEXT NOT NULL,
       createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, lastUsedAt INTEGER NOT NULL,
       useCount INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0,
-      confidence REAL NOT NULL DEFAULT 1, expiresAt INTEGER, link TEXT
+      confidence REAL NOT NULL DEFAULT 1, expiresAt INTEGER, link TEXT, lang TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_memories_kind ON memories(kind);
     CREATE TABLE IF NOT EXISTS memory_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT, memoryId TEXT, event TEXT NOT NULL, ts INTEGER NOT NULL
     );
   `);
-  let fts = ftsOkCache.get(db);
-  if (fts === undefined) {
-    try {
-      db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(id UNINDEXED, text);`);
-      fts = true;
-    } catch {
-      fts = false; // plain LIKE/token scan still works
+  // Older DBs lack the lang column (added for language-agnostic memory).
+  try { db.exec('ALTER TABLE memories ADD COLUMN lang TEXT'); } catch { /* already there */ }
+  migrateFts(db);
+  const f = ftsOkCache.get(db);
+  return !!f && (f.main || f.tri);
+}
+
+/**
+ * FTS mirrors: unicode61 with diacritics for Latin/Cyrillic/Greek plus a
+ * trigram index so CJK/Thai queries match without word segmentation.
+ * Versioned by table definition; rebuilds the plaintext mirror on change.
+ */
+function migrateFts(db: DatabaseSync): void {
+  if (ftsReady.has(db)) return;
+  ftsReady.add(db);
+  let main = false;
+  let tri = false;
+  try {
+    const def = (db.prepare("SELECT sql FROM sqlite_master WHERE name = 'memory_fts'").get() as { sql: string } | undefined)?.sql || '';
+    if (!def) {
+      db.exec(`CREATE VIRTUAL TABLE memory_fts USING fts5(id UNINDEXED, text, tokenize="unicode61 remove_diacritics 2");`);
+    } else if (!def.includes('remove_diacritics')) {
+      db.exec(`DROP TABLE memory_fts; CREATE VIRTUAL TABLE memory_fts USING fts5(id UNINDEXED, text, tokenize="unicode61 remove_diacritics 2");`);
+      // Rebuild the plaintext mirror (encrypted rows stay out, as before).
+      for (const m of allRows(db)) {
+        try {
+          const { cipher } = encryptText(m.text);
+          syncFts(db, m.id, cipher);
+        } catch { /* best-effort */ }
+      }
     }
-    ftsOkCache.set(db, fts);
+    main = true;
+  } catch {
+    main = false; // plain LIKE/token scan still works
   }
-  return fts;
+  try {
+    db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts_tri USING fts5(id UNINDEXED, text, tokenize='trigram');`);
+    tri = true;
+  } catch {
+    tri = false;
+  }
+  ftsOkCache.set(db, { main, tri });
 }
 
 function audit(db: DatabaseSync, memoryId: string | null, event: string, now: number): void {
@@ -73,6 +106,7 @@ interface DbRow {
   id: string; kind: string; text: string; scope: string; source: string;
   createdAt: number; updatedAt: number; lastUsedAt: number; useCount: number;
   pinned: number; confidence: number; expiresAt: number | null; link: string | null;
+  lang: string | null;
 }
 
 function fromRow(r: DbRow): Memory {
@@ -90,6 +124,7 @@ function fromRow(r: DbRow): Memory {
     confidence: r.confidence,
     ...(r.expiresAt != null ? { expiresAt: r.expiresAt } : {}),
     ...(r.link ? { link: r.link } : {}),
+    lang: r.lang || 'und',
   };
 }
 
@@ -100,25 +135,46 @@ function allRows(db: DatabaseSync): Memory[] {
 }
 
 function syncFts(db: DatabaseSync, id: string, storedText: string): void {
-  if (!ftsOkCache.get(db)) return;
+  const f = ftsOkCache.get(db);
+  if (!f || (!f.main && !f.tri)) return;
   try {
-    db.prepare('DELETE FROM memory_fts WHERE id = ?').run(id);
+    if (f.main) db.prepare('DELETE FROM memory_fts WHERE id = ?').run(id);
+    if (f.tri) db.prepare('DELETE FROM memory_fts_tri WHERE id = ?').run(id);
     // Only plaintext rows are mirrored (encrypted text never lands in FTS).
     if (storedText.startsWith('plain:')) {
-      db.prepare('INSERT INTO memory_fts (id, text) VALUES (?, ?)').run(id, storedText.slice(6));
+      const text = storedText.slice(6);
+      if (f.main) db.prepare('INSERT INTO memory_fts (id, text) VALUES (?, ?)').run(id, text);
+      if (f.tri) db.prepare('INSERT INTO memory_fts_tri (id, text) VALUES (?, ?)').run(id, text);
     }
   } catch { /* FTS is best-effort */ }
 }
 
-function ftsIds(db: DatabaseSync, q: string): Map<string, number> {
+function deleteFts(db: DatabaseSync, id: string): void {
+  try { db.prepare('DELETE FROM memory_fts WHERE id = ?').run(id); } catch { /* best-effort */ }
+  try { db.prepare('DELETE FROM memory_fts_tri WHERE id = ?').run(id); } catch { /* best-effort */ }
+}
+
+/** Relevance boosts by id: BM25 from the word index, flat hits from trigrams. */
+function ftsIds(db: DatabaseSync, q: string, locale?: string): Map<string, number> {
   const out = new Map<string, number>();
-  if (!ftsOkCache.get(db)) return out;
+  const f = ftsOkCache.get(db);
+  if (!f || (!f.main && !f.tri)) return out;
   try {
-    const toks = [...memoryTokens(q)].slice(0, 10);
+    const toks = [...memoryTokens(q, locale)].slice(0, 10);
     if (!toks.length) return out;
     const match = toks.map((t) => `"${t.replace(/"/g, '')}"`).join(' OR ');
-    const rows = db.prepare('SELECT id, rank FROM memory_fts WHERE text MATCH ? LIMIT 50').all(match) as Array<{ id: string; rank: number }>;
-    for (const r of rows) out.set(r.id, r.rank);
+    if (f.main) {
+      try {
+        const rows = db.prepare('SELECT id, rank FROM memory_fts WHERE text MATCH ? LIMIT 50').all(match) as Array<{ id: string; rank: number }>;
+        for (const r of rows) out.set(r.id, Math.max(out.get(r.id) ?? 0, Math.min(-r.rank / 100, 10)));
+      } catch { /* fall back to scan */ }
+    }
+    if (f.tri) {
+      try {
+        const rows = db.prepare('SELECT id FROM memory_fts_tri WHERE text MATCH ? LIMIT 50').all(match) as Array<{ id: string }>;
+        for (const r of rows) out.set(r.id, Math.max(out.get(r.id) ?? 0, 3));
+      } catch { /* fall back to scan */ }
+    }
   } catch { /* fall back to scan */ }
   return out;
 }
@@ -159,6 +215,14 @@ export interface SaveInput {
   confidence?: number;
   expiresAt?: number;
   link?: string;
+  /** BCP-47 language tag of the text ('und' when unknown). Never translated. */
+  lang?: string;
+}
+
+/** Validated language tag, defaulting to 'und'. */
+export function validLang(lang: unknown): string {
+  if (typeof lang === 'string' && /^[a-z]{2,3}(-[A-Za-z]{4})?(-[A-Z]{2})?$/.test(lang.trim())) return lang.trim();
+  return 'und';
 }
 
 export type SaveResult =
@@ -170,6 +234,16 @@ export type SaveResult =
 
 export function isMemoryKind(k: unknown): k is MemoryKind {
   return k === 'preference' || k === 'fact' || k === 'folder_rule' || k === 'procedure' || k === 'episode';
+}
+
+/** Two different name claims in one scope ("my/your name is X"): always a conflict. */
+export function nameClash(a: string, b: string): boolean {
+  const key = (s: string) => {
+    const m = /^(?:my|your) name is (.+)/.exec(s);
+    return m ? `name:${m[1]}` : null;
+  };
+  const ka = key(a), kb = key(b);
+  return !!ka && !!kb && ka !== kb;
 }
 
 /**
@@ -188,16 +262,17 @@ export function saveMemory(
   let text = String(input.text || '').trim();
   if (!text) return { status: 'blocked', reason: 'empty' };
   const cap = input.kind === 'episode' ? MEMORY_EPISODE_CAP : MEMORY_TEXT_CAP;
-  if (text.length > cap) text = text.slice(0, cap);
+  if (graphemeLength(text) > cap) text = takeGraphemes(text, cap);
   const blocked = blockedMemoryText(text, scanSecretsText);
   if (blocked) return { status: 'blocked', reason: blocked };
   const scope = input.scope || { type: 'global' };
   const key = scopeKey(scope);
-  const norm = normalizeMemoryText(text);
-  const toks = memoryTokens(text);
+  const lang = validLang(input.lang);
+  const norm = normalizeMemoryText(text, lang);
+  const toks = memoryTokens(text, lang);
   const rows = allRows(db).filter((m) => m.kind === input.kind);
   for (const m of rows) {
-    if (normalizeMemoryText(m.text) === norm && scopeKey(m.scope) === key) {
+    if (normalizeMemoryText(m.text, m.lang) === norm && scopeKey(m.scope) === key) {
       touch(db, m.id, now, Math.max(m.confidence, input.confidence ?? 1));
       audit(db, m.id, 'updated', now);
       const got = getMemory(db, m.id);
@@ -206,16 +281,18 @@ export function saveMemory(
   }
   if (countMemories(db) >= maxItems) return { status: 'full' };
   for (const m of rows) {
-    if (scopeKey(m.scope) === key && jaccard(toks, memoryTokens(m.text)) >= MEMORY_DUPE_JACCARD) {
+    if (scopeKey(m.scope) === key && jaccard(toks, memoryTokens(m.text, m.lang)) >= MEMORY_DUPE_JACCARD) {
       updateMemoryText(db, m.id, text, now);
       const got = getMemory(db, m.id);
       return { status: 'updated', memory: got as Memory };
     }
   }
   // Same-kind + same-scope overlap with different text: ask to replace.
+  // A changed name always conflicts with the stored one, whatever the words.
   if (input.kind === 'preference' || input.kind === 'fact') {
     const conflicts = rows.filter(
-      (m) => scopeKey(m.scope) === key && jaccard(toks, memoryTokens(m.text)) >= MEMORY_CONFLICT_JACCARD,
+      (m) => scopeKey(m.scope) === key && (nameClash(norm, normalizeMemoryText(m.text, m.lang)) ||
+        jaccard(toks, memoryTokens(m.text, m.lang)) >= MEMORY_CONFLICT_JACCARD),
     );
     if (conflicts.length) return { status: 'conflict', conflicts };
   }
@@ -223,10 +300,10 @@ export function saveMemory(
   const { cipher } = encryptText(text);
   const expiresAt = input.expiresAt ?? (input.kind === 'episode' ? now + (opts.episodeDays ?? 30) * 86400_000 : undefined);
   db.prepare(
-    `INSERT INTO memories (id, kind, text, scope, source, createdAt, updatedAt, lastUsedAt, useCount, pinned, confidence, expiresAt, link)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+    `INSERT INTO memories (id, kind, text, scope, source, createdAt, updatedAt, lastUsedAt, useCount, pinned, confidence, expiresAt, link, lang)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
   ).run(id, input.kind, cipher, key, input.source, now, now, now, input.pinned ? 1 : 0,
-    input.confidence ?? 1, expiresAt ?? null, input.link ?? null);
+    input.confidence ?? 1, expiresAt ?? null, input.link ?? null, lang);
   syncFts(db, id, cipher);
   audit(db, id, 'created', now);
   return { status: 'saved', memory: getMemory(db, id) as Memory };
@@ -252,7 +329,7 @@ export function updateMemory(db: DatabaseSync, id: string, text: string, now = D
   let t = String(text || '').trim();
   if (!t) return { blocked: 'empty' };
   const cap = cur.kind === 'episode' ? MEMORY_EPISODE_CAP : MEMORY_TEXT_CAP;
-  if (t.length > cap) t = t.slice(0, cap);
+  if (graphemeLength(t) > cap) t = takeGraphemes(t, cap);
   const blocked = blockedMemoryText(t, scanSecretsText);
   if (blocked) return { blocked };
   updateMemoryText(db, id, t, now);
@@ -278,7 +355,7 @@ export function deleteMemory(db: DatabaseSync, id: string, now = Date.now()): bo
   const cur = getMemory(db, id);
   if (!cur) return false;
   db.prepare('DELETE FROM memories WHERE id = ?').run(id);
-  try { db.prepare('DELETE FROM memory_fts WHERE id = ?').run(id); } catch { /* best-effort */ }
+  deleteFts(db, id);
   audit(db, id, 'deleted', now);
   return true;
 }
@@ -298,29 +375,37 @@ export function markUsed(db: DatabaseSync, ids: string[], now = Date.now()): voi
 export function searchMemories(
   db: DatabaseSync,
   q: string,
-  opts: { kinds?: MemoryKind[]; limit?: number; includeExpired?: boolean; now?: number } = {},
+  opts: { kinds?: MemoryKind[]; limit?: number; includeExpired?: boolean; now?: number; locale?: string } = {},
 ): Memory[] {
   ensureMemoryTables(db);
   const now = opts.now ?? Date.now();
   const kinds = opts.kinds;
-  const qtoks = memoryTokens(q);
+  const locale = opts.locale;
+  const qtoks = memoryTokens(q, locale);
   if (!qtoks.size) return [];
   const rows = allRows(db).filter(
     (m) => (!kinds || kinds.includes(m.kind)) && (opts.includeExpired || !m.expiresAt || m.expiresAt > now),
   );
-  const fts = ftsIds(db, q);
+  const fts = ftsIds(db, q, locale);
   const scored: Array<{ m: Memory; s: number }> = [];
   for (const m of rows) {
-    const mt = memoryTokens(m.text);
+    const mt = memoryTokens(m.text, m.lang || locale);
     let overlap = 0;
     for (const t of qtoks) if (mt.has(t)) overlap++;
     if (!overlap && !fts.has(m.id)) continue;
-    // FTS rank is negative (better = more negative); overlap dominates.
-    const s = overlap * 10 - (fts.get(m.id) ?? 0) / 100 + Math.min(m.useCount, 20) / 20;
+    // FTS boost is positive (BM25 rank or trigram hit); overlap dominates.
+    const s = overlap * 10 + (fts.get(m.id) ?? 0) + Math.min(m.useCount, 20) / 20;
     scored.push({ m, s });
   }
   scored.sort((a, b) => b.s - a.s);
   return scored.slice(0, opts.limit ?? 20).map((x) => x.m);
+}
+
+/** Pinned, unexpired rows of the given kinds (identity-question fallback). */
+export function pinnedMemories(db: DatabaseSync, kinds: MemoryKind[], now = Date.now()): Memory[] {
+  return allRows(db).filter(
+    (m) => m.pinned && kinds.includes(m.kind) && (!m.expiresAt || m.expiresAt > now),
+  );
 }
 
 export function listMemories(db: DatabaseSync, opts: { kind?: MemoryKind; q?: string; now?: number } = {}): Memory[] {
@@ -349,7 +434,7 @@ export function purgeExpired(db: DatabaseSync, now = Date.now()): number {
   const rows = db.prepare('SELECT id FROM memories WHERE pinned = 0 AND expiresAt IS NOT NULL AND expiresAt <= ?').all(now) as Array<{ id: string }>;
   for (const r of rows) {
     db.prepare('DELETE FROM memories WHERE id = ?').run(r.id);
-    try { db.prepare('DELETE FROM memory_fts WHERE id = ?').run(r.id); } catch { /* best-effort */ }
+    deleteFts(db, r.id);
     audit(db, r.id, 'expired', now);
   }
   return rows.length;
@@ -359,6 +444,7 @@ export function exportMemories(db: DatabaseSync): string {
   const rows = allRows(db).map((m) => ({
     kind: m.kind, text: m.text, scope: m.scope, source: 'import' as const,
     pinned: m.pinned, confidence: m.confidence, ...(m.link ? { link: m.link } : {}),
+    ...(m.lang && m.lang !== 'und' ? { lang: m.lang } : {}),
   }));
   return JSON.stringify({ version: 1, memories: rows });
 }
@@ -408,6 +494,7 @@ export function importMemories(db: DatabaseSync, json: string, opts: { now?: num
       source: 'import', pinned: o.pinned === true,
       ...(typeof o.confidence === 'number' ? { confidence: o.confidence } : {}),
       ...(typeof o.link === 'string' ? { link: o.link } : {}),
+      ...(typeof o.lang === 'string' ? { lang: o.lang } : {}),
     }, opts);
     if (r.status === 'saved') out.imported++;
     else if (r.status === 'updated') out.updated++;
@@ -426,9 +513,15 @@ export function forgetAll(db: DatabaseSync, confirm: string): { deleted: boolean
   ensureMemoryTables(db);
   if (confirm !== FORGET_ALL_CONFIRM) return { deleted: false };
   db.prepare('DELETE FROM memories').run();
-  try { db.prepare('DELETE FROM memory_fts').run(); } catch { /* best-effort */ }
+  deleteFtsAll(db);
   db.prepare('DELETE FROM memory_events').run();
   return { deleted: true };
+}
+
+/** Wipe both FTS mirrors (best-effort). */
+function deleteFtsAll(db: DatabaseSync): void {
+  try { db.prepare('DELETE FROM memory_fts').run(); } catch { /* best-effort */ }
+  try { db.prepare('DELETE FROM memory_fts_tri').run(); } catch { /* best-effort */ }
 }
 
 /** Hash helper re-export for dismissed-suggestion tracking. */

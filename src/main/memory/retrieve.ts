@@ -1,8 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { MemoryKind, Settings } from '../../shared/types';
 import { isInsideRoots } from '../agent/permissions';
-import { markUsed, searchMemories } from './store';
-import { MEMORY_MAX_CHARS, MEMORY_MAX_ITEMS, type Memory } from './types';
+import { markUsed, pinnedMemories, searchMemories } from './store';
+import { MEMORY_MAX_CHARS, MEMORY_MAX_ITEMS, memoryTokens, type Memory } from './types';
 
 export interface RetrieveCtx {
   prompt: string;
@@ -10,6 +10,8 @@ export interface RetrieveCtx {
   appName?: string;
   projectId?: string;
   mode?: 'ask' | 'do';
+  /** UI locale hint for locale-aware matching. */
+  locale?: string;
   now?: number;
 }
 
@@ -53,7 +55,21 @@ export function retrieveMemories(db: DatabaseSync, s: Settings, ctx: RetrieveCtx
     const kinds = (Object.keys(s.memoryKinds || {}) as MemoryKind[]).filter((k) => s.memoryKinds?.[k]);
     if (!kinds.length) return empty;
     const now = ctx.now ?? Date.now();
-    const found = searchMemories(db, ctx.prompt, { kinds, limit: 40, now });
+    const locale = ctx.locale;
+    const qtokens = memoryTokens(ctx.prompt, locale);
+    const seen = new Set<string>();
+    const found: Memory[] = [];
+    for (const m of searchMemories(db, ctx.prompt, { kinds, limit: 40, now, locale })) {
+      if (!seen.has(m.id)) { seen.add(m.id); found.push(m); }
+    }
+    // Short prompts with no hits ("who am i", in any language) fall back to
+    // pinned facts/preferences so a stored name is still found. The Used row
+    // keeps this visible; the model treats it as background context.
+    if (!found.length && qtokens.size <= 8) {
+      for (const m of pinnedMemories(db, kinds.filter((k) => k === 'fact' || k === 'preference'), now)) {
+        if (!seen.has(m.id)) { seen.add(m.id); found.push(m); }
+      }
+    }
     const inScope = found.filter((m) => scopeMatch(m, ctx));
     // Pinned first, then search score order (already ranked), recency/usefulness as tiebreak.
     inScope.sort((a, b) =>

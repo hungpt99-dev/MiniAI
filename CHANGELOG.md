@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Memory recall honesty: the model must never claim it will remember
+  something unless a save succeeded (prompt rule + live memory status);
+  first-person statements ("my name is …", "tôi tên là …") get a one-tap
+  "Remember: …? [Save] [Not now]" row instead of silent forgetting, with an
+  inline turn-on flow when memory is off; identity questions retrieve pinned
+  names via boosted queries; `memory_search` no longer renders a step row;
+  onboarding offers "Yes, ask me each time" by default. See `docs/memory.md`.
+
 - Attachments: valid Word/Excel/PowerPoint files no longer rejected —
   ZIP-based formats are now classified by central-directory structure
   (docx/xlsx/pptx/odt/epub/jar), OLE2 by stream markers, with a policy

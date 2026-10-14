@@ -1,0 +1,6 @@
+{
+  "locale": "it",
+  "remember": ["per favore ricorda", "ricorda che", "ricorda", "ricordati di", "d'ora in poi", "non dimenticare", "non dimenticare mai"],
+  "forget": ["dimentica che", "dimentica questo", "dimentica"],
+  "strip": ["^(per favore\\s+)?ricorda(\\s+che)?", "^ricordati di\\s*", "\\bd'ora in poi[,:]?\\s*"]
+}

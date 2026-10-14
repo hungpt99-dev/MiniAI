@@ -86,12 +86,16 @@ export interface Settings {
   askReadNoticeDismissed?: Record<string, boolean>;
   /** Launch at login via app.setLoginItemSettings. Off by default. */
   launchAtLogin?: boolean;
+  /** UI locale: BCP-47 tag or 'system'. Default 'system'. */
+  locale?: string;
   /** Master switch for long-term memory. Default false until onboarding asks. */
   memoryEnabled?: boolean;
   /** Per-kind opt-ins. Default all true once the master switch is on. */
   memoryKinds?: Record<MemoryKind, boolean>;
   /** Suggest memories after runs (one cheap call, user messages only). Default false. */
   memorySuggest?: boolean;
+  /** One-tap save rows for explicit identity/preference statements. Default true (needs master on to store). */
+  memoryOneTap?: boolean;
   /** Semantic search (provider embeddings). Default false; retrieval stays FTS until wired. */
   memorySemantic?: boolean;
   /** Use memory in Ask mode. Default true. */
@@ -141,6 +145,8 @@ export interface MemoryRow {
   link?: string;
   enforced?: boolean;
   stale?: boolean;
+  /** BCP-47 language tag of the text ('und' when unknown). */
+  lang?: string;
 }
 
 /** Push events for memory rows/cards (memory-event channel). */
@@ -148,13 +154,15 @@ export type MemoryPush =
   | { type: 'saved'; id: string; kind: MemoryKind; text: string }
   | { type: 'suggest'; candidates: Array<{ text: string; hash: string }> }
   | { type: 'conflict'; text: string; conflicts: Array<{ id: string; text: string }> }
-  | { type: 'blocked'; reason: string };
+  | { type: 'blocked'; reason: string }
+  | { type: 'forgetlist'; q: string; matches: Array<{ id: string; text: string }> }
+  | { type: 'onetap'; kind: 'fact' | 'preference'; text: string; hash: string; pin: boolean; lang: string };
 
 /** Single-channel memory management (the memory dispatch channel). */
 export type MemoryAction =
   | { action: 'list'; kind?: MemoryKind; q?: string }
   | { action: 'get'; id: string }
-  | { action: 'save'; kind: MemoryKind; text: string; scope?: MemoryScope; pinned?: boolean; source?: MemorySource; replaceId?: string }
+  | { action: 'save'; kind: MemoryKind; text: string; scope?: MemoryScope; pinned?: boolean; source?: MemorySource; replaceId?: string; lang?: string }
   | { action: 'update'; id: string; text: string; pinned?: boolean }
   | { action: 'forget'; id: string }
   | { action: 'forgetQuery'; q: string }

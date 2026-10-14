@@ -1,0 +1,11 @@
+{
+  "locale": "vi",
+  "remember": ["làm ơn hãy nhớ", "hãy nhớ rằng", "hãy nhớ", "ghi nhớ rằng", "ghi nhớ", "nhớ rằng", "nhớ", "từ nay", "đừng quên", "không bao giờ quên"],
+  "forget": ["quên đi", "hãy quên", "quên"],
+  "strip": ["^(làm ơn\\s+)?(hãy\\s+)?nhớ\\s+(rằng)?", "^ghi nhớ(\\s+rằng)?", "\\btừ nay[,:]?\\s*", "^đừng quên\\s*"],
+  "kinds": {
+    "folder_rule": ["đừng động", "không xóa", "đừng xóa", "thư mục", "folder"],
+    "procedure": ["các bước", "quy trình", "dọn dẹp", "hàng tuần", "sao lưu"],
+    "preference": ["thích", "luôn", "trả lời", "ngôn ngữ", "tiếng"]
+  }
+}

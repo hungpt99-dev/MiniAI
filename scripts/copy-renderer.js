@@ -30,3 +30,12 @@ if (fs.existsSync(aSrc)) {
   copyTree(aSrc, aDst);
   console.log('assets copied to', aDst);
 }
+// i18n locale dicts + intent packs (tsc does not emit JSON next to compiled JS)
+for (const sub of ['i18n/locales', 'i18n/intents']) {
+  const s = path.join(__dirname, '..', 'src', 'main', sub);
+  const d = path.join(__dirname, '..', 'dist', 'main', sub);
+  if (fs.existsSync(s)) {
+    copyTree(s, d);
+    console.log('i18n copied:', sub);
+  }
+}

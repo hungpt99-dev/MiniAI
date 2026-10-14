@@ -5,6 +5,8 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Settings } from '../../src/shared/types';
+import { graphemeLength, words } from '../../src/shared/text';
+import { normalizeMemoryText } from '../../src/main/memory/types';
 import { openTestDb } from '../../src/main/db/db';
 import {
   countMemories,
@@ -25,7 +27,8 @@ import {
 } from '../../src/main/memory/store';
 import { canReadMemory, retrieveMemories } from '../../src/main/memory/retrieve';
 import { isEnforcedRule, memoryProtectedPaths, parseProhibition } from '../../src/main/memory/protect';
-import { isExplicitRemember, rememberRecordText, guessKind, extractCandidates } from '../../src/main/memory/extract';
+import { extractCandidates } from '../../src/main/memory/extract';
+import { classifyMemoryIntent, loadIntentPack, matchFastPath } from '../../src/main/memory/classify';
 import { loadFolderRulesFile } from '../../src/main/memory/protect';
 import { memoryHash } from '../../src/main/memory/store';
 import { isMemoryWriteTool, memoryForgetCount } from '../../src/main/memory/tools';
@@ -276,6 +279,13 @@ describe('store: CRUD + caps', () => {
     expect(countMemories(db)).toBe(1);
     db.close();
   });
+  it('a changed name conflicts with the stored one', () => {
+    const db = openTestDb();
+    saveMemory(db, { kind: 'fact', text: 'Your name is Ann', scope: { type: 'global' }, source: 'user_said', pinned: true });
+    const r = saveMemory(db, { kind: 'fact', text: 'Your name is Bob', scope: { type: 'global' }, source: 'user_said' });
+    expect(r.status).toBe('conflict');
+    db.close();
+  });
   it('enforces the cap instead of dropping', () => {
     const db = openTestDb();
     saveMemory(db, { kind: 'fact', text: 'alpha one', scope: { type: 'global' }, source: 'import' }, { maxItems: 1 });
@@ -492,21 +502,138 @@ describe('folder rules file: approved lines enforce, rest is advisory', () => {
     expect(r2?.enforced).toEqual([]);
     expect(r2?.advisory).toMatch(/never touch/);
   });
-  it('detects triggers and strips wrappers', () => {
-    expect(isExplicitRemember('remember that I prefer PDFs')).toBe(true);
-    expect(isExplicitRemember('ghi nho toi thich PDF')).toBe(true);
-    expect(isExplicitRemember('from now on reply in Vietnamese')).toBe(true);
-    expect(isExplicitRemember('summarize this file')).toBe(false);
-    expect(isExplicitRemember('do you remember PDFs?')).toBe(false);
-    expect(isExplicitRemember('remember my password?')).toBe(false);
-    expect(rememberRecordText('remember that I prefer PDFs')).toBe('I prefer PDFs');
-    expect(guessKind('I prefer PDF exports')).toBe('preference');
-    expect(guessKind('never touch the archive folder')).toBe('folder_rule');
-    expect(guessKind('weekly cleanup steps')).toBe('procedure');
-    expect(guessKind('my accountant is Linh')).toBe('fact');
+  it('fast path matches its own phrases, never unrelated text', () => {
+    // English explicit command (confident: skips the model call).
+    expect(matchFastPath('please remember that I prefer PDFs', ['en'])?.intent).toBe('remember');
+    expect(matchFastPath('please remember that I prefer PDFs', ['en'])?.text).toBe('I prefer PDFs');
+    expect(matchFastPath('forget that old address', ['en'])?.intent).toBe('forget');
+    // Vietnamese pack.
+    expect(matchFastPath('hãy nhớ rằng tôi thích cà phê', ['vi'])?.intent).toBe('remember');
+    // Spanish pack under its own locale.
+    expect(matchFastPath('recuerda que hablo español', ['es'])?.intent).toBe('remember');
+    // Bare "remember" mid-sentence is not confident.
+    expect(matchFastPath("I can't remember where I put it", ['en'])).toBeNull();
+    // Questions never match.
+    expect(matchFastPath('do you remember my name?', ['en'])).toBeNull();
+    // Slashes never match (renderer-owned commands).
+    expect(matchFastPath('/remember my name is X', ['en'])).toBeNull();
+    // Plain statements fall through to the model call.
+    expect(matchFastPath('my name is Pham Thanh Hung', ['en'])).toBeNull();
+    expect(matchFastPath('summarize this file', ['en'])).toBeNull();
+  });
+  it('missing locale falls back without breaking', () => {
+    expect(loadIntentPack('xx-none')).toBeNull();
+    expect(matchFastPath('remember that X', ['xx-none'])).not.toBeNull(); // 'en' fallback
+    expect(matchFastPath('something entirely else', ['xx-none'])).toBeNull();
+  });
+  it('fast path kinds come from data, defaulting to fact', () => {
+    expect(matchFastPath('remember that I prefer PDFs', ['en'])?.kind).toBe('preference');
+    expect(matchFastPath('remember: never touch the archive folder', ['en'])?.kind).toBe('folder_rule');
+    expect(matchFastPath('remember that my accountant is Linh', ['en'])?.kind).toBe('fact');
   });
 });
 
+describe('classifier: model verdicts across languages, validated', () => {
+  const ask = (reply: string) => async (_prompt: string) => reply;
+  it('accepts remember/forget/none in many languages', async () => {
+    const cases: Array<[string, string, string, string]> = [
+      ['{"intent":"remember","text":"Your name is Ana","kind":"fact","language":"en","pin":true}', 'remember', 'Your name is Ana', 'en'],
+      ['{"intent":"remember","text":"Your name is Hưng","kind":"fact","language":"vi","pin":true}', 'remember', 'Your name is Hưng', 'vi'],
+      ['{"intent":"remember","text":"hablo español","kind":"preference","language":"es"}', 'remember', 'hablo español', 'es'],
+      ['{"intent":"remember","text":"Your name is 王芳","kind":"fact","language":"zh","pin":true}', 'remember', 'Your name is 王芳', 'zh'],
+      ['{"intent":"forget","text":"old address","kind":"fact","language":"de"}', 'forget', 'old address', 'de'],
+      ['{"intent":"none","text":"","kind":"fact","language":"fr"}', 'none', '', 'fr'],
+    ];
+    for (const [reply, intent, text, language] of cases) {
+      const v = await classifyMemoryIntent('whatever', [], ask(reply));
+      expect(v?.intent).toBe(intent);
+      expect(v?.text).toBe(text);
+      expect(v?.language).toBe(language);
+    }
+    const pinned = await classifyMemoryIntent('x', [], ask('{"intent":"remember","text":"Your name is Ana","kind":"fact","language":"en","pin":true}'));
+    expect(pinned?.pin).toBe(true);
+  });
+  it('rejects garbage, caps length, defaults language and kind', async () => {
+    expect(await classifyMemoryIntent('x', [], ask('not json at all'))).toBeNull();
+    expect(await classifyMemoryIntent('x', [], ask('{"intent":"maybe","text":"hi"}'))).toMatchObject({ intent: 'none' });
+    const long = await classifyMemoryIntent('x', [], ask(`{"intent":"remember","text":"${'a'.repeat(500)}","kind":"weird","language":"xx!!"}`));
+    expect(long?.text.length).toBeLessThanOrEqual(300);
+    expect(long?.kind).toBe('fact');
+    expect(long?.language).toBe('und');
+  });
+  it('secrets in classifier text force intent none (blocked)', async () => {
+    const v = await classifyMemoryIntent('x', [], ask('{"intent":"remember","text":"api key sk-abc123XYZ456789DEF012345","kind":"fact","language":"en"}'));
+    expect(v?.intent).toBe('none');
+    expect(v?.blocked).toMatch(/secret/);
+  });
+  it('no provider means no guessing (offline slash fallback only)', async () => {
+    expect(await classifyMemoryIntent('my name is Ana', [], null)).toBeNull();
+  });
+  it('typo-tolerant model output still parses (JSON embedded in chatter)', async () => {
+    const v = await classifyMemoryIntent('x', [], ask('Sure! {"intent":"forget","text":"old number","kind":"fact","language":"en"} bye'));
+    expect(v?.intent).toBe('forget');
+    expect(v?.text).toBe('old number');
+  });
+});
+
+describe('one-tap: classifier candidates, never auto-saved', () => {
+  it('short questions retrieve pinned names with no shared words', () => {
+    const db = openTestDb();
+    saveMemory(db, { kind: 'fact', text: 'Your name is Pham Thanh Hung', scope: { type: 'global' }, source: 'user_approved', pinned: true });
+    for (const q of ['who am i', 'tên tôi là gì', 'Wie heiße ich?']) {
+      const ret = retrieveMemories(db, settings(), { prompt: q, cwd: os.tmpdir() });
+      expect(ret.items.map((m) => m.text)).toContain('Your name is Pham Thanh Hung');
+    }
+    db.close();
+  });
+});
+
+describe('text handling: scripts, NFC, case, graphemes', () => {
+  it('finds CJK memories across queries (segmenter + trigram FTS)', () => {
+    const db = openTestDb();
+    saveMemory(db, { kind: 'fact', text: '我叫王芳', scope: { type: 'global' }, source: 'user_said', lang: 'zh' });
+    saveMemory(db, { kind: 'preference', text: '我喜欢喝茶', scope: { type: 'global' }, source: 'user_said', lang: 'zh' });
+    expect(searchMemories(db, '王芳', { locale: 'zh' }).map((m) => m.text)).toContain('我叫王芳');
+    expect(searchMemories(db, '喝茶', { locale: 'zh' }).map((m) => m.text)).toContain('我喜欢喝茶');
+    const tables = db.prepare("SELECT name, sql FROM sqlite_master WHERE name LIKE 'memory_fts%'").all() as Array<{ name: string; sql: string }>;
+    expect(tables.map((t) => t.name)).toContain('memory_fts_tri');
+    expect(tables.find((t) => t.name === 'memory_fts')?.sql).toMatch(/trigram|remove_diacritics/);
+    db.close();
+  });
+  it('segments Thai and matches diacritic-insensitive Latin', () => {
+    const db = openTestDb();
+    saveMemory(db, { kind: 'fact', text: 'ฉันชื่อสมชาย', scope: { type: 'global' }, source: 'user_said', lang: 'th' });
+    expect(words('ฉันชื่อสมชาย', 'th').length).toBeGreaterThan(1);
+    expect(searchMemories(db, 'สมชาย', { locale: 'th' }).map((m) => m.text)).toContain('ฉันชื่อสมชาย');
+    saveMemory(db, { kind: 'fact', text: 'café society member', scope: { type: 'global' }, source: 'user_said', lang: 'en' });
+    expect(searchMemories(db, 'cafe society', { locale: 'en' }).map((m) => m.text)).toContain('café society member');
+    db.close();
+  });
+  it('NFC dedupes across composed/decomposed forms', () => {
+    const db = openTestDb();
+    const nfd = 'café'.normalize('NFD');
+    const r1 = saveMemory(db, { kind: 'fact', text: nfd + ' regular', scope: { type: 'global' }, source: 'user_said' });
+    expect(r1.status).toBe('saved');
+    const r2 = saveMemory(db, { kind: 'fact', text: 'café regular', scope: { type: 'global' }, source: 'user_said' });
+    expect(r2.status).toBe('updated');
+    expect(countMemories(db)).toBe(1);
+    db.close();
+  });
+  it('Turkish dotted-i folds with the locale, not the default', () => {
+    expect(normalizeMemoryText('Istanbul', 'tr')).toBe('ıstanbul');
+    expect(normalizeMemoryText('Istanbul', 'en')).toBe('istanbul');
+  });
+  it('caps count graphemes, never splitting emoji', () => {
+    const db = openTestDb();
+    const r = saveMemory(db, { kind: 'fact', text: `${'x'.repeat(290)}${'😀'.repeat(20)}`, scope: { type: 'global' }, source: 'user_said' });
+    expect(r.status).toBe('saved');
+    if (r.status === 'saved') {
+      expect(graphemeLength(r.memory.text)).toBeLessThanOrEqual(300);
+      expect(r.memory.text).not.toMatch(/[\uD800-\uDBFF]$/);
+    }
+    db.close();
+  });
+});
 describe('policy: memory tools are read/write split, Ask-safe only for search', () => {
   it('memory_search is askSafe read; save/update/forget are write and Ask-blocked', () => {
     const db = openTestDb();

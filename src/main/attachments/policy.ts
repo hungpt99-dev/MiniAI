@@ -1,5 +1,6 @@
 /** Attachment policy: WHAT may Nexio do with it (per detected kind, one table). */
 import type { AttachKind, Detection } from './detect';
+import { t } from '../i18n/index';
 
 export type AttachAction = 'inline_text' | 'image' | 'document_extract' | 'reference_only' | 'reject';
 
@@ -16,17 +17,17 @@ export const EXTRACTABLE: ReadonlySet<AttachKind> = new Set([
   'docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf',
 ]);
 
-const REJECT_MESSAGE: Record<string, string> = {
-  exe: 'an executable (Windows program)',
-  elf: 'an executable (Linux program)',
-  macho: 'an executable (macOS program)',
-  msi: 'a Windows installer',
-  lnk: 'a Windows shortcut',
-  url: 'an internet shortcut',
-  scf: 'an internet shortcut',
-  appx: 'a Windows app package',
-  jar: 'a Java package (may contain code)',
-  apk: 'an Android package (may contain code)',
+const REJECT_WHAT_KEY: Record<string, string> = {
+  exe: 'attach.reject.executable.windows',
+  elf: 'attach.reject.executable.linux',
+  macho: 'attach.reject.executable.macos',
+  msi: 'attach.reject.installer',
+  lnk: 'attach.reject.shortcut',
+  url: 'attach.reject.internet',
+  scf: 'attach.reject.internet',
+  appx: 'attach.reject.package',
+  jar: 'attach.reject.code',
+  apk: 'attach.reject.code',
 };
 
 /**
@@ -41,11 +42,11 @@ export function decideAttachPolicy(det: Detection): AttachDecision {
     }
     // Encrypted content cannot be read — reference, never reject.
     if (det.flags.includes('encrypted')) {
-      return { action: 'reference_only', rule: 'encrypted-note', note: 'Encrypted. Contents not readable.' };
+      return { action: 'reference_only', rule: 'encrypted-note', note: t('attach.encrypted') };
     }
     // Macros: allowed as reference with a visible warning. Never executed.
     if (det.flags.includes('macros')) {
-      return { action: 'reference_only', rule: 'macro-warn', note: 'Contains macros. Nexio will not run it.' };
+      return { action: 'reference_only', rule: 'macro-warn', note: t('attach.macros') };
     }
     switch (det.kind) {
       case 'empty':
@@ -55,34 +56,34 @@ export function decideAttachPolicy(det: Detection): AttachDecision {
       case 'rtf':
         return EXTRACTABLE.has('rtf')
           ? { action: 'document_extract', rule: 'doc-extract' }
-          : { action: 'reference_only', rule: 'doc-reference', note: 'Added as reference only, contents not read.' };
+          : { action: 'reference_only', rule: 'doc-reference', note: t('attach.refonly') };
       case 'png': case 'jpeg': case 'gif': case 'webp':
         return { action: 'image', rule: 'image-inline' };
       case 'docx': case 'xlsx': case 'pptx': case 'odt': case 'ods': case 'odp':
         return EXTRACTABLE.has(det.kind)
           ? { action: 'document_extract', rule: 'doc-extract' }
-          : { action: 'reference_only', rule: 'doc-reference', note: 'Added as reference only, contents not read.' };
+          : { action: 'reference_only', rule: 'doc-reference', note: t('attach.refonly') };
       case 'pdf': case 'epub':
-        return { action: 'reference_only', rule: 'doc-reference', note: 'Added as reference only, contents not read.' };
+        return { action: 'reference_only', rule: 'doc-reference', note: t('attach.refonly') };
       case 'zip': case 'zip-corrupt': case 'archive': case 'ole':
       case 'doc': case 'xls': case 'ppt':
       case 'bmp': case 'tiff': case 'heic': case 'mp3': case 'mp4':
       case 'dmg': case 'pkg':
-        return { action: 'reference_only', rule: 'known-reference', note: 'Nexio can see the file name and path but not its contents.' };
+        return { action: 'reference_only', rule: 'known-reference', note: t('attach.seeMeta') };
       default:
-        return { action: 'reference_only', rule: 'unknown-reference', note: 'Nexio can see the file name and path but not its contents.' };
+        return { action: 'reference_only', rule: 'unknown-reference', note: t('attach.seeMeta') };
     }
   } catch {
-    return { action: 'reference_only', rule: 'unknown-reference', note: 'Nexio can see the file name and path but not its contents.' };
+    return { action: 'reference_only', rule: 'unknown-reference', note: t('attach.seeMeta') };
   }
 }
 
 /** Specific, kind rejection message. Never "executable or unknown content". */
 export function formatRejection(name: string, det: Detection, decision: AttachDecision): string {
   const base = baseName(name);
-  if (decision.rule === 'empty-deny') return `Not attached: ${base} is empty.`;
-  const what = REJECT_MESSAGE[det.kind] || 'a file type Nexio cannot accept';
-  return `Not attached: ${base} is ${what}.\nDetails: detected ${det.kind} (${det.evidence}), rule ${decision.rule}.`;
+  if (decision.rule === 'empty-deny') return t('attach.reject.prefix', { name: base, what: t('attach.reject.empty') });
+  const what = t(REJECT_WHAT_KEY[det.kind] || 'attach.reject.other');
+  return t('attach.reject.prefix', { name: base, what }) + '\n' + t('attach.reject.details', { kind: det.kind, evidence: det.evidence, rule: decision.rule });
 }
 
 function baseName(name: string): string {

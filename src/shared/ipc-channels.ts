@@ -56,6 +56,7 @@ export const IpcChannels = {
   runs: 'nexio:runs',
   memory: 'nexio:memory',
   memoryEvent: 'nexio:memory-event',
+  locale: 'nexio:locale',
   attachPick: 'nexio:attach-pick',
   attachProcess: 'nexio:attach-process',
   attachClassify: 'nexio:attach-classify',
@@ -155,6 +156,7 @@ export interface IpcChannelMap {
   attachClear: { args: [runId: string]; result: boolean };
   memory: { args: [a: MemoryAction]; result: unknown };
   memoryEvent: { args: [{ runId?: string; requestId?: string; conversationId?: string; event: MemoryPush }]; result: void };
+  locale: { args: []; result: { tag: string; dir: 'ltr' | 'rtl'; dict: Record<string, unknown>; fallback: Record<string, unknown>; available: Array<{ tag: string; name: string }> } };
 }
 
 // why: every channel key needs payload/result types or the map drifts from IpcChannels.

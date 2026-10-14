@@ -1,4 +1,5 @@
 import type { MemoryKind, MemoryScope, MemorySource } from '../../shared/types';
+import { lowerSmart, nfc, words } from '../../shared/text';
 
 /** One small, human-readable record about the user. */
 export interface Memory {
@@ -15,6 +16,8 @@ export interface Memory {
   confidence: number;
   expiresAt?: number;
   link?: string;
+  /** BCP-47 language tag of the text ('und' when unknown). Never translated. */
+  lang?: string;
 }
 
 export const MEMORY_KINDS: MemoryKind[] = ['preference', 'fact', 'folder_rule', 'procedure', 'episode'];
@@ -35,26 +38,33 @@ export const MEMORY_CONFLICT_JACCARD = 0.5;
 /** "Forget everything" needs this exact typed confirmation. */
 export const FORGET_ALL_CONFIRM = 'forget everything';
 
-/** Explicit-remember triggers in user messages (router runs before the loop). */
-export const REMEMBER_RE =
-  /\bremember\s+(that|this|to\b|for\b)?|\bfrom now on\b|\bghi nh[ớo]\b|\bhãy nh[ớo]\b|\bdon't forget\b|\bnever forget\b/i;
-
 const STOP = new Set([
   'i', 'me', 'my', 'we', 'our', 'you', 'your', 'the', 'a', 'an', 'and', 'or', 'of', 'to',
   'in', 'on', 'for', 'with', 'is', 'are', 'was', 'be', 'it', 'this', 'that', 'as', 'at',
   'by', 'from', 'please', 'always', 'never', 'not', 'no', 'do', 'does',
 ]);
 
-/** Normalize for dedupe: lowercase, collapse whitespace/punctuation. */
-export function normalizeMemoryText(text: string): string {
-  return text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+/** High-frequency particles in scripts without spaces (segmenters keep them). */
+const CJK_STOP = new Set([
+  ...'的了是在和与或我你他她它们们着过地得之不没就有都也把被给对',
+  ...'のにはがをはへともでやかねよ',
+  ...'은는이가을를에의',
+  ...'ที่และในไปมา',
+]);
+
+/** Normalize for dedupe: NFC, locale-aware lowercase, collapse whitespace/punctuation. */
+export function normalizeMemoryText(text: string, locale?: string): string {
+  return lowerSmart(nfc(text), locale).replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
 }
 
-/** Content tokens (stopwords dropped) for similarity. */
-export function memoryTokens(text: string): Set<string> {
+/** Content tokens (stopwords dropped) for similarity. Segments CJK/Thai via Intl.Segmenter. */
+export function memoryTokens(text: string, locale?: string): Set<string> {
   const out = new Set<string>();
-  for (const w of normalizeMemoryText(text).split(' ').filter(Boolean)) {
-    if (!STOP.has(w) && w.length > 1) out.add(w);
+  for (const w of words(normalizeMemoryText(text, locale), locale)) {
+    const t = lowerSmart(w, locale);
+    if (STOP.has(t) || CJK_STOP.has(t)) continue;
+    // Single ASCII letters carry no meaning; single CJK/Thai/etc chars do.
+    if (t.length > 1 || /[^\x00-\x7F]/.test(t)) out.add(t);
   }
   return out;
 }

@@ -67,14 +67,14 @@ export function validateMagic(buf: Uint8Array, filename: string): { ok: boolean;
   return { ok: true, mime };
 }
 
-export function validateLimits(files: Array<{ size: number }>): { ok: boolean; error?: string } {
-  if (files.length > ATTACH_LIMITS.maxCount) return { ok: false, error: ATTACH_STRINGS.countError };
+export function validateLimits(files: Array<{ size: number }>): { ok: boolean; error?: string; code?: 'count' | 'file' | 'total' } {
+  if (files.length > ATTACH_LIMITS.maxCount) return { ok: false, error: `${ATTACH_STRINGS.countError}`, code: 'count' };
   let total = 0;
   for (const f of files) {
-    if (f.size > ATTACH_LIMITS.maxFileBytes) return { ok: false, error: `${ATTACH_STRINGS.oversizeError} (max 20MB per file)` };
+    if (f.size > ATTACH_LIMITS.maxFileBytes) return { ok: false, error: `${ATTACH_STRINGS.oversizeError} (max 20MB per file)`, code: 'file' };
     total += f.size;
   }
-  if (total > ATTACH_LIMITS.maxTotalBytes) return { ok: false, error: `${ATTACH_STRINGS.oversizeError} (max 50MB total)` };
+  if (total > ATTACH_LIMITS.maxTotalBytes) return { ok: false, error: `${ATTACH_STRINGS.oversizeError} (max 50MB total)`, code: 'total' };
   return { ok: true };
 }
 

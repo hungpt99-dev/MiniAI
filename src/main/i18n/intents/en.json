@@ -1,0 +1,11 @@
+{
+  "locale": "en",
+  "remember": ["please remember that", "please remember", "remember that", "remember this", "remember to", "remember", "from now on", "don't forget", "never forget"],
+  "forget": ["forget that", "forget this", "forget about", "forget"],
+  "strip": ["^(please\\s+)?remember\\s+(that|this|to\\s+)?", "\\bfrom now on[,:]?\\s*", "^(don't|never) forget\\s+(that|this)?"],
+  "kinds": {
+    "folder_rule": ["never touch", "don't delete", "do not delete", "do not modify", "keep out of", "folder", "directory"],
+    "procedure": ["steps", "procedure", "cleanup", "weekly", "backup", "routine", "process"],
+    "preference": ["prefer", "likes", "like", "always", "reply", "language"]
+  }
+}

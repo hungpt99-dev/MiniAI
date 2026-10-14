@@ -1,0 +1,6 @@
+{
+  "locale": "id",
+  "remember": ["tolong ingat", "ingat bahwa", "ingat", "mulai sekarang", "jangan lupa", "jangan pernah lupa"],
+  "forget": ["lupakan bahwa", "lupakan"],
+  "strip": ["^(tolong\\s+)?ingat(\\s+bahwa)?", "\\bmulai sekarang[,:]?\\s*"]
+}

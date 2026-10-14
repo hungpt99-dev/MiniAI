@@ -1,0 +1,6 @@
+{
+  "locale": "de",
+  "remember": ["bitte merke dir", "merke dir", "merke dir dass", "ab jetzt", "vergiss nicht", "vergiss niemals"],
+  "forget": ["vergiss dass", "vergiss das", "vergiss"],
+  "strip": ["^(bitte\\s+)?merke dir(\\s+dass)?", "\\bab jetzt[,:]?\\s*", "^vergiss (nicht|niemals)\\s*"]
+}

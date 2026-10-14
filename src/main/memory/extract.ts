@@ -1,41 +1,6 @@
 import type { ChatMessage } from '../../shared/types';
 import { streamChat } from '../ai/stream';
-import { memoryHash, REMEMBER_RE } from './types';
-
-/** True when the user explicitly asks to remember something. */
-export function isExplicitRemember(text: string): boolean {
-  const t = text.trim();
-  // Questions recall ("do you remember ...?") — they never store.
-  if (/\?\s*$/.test(t)) return false;
-  if (/^(do|did|can|could|would|will|shall|have|has|had)\s+you\s+remember\b/i.test(t)) return false;
-  return REMEMBER_RE.test(t);
-}
-
-const FOLDER_HINT_RE = /\b(never|don't|do not|keep out|folder|directory|file|touch|delete|modify)\b/i;
-const PREF_HINT_RE = /\b(prefer|likes?|always|reply|answer|language|vietnamese|english|speak|write)\b/i;
-const PROC_HINT_RE = /\b(steps?|procedure|cleanup|weekly|backup|routine|process)\b/i;
-
-/** Best-guess kind for an explicit "remember ..." record. */
-export function guessKind(text: string): import('../../shared/types').MemoryKind {
-  if (FOLDER_HINT_RE.test(text)) return 'folder_rule';
-  if (PREF_HINT_RE.test(text)) return 'preference';
-  if (PROC_HINT_RE.test(text)) return 'procedure';
-  return 'fact';
-}
-
-/**
- * Strip an explicit-remember wrapper down to the record text
- * ("remember that I prefer PDFs" -> "I prefer PDFs").
- */
-export function rememberRecordText(text: string): string {
-  return text
-    .trim()
-    .replace(/^(please\s+)?(remember|ghi nh[ớo]|hãy nh[ớo])\s+(that|this|to\s+)?/i, '')
-    .replace(/\bfrom now on[,:]?\s*/i, '')
-    .trim()
-    .replace(/^[.,;:!?]+|[.,;:!?]+$/g, '')
-    .trim();
-}
+import { memoryHash } from './types';
 
 export interface ExtractorDeps {
   provider: import('../../shared/types').ProviderId;

@@ -1,0 +1,6 @@
+{
+  "locale": "fr",
+  "remember": ["souviens-toi que", "souviens-toi", "rappelle-toi que", "rappelle-toi", "à partir de maintenant", "n'oublie pas", "n'oublie jamais"],
+  "forget": ["oublie que", "oublie ça", "oublie"],
+  "strip": ["^(souviens-toi|rappelle-toi)(\\s+que)?", "\\bà partir de maintenant[,:]?\\s*", "^n'oublie (pas|jamais)\\s*"]
+}

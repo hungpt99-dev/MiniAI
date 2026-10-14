@@ -1,0 +1,6 @@
+{
+  "locale": "es",
+  "remember": ["por favor recuerda", "recuerda que", "recuerda", "acuérdate de", "a partir de ahora", "no olvides", "nunca olvides"],
+  "forget": ["olvida que", "olvida esto", "olvídate de", "olvida"],
+  "strip": ["^(por favor\\s+)?recuerda(\\s+que)?", "\\ba partir de ahora[,:]?\\s*", "^(no|nunca) olvides\\s*"]
+}

@@ -32,6 +32,7 @@ export const DEFAULT_SETTINGS: Settings = {
   memoryEnabled: false,
   memoryKinds: { preference: true, fact: true, folder_rule: true, procedure: true, episode: true },
   memorySuggest: false,
+  memoryOneTap: true,
   memorySemantic: false,
   memoryUseInAsk: true,
   memoryMaxItems: 500,
@@ -42,6 +43,7 @@ export const DEFAULT_SETTINGS: Settings = {
   onboarded: false,
   suggestions: [...DEFAULT_SUGGESTIONS],
   launchAtLogin: false,
+  locale: 'system',
 };
 
 export function validateSettings(s: Partial<Settings>): string[] {
@@ -69,6 +71,7 @@ export function validateSettings(s: Partial<Settings>): string[] {
   if (s.memoryKinds !== undefined && (typeof s.memoryKinds !== 'object' || Array.isArray(s.memoryKinds) ||
     !['preference', 'fact', 'folder_rule', 'procedure', 'episode'].every((k) => typeof (s.memoryKinds as Record<string, unknown>)[k] === 'boolean'))) errors.push('memoryKinds must be a map of booleans');
   if (s.memorySuggest !== undefined && typeof s.memorySuggest !== 'boolean') errors.push('memorySuggest must be boolean');
+  if (s.memoryOneTap !== undefined && typeof s.memoryOneTap !== 'boolean') errors.push('memoryOneTap must be boolean');
   if (s.memorySemantic !== undefined && typeof s.memorySemantic !== 'boolean') errors.push('memorySemantic must be boolean');
   if (s.memoryUseInAsk !== undefined && typeof s.memoryUseInAsk !== 'boolean') errors.push('memoryUseInAsk must be boolean');
   if (s.memoryMaxItems !== undefined && (typeof s.memoryMaxItems !== 'number' || s.memoryMaxItems < 10 || s.memoryMaxItems > 5000)) errors.push('memoryMaxItems must be 10..5000');
@@ -87,6 +90,7 @@ export function validateSettings(s: Partial<Settings>): string[] {
     !Object.values(s.askReadNoticeDismissed).every((v) => typeof v === 'boolean'))) errors.push('askReadNoticeDismissed must be a map of booleans');
   if (s.suggestions !== undefined && (!Array.isArray(s.suggestions) || s.suggestions.length > 8 || !s.suggestions.every((x) => typeof x === 'string' && x.trim()))) errors.push('suggestions must be up to 8 non-empty strings');
   if (s.launchAtLogin !== undefined && typeof s.launchAtLogin !== 'boolean') errors.push('launchAtLogin must be boolean');
+  if (s.locale !== undefined && (typeof s.locale !== 'string' || !s.locale.trim() || s.locale.length > 20)) errors.push('locale must be a BCP-47 tag or "system"');
   return errors;
 }
 

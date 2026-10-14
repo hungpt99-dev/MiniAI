@@ -121,11 +121,16 @@ describe('view store: run -> ext -> Back intact, chip, no double', () => {
     expect(runChipLabel(false, false, false)).toBeNull();
     const h = html();
     expect(h.split('id="btn-runview"').length - 1).toBe(1);
+    // chip DOM (dot + Done | View) rebuilds only on state change, never per tick
     const src = appJs();
     const chip = src.slice(src.indexOf('function updateRunChip'), src.indexOf("if ($('btn-runview'))"));
     expect(chip).toContain("$('btn-runview')");
-    expect(chip).not.toContain('createElement');
-    expect(chip).not.toContain('appendChild');
+    expect(chip).toContain('btn.dataset.rstate');
+    expect(chip).toContain("className = 'rundot'");
+    expect(chip).toContain("className = 'runsep'");
+    expect(chip).toContain('Run finished. View result');
+    expect(chip).not.toContain('Running / View');
+    expect(chip).not.toContain('Done / View');
     const chips = src.slice(src.indexOf('function renderRunChips'), src.indexOf('async function startUndoRun'));
     expect(chips.indexOf(".remove()")).toBeLessThan(chips.indexOf('createElement'));
   });
@@ -204,6 +209,22 @@ describe('memory view: single-view mount, list/filter/edit/pin/forget, empty sta
     expect(src).toContain("if (event.type === 'memory_used') return void renderMemoryUsed(runId, event)");
     expect(src).toContain('function memoryHost');
   });
+  it('one-tap row: memory_search makes no step, real tools get labels', () => {
+    const src = appJs();
+    // suppressed before any row exists; results skipped too; ids cleared per run
+    expect(src).toContain("if (ev.tool === 'memory_search') { memSuppressed.add(ev.id); return; }");
+    expect(src).toContain('if (memSuppressed.has(ev.id)) { memSuppressed.delete(ev.id); agentScroll(); return; }');
+    expect(src).toContain('memSuppressed.clear()');
+    expect(src).toContain("fs_read: 'Read file'");
+    expect(src).toContain("shell_run: 'Ran command'");
+    expect(src).toContain('title="${esc(ev.tool)}"');
+    // one-tap row with Save / Not now and the master-off turn-on flow
+    expect(src).toContain('function renderOneTapRow');
+    expect(src).toContain('Remember: ${ev.text}?');
+    expect(src).toContain('Memory is off. Turn it on?');
+    expect(src).toContain('memoryEnabled: true');
+    expect(src).toContain("memCall({ action: 'dismiss', hash: ev.hash })");
+  });
   it('sr-only announcements go through the single live region', () => {
     const src = appJs();
     const say = src.slice(src.indexOf('function say('), src.indexOf('function say(') + 200);
@@ -226,9 +247,69 @@ describe('memory view: single-view mount, list/filter/edit/pin/forget, empty sta
     }
     const src = appJs();
     expect(src).toContain('Step ${obStep + 1} of 4');
-    expect(src).toContain('Let Nexio remember your preferences?');
+    expect(src).toContain('Let Nexio remember things you tell it?');
+    expect(src).toContain('Yes, ask me each time');
     expect(src).toContain('Only when I say "remember"');
+    expect(src).toContain('memoryOneTap: true');
     expect(src).toContain('function paintIncognito');
+    // settings status line reflects the three states
+    expect(src).toContain('On: asks before saving');
+    expect(src).toContain('On: only when I say remember');
+  });
+});
+describe('settings: one switch row per boolean, helper notes, chips, footer chip', () => {
+  it('every boolean setting renders a visible track (root cause: hidden input, track span missing)', () => {
+    const h = html();
+    // all nine boolean rows carry the paint span; the native input is always hidden by CSS
+    const tracks = h.split('switch-track" aria-hidden').length - 1;
+    expect(tracks).toBe(9);
+    for (const id of ['set-sendtemp', 'set-askread', 'set-reqapprove', 'set-mem', 'set-mem-suggest',
+      'set-mem-semantic', 'set-mem-ask', 'set-incognito', 'set-login']) {
+      const at = h.indexOf(`id="${id}"`);
+      expect(at).toBeGreaterThan(-1);
+      expect(h.slice(at, at + 400)).toContain('switch-track');
+    }
+    const css = read('src/renderer/styles.css');
+    // OFF track is a visible pill, not transparent-on-surface
+    expect(css).toContain('background: var(--border); border: 1px solid var(--border); position: relative;');
+    expect(css).toContain('.fld.check input:focus-visible + .switch-track');
+  });
+  it('MCP empty note is plain helper text with an Extensions link, never a code box', () => {
+    const src = appJs();
+    expect(src).toContain("note.className = 'form-note'");
+    expect(src).toContain("link.className = 'textlink'");
+    expect(src).toContain('void openExtensions()');
+    expect(src).not.toContain('No MCP tools known — start a server in Extensions to browse them.</span>');
+    const css = read('src/renderer/styles.css');
+    expect(css).toContain('.form-note { font-size: 12px;');
+    expect(css).not.toMatch(/\.form-note \{[^}]*mono/i);
+  });
+  it('memory kinds are checkbox chips with two visible states, no pills', () => {
+    const src = appJs();
+    expect(src).toContain("lab.className = 'chip-toggle'");
+    expect(src).toContain('chip-check');
+    expect(src).toContain("box.setAttribute('aria-label', 'Remember '");
+    expect(src).toContain('aria-disabled');
+    expect(src).not.toContain("lab.className = 'fld check';\n    lab.innerHTML = `<span class=\"switch-tx\"");
+    const css = read('src/renderer/styles.css');
+    expect(css).toContain('.chip-toggle { height: 32px;');
+    expect(css).toContain('.chip-toggle input:checked + .chip-tx');
+    expect(css).toContain('.chip-group { display: flex; flex-wrap: wrap; gap: 8px;');
+    expect(css).not.toMatch(/\.chip-toggle[^{]*\{[^}]*opacity:\s*\.5/);
+    // save path untouched: hidden inputs keep data-memkind
+    expect(src).toContain("box.dataset.memkind = k;");
+    expect(src).toContain("input[data-memkind]");
+  });
+  it('settings sections stack with titles and 8px groups; footer never covers content', () => {
+    const h = html();
+    expect(h).toContain('class="set-section"');
+    expect(h).toContain('class="set-title">Ask mode');
+    expect(h).toContain('class="set-title">Memory');
+    expect(h).toContain('class="group"');
+    const css = read('src/renderer/styles.css');
+    expect(css).toContain('#settings { display: flex; flex-direction: column; gap: 24px; }');
+    expect(css).toContain('padding: 16px 22px 24px;');
+    expect(css).toContain('#settings .group { display: flex; flex-direction: column; gap: 8px; }');
   });
 });
 describe('footer: always-visible panel shell, once, send disabled when empty', () => {

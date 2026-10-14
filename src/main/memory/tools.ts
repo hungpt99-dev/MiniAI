@@ -207,7 +207,7 @@ export function makeMemoryTools(db: DatabaseSync, opts: { maxItems?: number } = 
 /** Direct (non-tool) save used by the confirmation row/card path. */
 export function directSaveMemory(
   db: DatabaseSync,
-  input: { kind: MemoryKind; text: string; scope?: MemoryScope; pinned?: boolean; source: MemorySource; link?: string },
+  input: { kind: MemoryKind; text: string; scope?: MemoryScope; pinned?: boolean; source: MemorySource; link?: string; lang?: string },
   opts: { maxItems?: number; episodeDays?: number } = {},
 ) {
   const pre = blockedMemoryText(String(input.text || ''), scanSecretsText);

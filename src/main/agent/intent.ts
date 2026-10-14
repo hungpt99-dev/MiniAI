@@ -39,7 +39,11 @@ export const CLASSIFY_PROMPT =
   'Classify the user request as exactly one word: ACT if it needs computer interaction ' +
   '(find/open/move/create/organize files, run commands, change settings, use apps), ' +
   'ANSWER if it is knowledge/writing/explanation/calculation with no computer action, ' +
-  'CLARIFY if it is ambiguous and could change the machine. Reply with only that word.\nRequest: ';
+  'CLARIFY if it is ambiguous and could change the machine. Reply with only that word. ' +
+  'The request may be in any language — decide by meaning, not by English verbs. ' +
+  'Examples: "abre mi archivo" -> ACT. "打开我的文件" -> ACT. "mở file của tôi" -> ACT. ' +
+  '"افتح الملف" -> ACT. "What is the capital of France?" -> ANSWER. ' +
+  '"Thủ đô của Pháp là gì?" -> ANSWER. "法国的首都是哪里？" -> ANSWER.\nRequest: ';
 
 /** Parse a tiny model reply into an Intent; unparseable → clarify (safe). */
 export function parseIntentReply(reply: string): Intent {

@@ -29,8 +29,10 @@
   plaintext otherwise (Settings > Memory says which). Run logs record
   memory ids and kinds only, never text.
 - Untrusted content (files, web pages, attachments, images, MCP output) can
-  NEVER create, edit or delete memories: a `memory_save`/`update`/`forget`
-  tool call following any untrusted read forces the confirmation card
+  NEVER create, edit or delete memories: only the user's own messages feed
+  the explicit-remember path, the one-tap detector and the extractor. A
+  `memory_save`/`update`/`forget` tool call following any untrusted read
+  forces the confirmation card
   ("Requested after reading \<source\>"), and every candidate passes the
   secrets/PII scanner ("Not saved: looks like a secret").
 - `memory_save`/`update`/`forget` are `askSafe: false` like all writes, with

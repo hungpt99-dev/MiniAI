@@ -3,6 +3,7 @@ import path from 'node:path';
 import { getDb, closeDb } from './db/db';
 import { seedBuiltins } from './db/templates';
 import { getSettings } from './store/settings';
+import { resolveAppLocale, setLocale, t } from './i18n/index';
 import { createPopup, togglePopup, getPopup } from './popup';
 import { resetDialogLock } from './app/dialogs';
 import { createTray } from './tray';
@@ -23,18 +24,25 @@ function showAndOpen(view: 'settings' | 'log'): void {
   try { w?.webContents.send(IpcChannels.ui, { open: view }); } catch { /* not ready */ }
 }
 
+export function refreshAppMenu(): void {
+  if (platform().key !== 'darwin') return;
+  try {
+    setupMacMenu();
+  } catch { /* headless tests */ }
+}
+
 function setupMacMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
     {
       label: 'Nexio',
       submenu: [
-        { label: 'Settings…', accelerator: 'Cmd+,', click: () => showAndOpen('settings') },
+        { label: t('tray.settings'), accelerator: 'Cmd+,', click: () => showAndOpen('settings') },
         { type: 'separator' },
-        { label: 'Quit Nexio', accelerator: 'Cmd+Q', click: () => app.quit() },
+        { label: t('tray.quit'), accelerator: 'Cmd+Q', click: () => app.quit() },
       ],
     },
     {
-      label: 'Edit',
+      label: t('menu.edit'),
       submenu: [
         { role: 'undo' },
         { role: 'redo' },
@@ -58,6 +66,15 @@ async function startup(): Promise<void> {
   const db = getDb();
   (globalThis as unknown as { __nexioDb: unknown }).__nexioDb = db;
   seedBuiltins(db);
+  // Locale before any user-facing string: settings value, else OS locale.
+  try {
+    const s = getSettings(db);
+    let sys = 'en';
+    try {
+      sys = app.getLocale() || 'en';
+    } catch { /* headless */ }
+    setLocale(resolveAppLocale(s.locale, sys));
+  } catch { /* English fallback */ }
   registerIpc();
   try {
     // Seed bundled example extensions (disabled until the user enables them).
