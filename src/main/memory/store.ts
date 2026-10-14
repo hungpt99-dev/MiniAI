@@ -236,14 +236,22 @@ export function isMemoryKind(k: unknown): k is MemoryKind {
   return k === 'preference' || k === 'fact' || k === 'folder_rule' || k === 'procedure' || k === 'episode';
 }
 
-/** Two different name claims in one scope ("my/your name is X"): always a conflict. */
+/** Two distinct short records that share a content core but fill the slot
+ * differently ("Ann" vs "Bob", "my name is X" vs "your name is Y", in any
+ * script) always conflict. Language-agnostic: no name-order or
+ * English-word assumptions; stores text exactly as written. */
 export function nameClash(a: string, b: string): boolean {
-  const key = (s: string) => {
-    const m = /^(?:my|your) name is (.+)/.exec(s);
-    return m ? `name:${m[1]}` : null;
-  };
-  const ka = key(a), kb = key(b);
-  return !!ka && !!kb && ka !== kb;
+  const ta = memoryTokens(a);
+  const tb = memoryTokens(b);
+  if (!ta.size || !tb.size) return false;
+  if (ta.size > 6 || tb.size > 6) return false;
+  let inter = 0;
+  for (const w of ta) if (tb.has(w)) inter++;
+  if (inter < 2) return false;
+  if (normalizeMemoryText(a) === normalizeMemoryText(b)) return false;
+  // Same short template, both sides carry their own slot value (size differs
+  // by at most the template words, e.g. my/your or a multi-token name).
+  return (ta.size - inter) >= 1 && (tb.size - inter) >= 1 && Math.abs(ta.size - tb.size) <= 1;
 }
 
 /**

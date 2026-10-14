@@ -15,7 +15,7 @@ Settings live in the app SQLite DB (`getSettings`/`updateSettings` in
 | `askReadEnabled` | `true` | Ask mode may read files and the system (read-only). `false` returns Ask to plain chat with no tools. |
 | `askMcpTools` | `[]` | MCP full tool names (`mcp__server__tool`) allowed in Ask. Each also needs a trusted server and a read-only tool; default off. |
 | `askReadNoticeDismissed` | `{}` | Per-provider first-use Ask read notice (remote providers only). |
-| `memoryEnabled` | `false` | Master switch for long-term memory (asks in onboarding). |
+| `memoryEnabled` | `false` | Master switch for long-term memory (Settings > Memory). |
 | `memoryKinds` | all `true` | Per-kind opt-ins: preference, fact, folder_rule, procedure, episode. |
 | `memorySuggest` | `false` | Suggest memories after runs (user messages only, one cheap call). |
 | `memoryOneTap` | `true` | One-tap save rows for identity/preference statements (needs master on to store). |
@@ -29,6 +29,15 @@ Settings live in the app SQLite DB (`getSettings`/`updateSettings` in
 | `memoryRuleApprovals` | `{}` | Approved `.nexio/rules.md` never-touch lines (path → hash). |
 | `incognito` | `false` | No history, no memory reads/writes, minimal run log (`/incognito`). |
 | `agentMaxCalls` | `25` | 1–100 tool calls per run. |
+| `taskMaxParallel` | `2` | 1–4 running tasks at once (incl. subtasks). |
+| `taskMaxQueued` | `20` | 1–100 waiting top-level tasks. |
+| `taskAllowSubtasks` | `true` | Agents may create subtasks (Do only, capped). |
+| `taskAskBeforeSubtasks` | `true` | One confirmation per run before the first `subtask_create`. |
+| `taskConfirmOnSubmit` | `true` | Ask where work goes when submitting while a task runs. |
+| `taskSubmitDefault` | `'ask'` | Saved while-busy default: `ask` / `spawn` / `queue` / `replace`. |
+| `taskResume` | `'ask'` | Waiting tasks on start: `ask` / `resume` / `discard`. |
+| `taskNotifications` | `true` | Approval + finished-family notifications. |
+| `taskPruneDays` | `30` | Prune terminal tasks/runs older than N days (1–3650). |
 | `sendTemperature` | `true` | Custom provider only: send `temperature`. Off for strict local servers. |
 | `compatibleImages` | `auto` | Custom provider only: image support `auto` (probe) / `on` / `off`. Off holds images back with the non-vision notice. |
 | `suggestions` | 4 builtins | Up to 8 starter-suggestion lines. |

@@ -32,15 +32,19 @@ anything the secrets/PII scanner flags. Blocked saves explain why
 ## How memories are created
 
 Only **your own messages** can create memories — never files, attachments,
-web pages, tool results or MCP output.
+web pages, tool results or MCP output. Detection is language-agnostic: no
+per-language regex in the decision path (see `docs/i18n.md`).
 
-- **Explicit**: say "remember that …" / "from now on …" / "ghi nhớ …".
+- **Explicit**: an explicit save command in your own language
+  ("remember that …" / "from now on …" / "ghi nhớ …" / …) matches a
+  data-driven pack (`src/main/i18n/intents/<locale>.json`, 15 seed packs).
   Saved immediately as `user_said`; the answer carries a small
   "Remembered: … [Undo] [Edit]" row. Undo deletes it.
 - **One-tap** (needs the master switch for storage): first-person
-  statements like "my name is …", "tôi tên là …", "I prefer …" show a
+  statements like "my name is …", "tôi tên là …", "我叫王芳" show a
   quiet "Remember: …? [Save] [Not now]" row — at most one per run, never
-  auto-saved, never repeated after "Not now". With memory off, Save offers
+  auto-saved, never repeated after "Not now". The text stays in your own
+  words (never translated) with its BCP-47 language tag. With memory off, Save offers
   "Memory is off. Turn it on?" inline instead of switching views. Names
   are stored pinned; changing your name later asks "Replace the old name?".
 - **Suggested** (off by default): after a run with 2+ user turns, one cheap
@@ -101,7 +105,7 @@ Run logs record memory ids and kinds only, never text.
 ## Switching it off
 
 - Master switch: Settings > Memory ("Remember things across
-  conversations", default off) or answer "No" in onboarding.
+  conversations", default off).
 - Per-kind toggles, "Use memory in Ask mode" (default on), incognito
   (`/incognito` or Settings): no history, no memory reads or writes,
   minimal run log, with a footer badge.

@@ -1,7 +1,7 @@
 // Single-view state for the Nexio popup (renderer-safe, pure logic only).
 // The popup mounts exactly one view node inside .view; all switches go
 // through openView/goBack so Esc/Back return to returnTo. See app.js showView.
-export type ViewName = 'idle' | 'palette' | 'run' | 'settings' | 'extensions' | 'history' | 'memory' | 'onboard';
+export type ViewName = 'idle' | 'palette' | 'run' | 'settings' | 'extensions' | 'history' | 'memory' | 'tasks' | 'onboard';
 
 export interface ViewState {
   view: ViewName;

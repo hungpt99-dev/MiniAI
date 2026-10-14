@@ -1,13 +1,14 @@
-import { app, globalShortcut, Menu } from 'electron';
+import { app, globalShortcut, Menu, powerMonitor } from 'electron';
 import path from 'node:path';
 import { getDb, closeDb } from './db/db';
 import { seedBuiltins } from './db/templates';
 import { getSettings } from './store/settings';
 import { resolveAppLocale, setLocale, t } from './i18n/index';
 import { createPopup, togglePopup, getPopup } from './popup';
-import { resetDialogLock } from './app/dialogs';
+import { confirmQuitWithTasks, resetDialogLock } from './app/dialogs';
 import { createTray } from './tray';
 import { registerIpc, refreshToggleHotkey, applyLaunchAtLogin } from './ipc';
+import { getScheduler, interruptTasksForQuit, runningTaskCount } from './tasks/taskHost';
 import { extService, shutdownExtensions } from './extensions/index';
 import { platform } from './platform/index';
 import { IpcChannels } from '../shared/ipc-channels';
@@ -90,9 +91,37 @@ async function startup(): Promise<void> {
     if (getSettings(db).launchAtLogin === true) applyLaunchAtLogin();
   } catch { /* db not ready */ }
   refreshToggleHotkey(() => togglePopup());
+  // Sleep marks mid-stream tasks interrupted (Retry in Tasks); resume repaints.
+  try {
+    powerMonitor.on('suspend', () => {
+      try { interruptTasksForQuit('sleep'); } catch { /* best-effort */ }
+    });
+  } catch { /* headless tests */ }
 }
 
 void startup();
+
+let quitting = false;
+app.on('before-quit', (e) => {
+  if (quitting) return;
+  let n = 0;
+  try { n = runningTaskCount(); } catch { n = 0; }
+  if (n <= 0) return;
+  e.preventDefault();
+  void (async () => {
+    const go = await confirmQuitWithTasks(
+      getPopup(),
+      t('tasks.quitConfirm', { n }),
+      t('tasks.quitStop'),
+      t('tasks.keepRunning'),
+    );
+    if (!go) return;
+    try { interruptTasksForQuit('quit'); } catch { /* best-effort */ }
+    try { getScheduler()?.interruptAll('quit'); } catch { /* best-effort */ }
+    quitting = true;
+    app.quit();
+  })();
+});
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();

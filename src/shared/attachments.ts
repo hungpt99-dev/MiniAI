@@ -12,7 +12,7 @@ export const ATTACH_LIMITS = {
 
 export const ATTACH_STRINGS = {
   dropHint: 'Drop to attach',
-  defaultInstruction: 'Describe the attached file(s).',
+  defaultInstruction: 'Describe the attached files.',
   placeholderWithAttach: 'Add a note, Enter to send…',
   visionNotice: 'This model does not support images. Switch model to send images — image bytes were not sent.',
   visionSwitch: 'Switch model',
@@ -78,16 +78,34 @@ export function validateLimits(files: Array<{ size: number }>): { ok: boolean; e
   return { ok: true };
 }
 
-export function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+export function formatSize(bytes: number, locale?: string): string {
+  try {
+    const loc = locale || undefined;
+    if (bytes < 1024) return `${new Intl.NumberFormat(loc).format(bytes)} B`;
+    if (bytes < 1024 * 1024) return `${new Intl.NumberFormat(loc, { maximumFractionDigits: 1 }).format(bytes / 1024)} KB`;
+    return `${new Intl.NumberFormat(loc, { maximumFractionDigits: 1 }).format(bytes / 1024 / 1024)} MB`;
+  } catch {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
 }
 
-/** Safe temp name: basename only, no traversal, capped length. */
+/** Safe temp name: basename only, no traversal, capped length. Unicode-aware. */
 export function safeName(name: string): string {
   const base = String(name || 'file').split(/[\\/]/).pop() || 'file';
-  return base.replace(/[^\w.\-]+/g, '_').slice(0, 80) || 'file';
+  // why: \w is ASCII-only; \p{L}\p{N} keeps CJK/Arabic/Devanagari names intact.
+  return takeGraphemeSlice(base.replace(/[^\p{L}\p{N}.\-]+/gu, '_'), 80) || 'file';
+}
+
+function takeGraphemeSlice(s: string, n: number): string {
+  try {
+    const Seg = (Intl as unknown as { Segmenter?: new (l?: string, o?: object) => { segment(x: string): Iterable<{ segment: string }> } }).Segmenter;
+    if (!Seg) return s.slice(0, n);
+    return [...new Seg(undefined, { granularity: 'grapheme' }).segment(s)].slice(0, n).map((p) => p.segment).join('');
+  } catch {
+    return s.slice(0, n);
+  }
 }
 
 /** Fit (w,h) inside maxSide, preserving aspect. Pure — covered by downscale test. */
@@ -132,9 +150,15 @@ export function scanSecretsText(text: string): boolean {
   return SECRET_RES.some((re) => re.test(sample));
 }
 
-/** "1 attachment added" / "3 attachments added" (no "(s)"). */
-export function formatAttachCount(n: number): string {
-  return n === 1 ? '1 attachment added' : `${n} attachments added`;
+/** Attachment count via Intl.PluralRules (no "(s)" concatenation). Caller localizes the nouns. */
+export function formatAttachCount(n: number, locale?: string): string {
+  try {
+    const form = new Intl.PluralRules(locale || undefined).select(n);
+    const num = new Intl.NumberFormat(locale || undefined).format(n);
+    return form === 'one' ? `${num} attachment added` : `${num} attachments added`;
+  } catch {
+    return n === 1 ? '1 attachment added' : `${n} attachments added`;
+  }
 }
 
 const PROVIDER_DISPLAY: Record<string, string> = {

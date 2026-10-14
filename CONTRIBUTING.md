@@ -36,8 +36,8 @@ owner credentials (see `docs/release.md`).
 - Keep PRs focused: one change, minimal diff.
 - Do not touch `src/`, `tests/`, `scripts/`, `package.json`,
   `electron-builder.yml` unless the issue asks for it.
-- Run `npm run typecheck` and `npx vitest run` before pushing.
-- No lint/format tooling — match surrounding 2-space style, CRLF.
+- Run `npm run typecheck`, `npm run lint`, `npm run i18n:check` and `npx vitest run` before pushing.
+- No lint/format tooling beyond `npm run lint` (typecheck + i18n check) — match surrounding 2-space style, CRLF.
 - No secrets in code, logs, fixtures, or screenshots.
   API keys live in OS keychain / env only, never committed.
 - Live provider smoke is manual and opt-in (`NEXIO_LIVE_SMOKE=1`,
@@ -63,3 +63,22 @@ owner credentials (see `docs/release.md`).
 - Self-verify end to end: drive new memory flows through the real `send`
   handler with a scripted provider (`tests/unit/memory-e2e.test.ts`
   pattern), not just the store.
+
+## Tasks rules
+
+- State machine is one file: `src/main/tasks/taskTypes.ts` (exhaustive
+  transitions, one terminal state). Scheduler logic stays injectable
+  (`tests/unit/tasks.test.ts` pattern: fake clock + fake runner).
+- Agent tools are `subtask_*` only, parent-bound, risk write, `askSafe:
+  false`. Never expose spawn/queue/reorder to the model.
+- Every task path (foreground inline, scheduler runner) uses the same loop,
+  tools, policy, approvals, limits, log and undo. Ask stays read-only.
+
+## Translations
+
+- English (`src/main/i18n/locales/en.json`) is the source of truth. Never
+  hardcode user-facing strings — use `t(key, vars)` (main) or `t()` +
+  `data-i18n` attributes (renderer). No `(s)` plurals, no concatenation.
+- Add a language with one locale JSON file (+ optional
+  `src/main/i18n/intents/<locale>.json` fast-path pack + test). See
+  `docs/i18n.md`. A missing locale or intent pack must never break anything.

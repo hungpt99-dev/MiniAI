@@ -22,6 +22,7 @@ function isEmptyUI() {
   return !inputEl.value && messagesEl.children.length === 0 && toolCount === 0 && attachPending() === 0 && !active;
 }
 let drafts = { chat: '', agent: '' };
+var lastUserText = '';
 
 // --- i18n: locale dict over IPC, mirrored t() (see src/shared/i18n.ts) ---
 var L = { tag: 'en', dir: 'ltr', dict: {}, fallback: {}, available: [] };
@@ -44,6 +45,7 @@ function t(key, vars) {
     return tv(raw[form] !== undefined ? raw[form] : raw.other !== undefined ? raw.other : key, vars);
   } catch (e) { return key; }
 }
+function tr(key, vars, fb) { var s = t(key, vars); return s === key ? fb : s; }
 async function loadLocale() {
   try {
     if (!window.nexio || !window.nexio.getLocale) return;
@@ -72,6 +74,11 @@ function applyLocale() {
     });
     updateModeUI();
     if (typeof paintIncognito === 'function') { try { incognitoOn = incognitoOn; paintIncognito(true); } catch (e) {} }
+    // why: the footer tasks label is JS-painted, so a pre-locale paint leaves the raw key behind.
+    if (typeof paintTasksButton === 'function') { try { paintTasksButton(); } catch (e) {} }
+    if (typeof view !== 'undefined' && view === 'tasks' && typeof renderTasksView === 'function') {
+      try { renderTasksView(); } catch (e) {}
+    }
     syncChrome();
     requestResize();
   } catch (e) { /* locale never breaks chrome */ }
@@ -99,7 +106,8 @@ function updateModeUI() {
   $('tab-agent').setAttribute('aria-selected', String(!isChat));
   const chip = $('agent-cwd');
   if (chip) chip.classList.toggle('hidden', isChat);
-  inputEl.placeholder = isChat ? 'Ask about your files or anything else...' : 'What do you want to do?';
+  inputEl.placeholder = isChat ? t('composer.placeholder.ask') : t('composer.placeholder.do');
+  inputEl.dir = 'auto';
   const ro = $('hint-readonly');
   if (ro) ro.classList.toggle('hidden', !isChat);
   const sep = $('hint-sep');
@@ -192,6 +200,7 @@ function mdBlocks(src) {
 function addMsg(role, content) {
   const div = document.createElement('div');
   div.className = 'msg ' + role;
+  div.dir = 'auto';
   if (role === 'user') {
     // why: You label + 3-line clamp keeps tall pastes to one compact row; click or Enter/Space toggles full text
     div.innerHTML = '<span class="you-label">You</span><span class="you-prompt you-clamp" tabindex="0" role="button" aria-expanded="false"></span>';
@@ -238,13 +247,14 @@ function copyText(text) {
 function decorateCode(root) {
   if (!root || !root.querySelectorAll) return;
   root.querySelectorAll('pre').forEach((pre) => {
+    pre.dir = 'ltr';
     if (pre.querySelector('.pre-copy')) return;
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'pre-copy';
     btn.innerHTML = copySvg() + '<span>Copy</span>';
-    btn.setAttribute('aria-label', 'Copy code block');
-    btn.title = 'Copy code block';
+    btn.setAttribute('aria-label', t('answer.copyCode'));
+    btn.title = t('answer.copyCode');
     btn.onclick = (e) => {
       e.stopPropagation();
       copyText((pre.querySelector('code') || pre).textContent || '');
@@ -266,38 +276,56 @@ async function ensureConv() {
 }
 
 let sending = false;
-async function send() {
+async function send(submitOpts) {
   // Serialize submissions: the agentRunning() check below races with the
   // first await inside (two rapid Enters would orphan the first run —
   // its tools keep executing with no UI and no way to stop it).
   if (sending) return;
   sending = true;
   try {
-    await sendInner();
+    await sendInner(submitOpts || {});
   } finally {
     sending = false;
   }
 }
 
-async function sendInner() {
+async function sendInner(submitOpts) {
+  submitOpts = submitOpts || {};
   if (inputEl.disabled) return; // settings/onboard own the composer; Esc/Back re-enables
   const text = inputEl.value.trim();
   if (!text) return;
+  lastUserText = text;
   // View-only slashes work during a run (background continues): clear + hide before router/agent.
   {
     const early = text.split(' ')[0];
-    if (early === '/extensions' || early === '/settings' || early === '/history' || early === '/log' || early === '/memory') {
+    if (early === '/extensions' || early === '/settings' || early === '/history' || early === '/log' || early === '/memory' || early === '/tasks') {
       inputEl.value = ''; drafts[mode] = ''; hideSuggest(); grow(); hidePalette();
       if (early === '/extensions') return void openExtensions();
       if (early === '/settings') return void togglePanel('settings');
       if (early === '/history') return void togglePanel('history');
       if (early === '/memory') return void openMemoryView();
+      if (early === '/tasks') return void openTasksView();
       return void showAgentLog();
     }
   }
-  if (agentRunning()) return; // one run at a time; Stop first
+  // While-busy choice: Enter with running task(s) asks where the work goes
+  // (unless queued/spawn specified, or the user saved a default).
+  if (!submitOpts.queued && !submitOpts.taskAction && !text.startsWith('/')) {
+    try { await refreshTasks(); } catch (e) {}
+    if (tasksRunningCount() > 0) {
+      var s = null;
+      try { s = await window.nexio.getSettings(); } catch (e) {}
+      if (s && s.taskConfirmOnSubmit !== false && (!s.taskSubmitDefault || s.taskSubmitDefault === 'ask')) {
+        showTaskChoice(text);
+        return;
+      }
+      if (s && s.taskSubmitDefault && s.taskSubmitDefault !== 'ask') submitOpts.taskAction = s.taskSubmitDefault;
+    }
+  }
+  if (agentRunning() && !submitOpts.queued && !submitOpts.taskAction) return; // foreground busy; Stop first
   inputEl.value = '';
   hideSuggest();
+  hideTaskChoice();
   grow();
   hidePalette();
   if (mode === 'agent' && !text.startsWith('/')) {
@@ -305,16 +333,16 @@ async function sendInner() {
     if (pendingSkill) {
       const armed = pendingSkill;
       pendingSkill = null;
-      return void startAgentRun(`Following skill "${armed.name}":\n${armed.body}\n\nUser task: ${text}`);
+      return void startAgentRun(`Following skill "${armed.name}":\n${armed.body}\n\nUser task: ${text}`, submitOpts);
     }
-    return void startAgentRun(text);
+    return void startAgentRun(text, submitOpts);
   }
   if (text.startsWith('/')) {
     const [trigger, ...rest] = text.split(' ');
     const r = await window.nexio.slashResolve(trigger, mode);
     if (r.found) {
       if (r.found.scope && r.found.scope !== 'all' && r.found.scope !== mode) {
-        addMsg('assistant', `${esc(trigger)} is only available in ${esc(r.found.scope)} mode.`);
+        addMsg('assistant', t('slash.scopeOnly', { trigger: trigger, scope: r.found.scope }));
         showView('run');
         return;
       }
@@ -352,6 +380,15 @@ async function sendInner() {
       if (trigger === '/remember') return void runRememberCommand(rest.join(' '));
       if (trigger === '/forget') return void runForgetCommand(rest.join(' '));
       if (trigger === '/incognito') return void runIncognitoCommand();
+      if (trigger === '/tasks') { inputEl.value = ''; drafts[mode] = ''; hideSuggest(); grow(); hidePalette(); return void openTasksView(); }
+      if (trigger === '/spawn' || trigger === '/queue') {
+        const body = rest.join(' ').trim();
+        if (!body) { addMsg('assistant', t(trigger === '/spawn' ? 'slash.usageSpawn' : 'slash.usageQueue')); showView('run'); return; }
+        inputEl.value = body; drafts[mode] = body; hideSuggest(); grow(); hidePalette();
+        return void send(trigger === '/spawn' ? { taskAction: 'spawn' } : { queued: true });
+      }
+      if (trigger === '/cancel') return void runCancelCommand(rest.join(' '));
+      if (trigger === '/clear-queue') return void runClearQueueCommand();
       if (trigger === '/new') return void newChat();
       if (trigger === '/clear') { messagesEl.innerHTML = ''; assistantDiv = null; const st0 = $('agent-steps'); if (st0) st0.innerHTML = ''; const ch0 = $('run-chips'); if (ch0) ch0.remove(); inputEl.value = ''; drafts[mode] = ''; try { if (typeof clearAttachTray === 'function') clearAttachTray(); } catch {} hideSuggest(); showView('idle'); try { maybeSuggest(); } catch {} syncChrome(); requestResize(); return; }
       if (trigger === '/help') {
@@ -395,12 +432,16 @@ async function sendInner() {
   showView('run');
   const id = await ensureConv();
   lastAskPrompt = mode === 'chat' ? text : '';
+  lastUserText = text;
   assistantDiv = addMsg('assistant', '…');
   try {
     const requestId = `r${Date.now()}-${++reqSeq}`;
     lastRequestId = requestId;
     const claim = typeof window.attachClaimForSend === 'function' ? window.attachClaimForSend() : null;
     const sendOpts = { mode, sessionId: id, requestId, explicit: modeExplicitSession };
+    if (submitOpts.queued) sendOpts.queued = true;
+    if (submitOpts.taskAction) sendOpts.taskAction = submitOpts.taskAction;
+    if (submitOpts.priority) sendOpts.priority = submitOpts.priority;
     if (claim && claim.attachments) sendOpts.attachments = claim.attachments;
     const sendP = window.nexio.send(id, text, sendOpts);
     try { if (claim && claim.had && typeof window.attachMarkSent === 'function') window.attachMarkSent(id); } catch { /* noop */ }
@@ -451,7 +492,8 @@ inputEl.addEventListener('input', () => {
 inputEl.addEventListener('paste', () => setTimeout(grow, 0));
 inputEl.addEventListener('keydown', (e) => {
   const paletteOpen = !paletteEl.classList.contains('hidden');
-  if (e.key === 'Tab' && document.activeElement === inputEl && !paletteOpen && !e.isComposing) {
+  const composing = e.isComposing || e.keyCode === 229;
+  if (e.key === 'Tab' && document.activeElement === inputEl && !paletteOpen && !composing) {
     e.preventDefault();
     selectMode(mode === 'chat' ? 'agent' : 'chat');
     return;
@@ -464,12 +506,14 @@ inputEl.addEventListener('keydown', (e) => {
     else if (e.key === 'ArrowDown') { e.preventDefault(); paletteActive = (paletteActive + 1) % paletteItems.length; renderPalette(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); paletteActive = (paletteActive - 1 + paletteItems.length) % paletteItems.length; renderPalette(); }
     else if (e.key === 'Enter') {
-      if (e.shiftKey || e.isComposing) return; // Shift+Enter newline, no preventDefault
+      if (e.shiftKey || composing) return; // Shift+Enter newline, no preventDefault
       e.preventDefault(); pickPalette(paletteActive);
     }
     else if (e.key === 'Escape') { hidePalette(); }
   } else if (e.key === 'Enter') {
-    if (e.shiftKey || e.isComposing) return; // Shift+Enter newline, no preventDefault
+    if (e.shiftKey || composing) return; // Shift+Enter newline, no preventDefault
+    // Ctrl/Cmd+Enter always pushes to the queue ("do this later"), even free.
+    if (e.ctrlKey || e.metaKey) { e.preventDefault(); void send({ queued: true }); return; }
     e.preventDefault(); void send();
   }
   else if (e.key === 'Escape') {
@@ -506,13 +550,21 @@ function pickPalette(i) {
 function hidePalette() { paletteEl.classList.add('hidden'); paletteItems = []; }
 document.addEventListener('click', (e) => { if (!paletteEl.contains(e.target) && e.target !== inputEl) hidePalette(); });
 
-$('btn-send').onclick = () => void send();
+$('btn-send').onclick = (e) => void send(e && e.shiftKey ? { queued: true, priority: 'high' } : undefined);
 $('tab-chat').onclick = () => selectMode('chat');
 $('tab-agent').onclick = () => selectMode('agent');
 document.addEventListener('keydown', (e) => {
   if (e.altKey && (e.key === 'm' || e.key === 'M')) { e.preventDefault(); selectMode(mode === 'chat' ? 'agent' : 'chat'); }
   else if (e.altKey && e.key === '1') { e.preventDefault(); selectMode('chat'); }
   else if (e.altKey && e.key === '2') { e.preventDefault(); selectMode('agent'); }
+  // Queued rows reorder with Alt+Up/Alt+Down inside the Tasks view.
+  else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && view === 'tasks' && taskDetailId) {
+    var row = taskCache.get(taskDetailId);
+    if (row && row.state === 'queued' && !row.parentId) {
+      e.preventDefault();
+      void taskOp('move', { id: taskDetailId, dir: e.key === 'ArrowUp' ? -1 : 1 });
+    }
+  }
 });
 function defaultView() { return hasRun() ? 'run' : 'idle'; }
 // why: single-view — exactly one node in .view; every switch re-syncs chrome + size
@@ -532,18 +584,21 @@ function showView(name) {
   $('history').classList.toggle('hidden', name !== 'history');
   $('extensions').classList.toggle('hidden', name !== 'extensions');
   $('memory').classList.toggle('hidden', name !== 'memory');
+  $('tasks').classList.toggle('hidden', name !== 'tasks');
   $('onboard').classList.toggle('hidden', name !== 'onboard');
   // footer icon reflects its open panel; run/idle/palette show none
   const panelOn = (id, on) => { const b = $(id); if (b) b.classList.toggle('on', on); };
   panelOn('btn-ext', name === 'extensions');
   panelOn('btn-history', name === 'history');
   panelOn('btn-settings', name === 'settings');
+  panelOn('btn-tasks', name === 'tasks');
+  if (name === 'tasks') void refreshTasks();
   if ($('view')) $('view').classList.toggle('hidden', name === 'idle');
   if (name === 'run') flushMemPushes();
   const wasDisabled = inputEl.disabled;
   inputEl.disabled = name === 'settings' || name === 'onboard';
   if (name === 'settings') {
-    inputEl.placeholder = 'Settings';
+    inputEl.placeholder = t('composer.placeholder.settings');
     hidePalette(); hideSuggest(); // clear /c: no slash palette or suggestions behind settings
   } else if (wasDisabled) updateModeUI(); // restores mode placeholder
   updateRunChip();
@@ -554,7 +609,7 @@ function showView(name) {
 // dev-only: exactly one top-level view node (idle holds none, or suggest alone)
 function assertSingleView() {
   try {
-    const ids = ['palette', 'suggest', 'run', 'settings', 'history', 'extensions', 'memory', 'onboard'];
+    const ids = ['palette', 'suggest', 'run', 'settings', 'history', 'extensions', 'memory', 'tasks', 'onboard'];
     const vis = ids.filter((id) => { const el = $(id); return el && !el.classList.contains('hidden'); });
     const sug = $('suggest');
     const sugVisible = !!(sug && !sug.classList.contains('hidden'));
@@ -604,6 +659,7 @@ $('btn-settings').onclick = async () => {
   if ($('set-hotkey')) $('set-hotkey').value = s.hotkey || currentToggleHotkey;
   if ($('set-stophotkey') && s.agentStopHotkey) currentStopHotkey = s.agentStopHotkey;
   if ($('set-login')) $('set-login').checked = s.launchAtLogin === true;
+  try { paintTaskSettings(s); } catch (e) {}
   void refreshHotkeyStatus();
   paintAgentRoots(s.agentAllowedRoots || []);
   paintAgentRules(s.agentAlwaysAllow || []);
@@ -639,6 +695,7 @@ $('btn-save-settings').onclick = async () => {
   const hk = $('set-hotkey') && $('set-hotkey').value.trim();
   if (hk) patch.hotkey = hk;
   if ($('set-login')) patch.launchAtLogin = $('set-login').checked;
+  try { readTaskSettings(patch); } catch (e) {}
   const sug = $('set-suggest').value.split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 8);
   if (sug.length) patch.suggestions = sug;
   suggestCache = null;
@@ -760,7 +817,9 @@ async function refreshHistory() {
     const s = await window.nexio.getSettings();
     document.documentElement.dataset.theme = 'dark'; // dark-only UI; stored theme untouched
     mode = s.mode === 'agent' ? 'agent' : 'chat';
-    updateModeUI();
+    // why: locale first — every t() below falls back to the raw key without it.
+    try { await loadLocale(); } catch {}
+    applyLocale();
     try {
       if (window.nexio.isEncryptionAvailable && !(await window.nexio.isEncryptionAvailable())) {
         const b = document.createElement('div');
@@ -794,7 +853,7 @@ function requestResize() {
 function syncChrome() {
   const hasMsgs = messagesEl.children.length > 0;
   const palOpen = view === 'palette';
-  const panelOpen = view === 'settings' || view === 'history' || view === 'extensions' || view === 'memory' || view === 'onboard';
+  const panelOpen = view === 'settings' || view === 'history' || view === 'extensions' || view === 'memory' || view === 'tasks' || view === 'onboard';
   const agentActive = (typeof agentRunning === 'function' && agentRunning()) ||
     ($('agent-steps') && $('agent-steps').children.length > 0);
   const idle = !inputEl.value && !hasMsgs && !palOpen && !panelOpen && !agentActive && attachPending() === 0;
@@ -918,6 +977,18 @@ if ($('btn-copy')) $('btn-copy').addEventListener('click', async () => {
 });
 if ($('btn-followup')) $('btn-followup').addEventListener('click', () => inputEl.focus());
 if ($('btn-newchat')) $('btn-newchat').addEventListener('click', () => void newChat());
+if ($('btn-task-spawn')) $('btn-task-spawn').addEventListener('click', () => {
+  const text = (typeof lastUserText === 'string' && lastUserText.trim()) || inputEl.value.trim();
+  if (!text) return;
+  inputEl.value = text;
+  void send({ taskAction: 'spawn' });
+});
+if ($('btn-task-queue')) $('btn-task-queue').addEventListener('click', () => {
+  const text = (typeof lastUserText === 'string' && lastUserText.trim()) || inputEl.value.trim();
+  if (!text) return;
+  inputEl.value = text;
+  void send({ queued: true });
+});
 // why: meta row reads model left, ghost actions right; IDs and handlers move with the node
 (function layoutMetaRow() {
   const meta = $('answer-meta'), actions = $('actions');
@@ -954,11 +1025,12 @@ document.addEventListener('keydown', (e) => {
   const histOpen = view === 'history';
   const extOpen = view === 'extensions';
   const memOpen = view === 'memory';
+  const taskOpen = view === 'tasks';
   const obOpen = view === 'onboard';
   const sugBox = $('suggest');
   if (sugBox && !sugBox.classList.contains('hidden')) { e.stopPropagation(); hideSuggest(); inputEl.focus(); return; }
   if (dismissRootConfirm()) { e.stopPropagation(); if (rootConfirmPrior && document.contains(rootConfirmPrior)) rootConfirmPrior.focus(); else ($('btn-agent-add-root') || inputEl).focus(); rootConfirmPrior = null; return; } // Esc drops the add-folder confirm first, restoring prior focus
-  if (setOpen || histOpen || extOpen || memOpen || obOpen) { // dismiss panels before collapsing results
+  if (setOpen || histOpen || extOpen || memOpen || taskOpen || obOpen) { // dismiss panels before collapsing results
     e.stopPropagation();
     if (view === 'onboard') { void skipOnboard(); return; }
     showView(backTarget());
@@ -987,7 +1059,6 @@ var agentState = null; // {runId, rows:Map, answerDiv}
 var agentCwd = '';
 // Last Ask prompt (for the "Switch to Do and run this" chip — resends, never auto-runs).
 var lastAskPrompt = '';
-var WRITE_LIKE = /\b(create|make|new|delete|remove|trash|rename|move|copy|duplicate|run|execute|open|launch|install|save|write|organize)\b/i;
 
 // Quiet ghost chip: switches to Do and re-sends the same prompt. The Do run
 // still shows its normal approval card; nothing executes without approval.
@@ -1065,7 +1136,12 @@ function iconFor(state) {
 
 function fmtDur(ms) {
   if (ms == null) return '';
-  return ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms) + 'ms';
+  try {
+    const nf = new Intl.NumberFormat(L.tag, { maximumFractionDigits: 1 });
+    return ms >= 1000 ? nf.format(ms / 1000) + 's' : Math.round(ms) + 'ms';
+  } catch {
+    return ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms) + 'ms';
+  }
 }
 
 function respondApproval(runId, callId, decision) {
@@ -1260,11 +1336,11 @@ function handleAgentEvent(runId, ev) {
     collapseSteps();
     clearRunCards(runId);
     endAgentRun();
-    // Ask: a write-shaped request answered as text gets the quiet switch chip.
+    // Ask: a zero-tool answer gets the quiet switch chip in any language.
     // Nothing ran in Ask; the Do re-send still needs its normal approvals.
     try {
       if (typeof mode !== 'undefined' && mode === 'chat' && st.answerDiv &&
-        st.rows.size === 0 && WRITE_LIKE.test(lastAskPrompt || '')) {
+        st.rows.size === 0 && (lastAskPrompt || '').trim()) {
         st.answerDiv.appendChild(switchToDoChip(lastAskPrompt));
       }
     } catch {}
@@ -1295,7 +1371,11 @@ function handleAgentEvent(runId, ev) {
   requestResize();
 }
 
-async function startAgentRun(text) {
+async function startAgentRun(text, submitOpts) {
+  submitOpts = submitOpts || {};
+  // Queued or routed submits go through send (task routing + notices);
+  // direct foreground runs use agentStart.
+  if (submitOpts.queued || submitOpts.taskAction) return void sendAgentViaSend(text, submitOpts);
   const id = await beginRun(text);
   try {
     const claim = typeof window.attachClaimForSend === 'function' ? window.attachClaimForSend() : null;
@@ -1312,7 +1392,41 @@ async function startAgentRun(text) {
   }
 }
 
+// Do-mode submit routed through send (queue/spawn/replace + notices).
+async function sendAgentViaSend(text, submitOpts) {
+  inputEl.value = '';
+  hideSuggest();
+  hideTaskChoice();
+  grow();
+  hidePalette();
+  addMsg('user', text);
+  showView('run');
+  const id = await ensureConv();
+  lastUserText = text;
+  assistantDiv = addMsg('assistant', '…');
+  try {
+    const requestId = `r${Date.now()}-${++reqSeq}`;
+    lastRequestId = requestId;
+    const claim = typeof window.attachClaimForSend === 'function' ? window.attachClaimForSend() : null;
+    const opts = { mode, sessionId: id, requestId, explicit: modeExplicitSession };
+    if (submitOpts.queued) opts.queued = true;
+    if (submitOpts.taskAction) opts.taskAction = submitOpts.taskAction;
+    if (submitOpts.priority) opts.priority = submitOpts.priority;
+    if (claim && claim.attachments) opts.attachments = claim.attachments;
+    const sendP = window.nexio.send(id, text, opts);
+    try { if (claim && claim.had && typeof window.attachMarkSent === 'function') window.attachMarkSent(id); } catch { /* noop */ }
+    await sendP;
+    void refreshTasks();
+  } catch (e) {
+    assistantDiv.innerHTML = mdLite(errText(e));
+    inputEl.value = text; // keep unsent input after failures
+    drafts[mode] = text;
+    grow();
+  }
+}
+
 async function beginRun(userText) {
+  lastUserText = userText;
   const id = await ensureConv();
   hideSuggest(); // a run is never an empty composer
   agentState = { runId: null, rows: new Map(), answerDiv: null };
@@ -1599,6 +1713,9 @@ if (window.nexio && typeof window.nexio.onAgentEvent === 'function') {
   window.nexio.onAgentEvent(({ runId, event }) => {
     // Memory usage never adopts a run: it renders as a row under the answer.
     if (event.type === 'memory_used') return void renderMemoryUsed(runId, event);
+    // Task runs that are not the foreground task never adopt the run view:
+    // their events buffer into the Tasks view; the footer badge counts them.
+    if (typeof taskEventForBackground === 'function' && taskEventForBackground(runId, event)) return;
     if (!agentState) {
       // Routed act (or undo) with no active run: adopt it so steps/approvals render.
       if (event.type === 'done' || event.type === 'error' || event.type === 'stopped') return;
@@ -2441,7 +2558,7 @@ document.querySelectorAll('.hist-tabs button').forEach((b) => {
 });
 function fmtTime(ts) {
   try {
-    return new Date(ts).toLocaleString();
+    return new Date(ts).toLocaleString(L.tag);
   } catch {
     return '';
   }
@@ -2463,10 +2580,10 @@ async function refreshRunLog() {
   }
   for (const r of runs) {
     const li = document.createElement('li');
-    li.className = 'runrow';
+    li.className = 'runrow' + (r.parentId ? ' runrow-sub' : '');
     const dot = r.status === 'done' ? 'ok' : r.status === 'stopped' ? 'warn' : 'err';
     li.innerHTML = `<span class="dot ${dot}" aria-hidden="true"></span>` +
-      `<div class="run-tx"><div class="run-prompt">${esc(r.prompt || '')}</div>` +
+      `<div class="run-tx"><div class="run-prompt">${r.parentId ? '<span class="task-agent-tag">agent</span> ' : ''}${esc(r.prompt || '')}</div>` +
       `<div class="run-meta">${esc(r.outcome || '')} · ${esc(fmtTime(r.ts))} · ${esc(r.status)}</div></div>`;
     if (r.undoable) {
       const b = document.createElement('button');
@@ -2490,15 +2607,19 @@ togglePanel = function (which) {
   syncChrome(); requestResize();
 };
 
-// --- First-run onboarding: provider → folders → try. Skippable. ---
-var obStep = 0;
+// --- First-run onboarding: one screen (provider + key). Skippable. ---
+var OB_PROVIDERS = [
+  { id: 'openai', label: 'OpenAI', ph: 'sk-…', keyUrl: 'https://platform.openai.com/api-keys' },
+  { id: 'anthropic', label: 'Anthropic', ph: 'sk-ant-…', keyUrl: 'https://console.anthropic.com/settings/keys' },
+  { id: 'gemini', label: 'Gemini', ph: 'AIza…', keyUrl: 'https://aistudio.google.com/apikey' },
+  { id: 'compatible', label: 'Custom', ph: 'sk-…', keyUrl: null },
+];
 async function maybeOnboard() {
   try {
     const s = await window.nexio.getSettings();
     if (s.onboarded) return;
     const convs = await window.nexio.listConversations();
     if (convs.length) { await window.nexio.setSettings({ onboarded: true }); return; } // existing install
-    obStep = 0;
     showView('onboard');
     renderOnboard();
   } catch { /* preview */ }
@@ -2509,126 +2630,149 @@ async function skipOnboard() {
   inputEl.focus();
   syncChrome(); requestResize();
 }
-function obShell(title, inner) {
-  return `<div class="set-head"><h3>${esc(title)}</h3></div>` +
-    `<div class="ob-steps">Step ${obStep + 1} of 4</div>${inner}` +
-    `<div class="row"><button id="ob-skip" class="linklike">Skip</button></div>`;
+// why: one place for the key-field icons (stroke 1.8 like the footer icons).
+function eyeSvg(open) {
+  return open
+    ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7c2 0 3.7.6 5.2 1.5M22 12s-3.5 7-10 7c-2 0-3.7-.6-5.2-1.5"/><line x1="3" y1="3" x2="21" y2="21"/></svg>'
+    : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>';
+}
+function lockSvg() {
+  return '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+}
+function checkSvg() {
+  return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-11"/></svg>';
+}
+// Test button + result states for the onboarding key field (render only;
+// the testConnectivity call itself is unchanged).
+function setObTestState(state) {
+  const btn = $('ob-test');
+  const out = $('ob-test-result');
+  const key = $('ob-key');
+  if (key) key.closest('.ob-field')?.classList.toggle('error', state === 'error');
+  if (!btn || !out) return;
+  const wasLoading = btn.dataset.state === 'loading';
+  btn.dataset.state = state;
+  if (state === 'idle' && wasLoading) { btn.dataset.state = 'loading'; return; }
+  if (state === 'loading') {
+    btn.disabled = true;
+    out.innerHTML = '';
+    const spin = document.createElement('span');
+    spin.className = 'ob-spin';
+    spin.setAttribute('aria-hidden', 'true');
+    out.appendChild(spin);
+    out.appendChild(document.createTextNode(t('onboard.testing')));
+  } else if (state === 'success') {
+    btn.disabled = !(key && key.value.trim());
+    btn.textContent = t('onboard.test');
+    out.innerHTML = '';
+    const ic = document.createElement('span');
+    ic.className = 'ok';
+    ic.innerHTML = checkSvg();
+    ic.setAttribute('aria-hidden', 'true');
+    out.appendChild(ic);
+    out.appendChild(document.createTextNode(t('onboard.keyValid')));
+    say(t('onboard.keyValid'));
+  } else if (state === 'error') {
+    btn.disabled = !(key && key.value.trim());
+    btn.textContent = t('onboard.test');
+    out.textContent = t('onboard.keyInvalid');
+    say(t('onboard.keyInvalid'));
+  } else {
+    btn.disabled = !(key && key.value.trim());
+    btn.textContent = t('onboard.test');
+    out.innerHTML = '';
+    const lock = document.createElement('span');
+    lock.className = 'ob-secure';
+    lock.innerHTML = lockSvg();
+    lock.appendChild(document.createTextNode(t('onboard.encryptedNote')));
+    out.appendChild(lock);
+  }
 }
 function renderOnboard() {
   const box = $('onboard');
   if (!box) return;
-  if (obStep === 0) {
-    box.innerHTML = obShell('Choose your AI provider',
+  {
+    box.innerHTML =
+      `<div class="ob-title"><h3>${esc(t('onboard.title'))}</h3><p>${esc(t('onboard.subtitle'))}</p></div>` +
       `<div class="fld"><span class="flab">Provider</span><div class="seg" id="ob-prov" role="group" aria-label="Provider">` +
-      ['openai', 'anthropic', 'gemini', 'compatible'].map((p) => `<button data-prov="${p}">${p === 'compatible' ? 'Custom' : p[0].toUpperCase() + p.slice(1)}</button>`).join('') +
+      OB_PROVIDERS.map((p) => `<button type="button" data-prov="${p.id}">${esc(p.label)}</button>`).join('') +
       `</div></div>` +
-      `<label class="fld"><span class="flab">API key</span><input id="ob-key" type="password" placeholder="sk-…" class="mono" /></label>` +
-      `<div class="row"><button id="ob-test">Test</button><span id="ob-status" role="status"></span></div>` +
-      `<div class="row"><button id="ob-next" class="primary">Continue</button></div>`);
+      `<div class="fld ob-key-group"><label class="ob-label" for="ob-key">${esc(t('onboard.apiKey'))}</label>` +
+      `<div class="ob-field">` +
+      `<input id="ob-key" type="password" placeholder="sk-…" class="mono" aria-describedby="ob-key-help" autocomplete="off" spellcheck="false" />` +
+      `<span class="ob-div" aria-hidden="true"></span>` +
+      `<button id="ob-eye" type="button" class="ob-eye" aria-label="${esc(t('onboard.showKey'))}" aria-pressed="false">${eyeSvg(false)}</button>` +
+      `<button id="ob-test" type="button" class="ob-test" disabled>${esc(t('onboard.test'))}</button>` +
+      `</div>` +
+      `<div class="ob-help" id="ob-key-help"><span id="ob-test-result" role="status" aria-live="polite"></span><a class="ob-key-link" id="ob-key-link" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">${esc(t('onboard.getKey'))}</a></div>` +
+      `</div>` +
+      `<div class="row ob-actions"><button id="ob-skip-inline" type="button" class="ob-skip">${esc(t('onboard.skip'))}</button><button id="ob-next" type="button" class="btn-primary ob-continue" disabled>${esc(t('onboard.continue'))}<span aria-hidden="true"> →</span></button></div>`;
     let prov = 'openai';
-    const paint = () => box.querySelectorAll('#ob-prov button').forEach((b) => b.classList.toggle('on', b.dataset.prov === prov));
-    box.querySelectorAll('#ob-prov button').forEach((b) => { b.onclick = () => { prov = b.dataset.prov; paint(); }; });
-    paint();
+    const paintProv = () => {
+      box.querySelectorAll('#ob-prov button').forEach((b) => b.classList.toggle('on', b.dataset.prov === prov));
+      const meta = OB_PROVIDERS.find((p) => p.id === prov) || OB_PROVIDERS[0];
+      const key = $('ob-key');
+      if (key) { key.placeholder = meta.ph; setObTestState('idle'); }
+      const link = $('ob-key-link');
+      if (link) {
+        if (meta.keyUrl) { link.href = meta.keyUrl; link.classList.remove('hidden'); }
+        else link.classList.add('hidden');
+      }
+    };
+    box.querySelectorAll('#ob-prov button').forEach((b) => { b.onclick = () => { prov = b.dataset.prov; paintProv(); }; });
+    const eye = $('ob-eye');
+    if (eye) eye.onclick = () => {
+      const key = $('ob-key');
+      if (!key) return;
+      const show = key.type === 'password';
+      key.type = show ? 'text' : 'password';
+      eye.setAttribute('aria-pressed', String(show));
+      eye.setAttribute('aria-label', show ? t('onboard.hideKey') : t('onboard.showKey'));
+      eye.innerHTML = eyeSvg(show);
+      try { key.focus(); } catch {}
+    };
+    const keyInput = $('ob-key');
+    if (keyInput) {
+      keyInput.addEventListener('input', () => {
+        const empty = !keyInput.value.trim();
+        const test = $('ob-test');
+        if (test && test.dataset.state !== 'loading') test.disabled = empty;
+        if (test && test.dataset.state === 'error') setObTestState('idle');
+        const next = $('ob-next');
+        if (next) next.disabled = empty;
+      });
+      // why: Enter submits when Continue is enabled; Esc keeps the popup-level behavior (no local handling).
+      keyInput.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+        e.preventDefault();
+        const next = $('ob-next');
+        if (next && !next.disabled) next.click();
+      });
+    }
+    paintProv();
     $('ob-test').onclick = async () => {
-      $('ob-status').textContent = 'Testing…';
+      const btn = $('ob-test');
+      if (btn.disabled) return;
+      setObTestState('loading');
       try {
         // (provider, model, baseUrl, key): the stored model fills the missing input.
         let obModel = '';
         try { obModel = (await window.nexio.getSettings()).model || ''; } catch {}
         const r = await window.nexio.testConnectivity(prov, obModel, undefined, $('ob-key').value.trim() || undefined);
-        $('ob-status').textContent = r.ok ? 'OK' : ('Fail: ' + (r.error?.code || '') + ' ' + (r.error?.message || ''));
-      } catch (e) { $('ob-status').textContent = errText(e); }
+        setObTestState(r.ok ? 'success' : 'error');
+      } catch (e) { setObTestState('error'); }
     };
     $('ob-next').onclick = async () => {
+      if ($('ob-next').disabled) return;
       try {
         await window.nexio.setSettings({ provider: prov });
         { const k = $('ob-key').value.trim(); if (k) await window.nexio.setApiKey(prov, k); }
-      } catch (e) { $('ob-status').textContent = errText(e); return; }
-      obStep = 1;
-      renderOnboard();
+      } catch (e) { setObTestState('error'); return; }
+      await skipOnboard();
     };
-  } else if (obStep === 1) {
-    box.innerHTML = obShell('Let Nexio remember things you tell it?',
-      `<div class="ext-empty">Names, preferences, folder rules — kept on this computer. Nexio always asks before saving anything. You can edit or forget them anytime in Settings &gt; Memory.</div>` +
-      `<div class="ext-addmenu">` +
-      `<button data-mem="yes" class="on">Yes, ask me each time</button>` +
-      `<button data-mem="ask">Only when I say "remember"</button>` +
-      `<button data-mem="no">No</button></div>` +
-      `<div class="row"><button id="ob-next" class="primary">Continue</button></div>`);
-    let memChoice = 'yes';
-    const paintMem = () => box.querySelectorAll('[data-mem]').forEach((b) => b.classList.toggle('on', b.dataset.mem === memChoice));
-    box.querySelectorAll('[data-mem]').forEach((b) => { b.onclick = () => { memChoice = b.dataset.mem; paintMem(); }; });
-    paintMem();
-    $('ob-next').onclick = async () => {
-      try {
-        if (memChoice === 'no') await window.nexio.setSettings({ memoryEnabled: false, memorySuggest: false, memoryOneTap: false });
-        else if (memChoice === 'ask') await window.nexio.setSettings({ memoryEnabled: true, memorySuggest: false, memoryOneTap: false });
-        else await window.nexio.setSettings({ memoryEnabled: true, memorySuggest: false, memoryOneTap: true });
-      } catch (e) { say('Could not save memory choice'); return; }
-      obStep = 2;
-      renderOnboard();
-    };
-  } else if (obStep === 2) {
-    box.innerHTML = obShell('Choose allowed folders',
-      `<div class="ext-empty">Nexio can only touch the folders you allow. Suggested: Desktop, Documents, Downloads.` +
-      (platformInfo && platformInfo.os === 'darwin'
-        ? ` macOS will ask for access to each folder the first time; if you pick "Don't Allow", fix it later in System Settings under Files and Folders.</div>` : `</div>`) +
-      `<ul id="ob-roots" class="agent-list"></ul>` +
-      `<div class="row"><button id="ob-add">Add folder</button><button id="ob-quick">Add Desktop + Documents + Downloads</button></div>` +
-      `<div class="row"><button id="ob-next" class="primary">Continue</button></div>`);
-    const paint = async () => {
-      const s = await window.nexio.getSettings();
-      const ul = $('ob-roots');
-      ul.innerHTML = '';
-      for (const r of s.agentAllowedRoots || []) {
-        const li = document.createElement('li');
-        const span = document.createElement('span');
-        span.textContent = r;
-        li.appendChild(span);
-        ul.appendChild(li);
-      }
-    };
-    void paint();
-    $('ob-add').onclick = async () => {
-      try {
-        const p = await window.nexio.agentPickFolder();
-        if (!p) return;
-        const s = await window.nexio.getSettings();
-        const next = [...(s.agentAllowedRoots || [])];
-        if (!next.includes(p)) next.push(p);
-        await window.nexio.setSettings({ agentAllowedRoots: next });
-        await paint();
-      } catch { /* cancelled */ }
-    };
-    $('ob-quick').onclick = async () => {
-      try {
-        const dirs = await window.nexio.defaultFolders();
-        const s = await window.nexio.getSettings();
-        const next = [...(s.agentAllowedRoots || [])];
-        for (const folder of dirs) if (!next.includes(folder)) next.push(folder);
-        await window.nexio.setSettings({ agentAllowedRoots: next });
-        await paint();
-      } catch { /* cancelled */ }
-    };
-    $('ob-next').onclick = () => { obStep = 3; renderOnboard(); };
-  } else {
-    box.innerHTML = obShell('Try Nexio',
-      `<div class="ext-empty">Say what you want. Nexio does it on your computer. Hotkey: ${hotkeyCapsHtml()} Try one:</div>` +
-      `<div class="ext-addmenu">` +
-      ['Find files I changed today', 'Organize my Downloads by file type', 'Open my last downloaded file'].map((t) => `<button data-try="${esc(t)}">${esc(t)}</button>`).join('') +
-      `</div><div class="row"><button id="ob-done" class="primary">Done</button></div>`);
-    box.querySelectorAll('[data-try]').forEach((b) => {
-      b.onclick = async () => {
-        inputEl.value = b.dataset.try;
-        drafts[mode] = inputEl.value;
-        await skipOnboard();
-        grow();
-        inputEl.focus();
-      };
-    });
-    $('ob-done').onclick = () => void skipOnboard();
+    const skipInline = $('ob-skip-inline');
+    if (skipInline) skipInline.onclick = () => void skipOnboard();
   }
-  $('ob-skip').onclick = () => void skipOnboard();
   syncChrome(); requestResize();
 }
 /* --- Memory (appended): Memory view, settings section, run-view rows --- */
@@ -2644,9 +2788,9 @@ var TOOL_LABELS = {
 };
 function toolLabel(t) {
   if (!t) return '';
-  if (t.indexOf('mcp__') === 0) return 'Used ' + (t.split('__')[1] || 'MCP') + ' tool';
-  if (t.indexOf('memory_') === 0) return 'Checked memory';
-  return TOOL_LABELS[t] || t;
+  if (t.indexOf('mcp__') === 0) return tr('tool.mcp', { server: t.split('__')[1] || 'MCP' }, 'Used ' + (t.split('__')[1] || 'MCP') + ' tool');
+  if (t.indexOf('memory_') === 0) return tr('tool.memory', null, 'Checked memory');
+  return tr('tool.' + t, null, TOOL_LABELS[t] || t);
 }
 var memTab = 'all', memQuery = '', memEditId = null, memFormMode = null; // memFormMode: null | 'add'
 var incognitoOn = false;
@@ -2655,7 +2799,7 @@ var pendingMemPushes = [];
 function say(m) { try { const el = document.getElementById('attach-live'); if (el) el.textContent = m; } catch {} }
 function memCall(a) { return window.nexio.memory(a); }
 function memKindLabel(k) {
-  return { preference: 'preference', fact: 'fact', folder_rule: 'folder rule', procedure: 'procedure', episode: 'episode' }[k] || k;
+  return { preference: t('memory.preferences'), fact: t('memory.facts'), folder_rule: t('memory.folders'), procedure: t('memory.procedures'), episode: t('memory.episodes') }[k] || k;
 }
 function memScopeLabel(sc) {
   if (!sc || sc.type === 'global') return 'global';
@@ -2665,16 +2809,25 @@ function memScopeLabel(sc) {
 }
 function memScopeIsFolder(sc) { return !!sc && sc.type === 'folder'; }
 function memTimeAgo(ts) {
-  if (!ts) return 'never';
-  const d = Date.now() - ts;
-  if (d < 3600e3) return Math.max(1, Math.round(d / 60e3)) + 'm ago';
-  if (d < 86400e3) return Math.round(d / 3600e3) + 'h ago';
-  return Math.round(d / 86400e3) + 'd ago';
+  if (!ts) return t('memory.never');
+  try {
+    const d = Date.now() - ts;
+    const rtf = new Intl.RelativeTimeFormat(L.tag, { numeric: 'auto' });
+    if (d < 3600e3) return rtf.format(-Math.max(1, Math.round(d / 60e3)), 'minute');
+    if (d < 86400e3) return rtf.format(-Math.round(d / 3600e3), 'hour');
+    return rtf.format(-Math.round(d / 86400e3), 'day');
+  } catch {
+    return t('memory.never');
+  }
 }
+// why: no English word lists; the /remember fallback kinds by structure only
+// (explicit absolute path -> folder_rule, else fact). Packs + classifier own
+// kinds everywhere else; the user can re-kind in the Memory view.
 function guessKindLocal(t) {
-  if (/\b(never|don't|do not|keep out|folder|directory)\b/i.test(t)) return 'folder_rule';
-  if (/\b(prefer|likes?|always|reply|language|vietnamese|english)\b/i.test(t)) return 'preference';
-  if (/\b(steps?|procedure|cleanup|weekly|backup|routine)\b/i.test(t)) return 'procedure';
+  const s = String(t || '');
+  if (/[A-Za-z]:[\\/][^\s"'“”]+/.test(s)) return 'folder_rule';
+  const m = s.match(/\/[^\s"'“”]+/g) || [];
+  if (m.some((p) => (p.match(/\//g) || []).length >= 2)) return 'folder_rule';
   return 'fact';
 }
 function parseScopeLocal(s) {
@@ -2728,7 +2881,7 @@ async function renderMemoryView() {
   const rev = $('mem-review');
   if (rev) {
     rev.classList.toggle('hidden', !stale.length);
-    rev.innerHTML = stale.length ? `<span>Review: ${stale.length} unused memor${stale.length === 1 ? 'y' : 'ies'} — pin, edit or forget.</span>` : '';
+    rev.innerHTML = stale.length ? `<span>${esc(t('memory.review', { count: stale.length }))}</span>` : '';
   }
   const ordered = [...stale, ...fresh];
   if (empty) empty.classList.toggle('hidden', ordered.length > 0);
@@ -2752,7 +2905,7 @@ function memRow(r) {
   tx.appendChild(main);
   const meta = document.createElement('div');
   meta.className = 'mem-meta';
-  meta.textContent = `${memKindLabel(r.kind)} · ${memScopeLabel(r.scope)} · used ${memTimeAgo(r.lastUsedAt)}${r.useCount ? ` · ×${r.useCount}` : ''}${r.stale ? ' · stale' : ''}`;
+  meta.textContent = `${memKindLabel(r.kind)} · ${memScopeLabel(r.scope)} · ${memTimeAgo(r.lastUsedAt)}${r.useCount ? ` · ×${new Intl.NumberFormat(L.tag).format(r.useCount)}` : ''}${r.stale ? ` · ${t('memory.stale')}` : ''}`;
   if (memScopeIsFolder(r.scope)) {
     const chip = document.createElement('code');
     chip.className = 'scope-chip';
@@ -2764,13 +2917,13 @@ function memRow(r) {
   if (r.enforced) {
     const b = document.createElement('span');
     b.className = 'enforced-badge';
-    b.textContent = 'Enforced';
+    b.textContent = t('memory.enforced');
     meta.appendChild(document.createTextNode(' '));
     meta.appendChild(b);
   }
   tx.appendChild(meta);
   li.appendChild(tx);
-  const pin = ghostBtn(r.pinned ? 'Unpin' : 'Pin', (r.pinned ? 'Unpin ' : 'Pin ') + r.text.slice(0, 60));
+  const pin = ghostBtn(r.pinned ? t('memory.unpinBtn') : t('memory.pinBtn'), (r.pinned ? t('memory.unpinBtn') : t('memory.pinBtn')) + ' ' + r.text.slice(0, 60));
   pin.onclick = async () => {
     try {
       await memCall({ action: 'update', id: r.id, text: r.text, pinned: !r.pinned });
@@ -2778,12 +2931,12 @@ function memRow(r) {
     } catch (e) { say(errText(e)); }
   };
   li.appendChild(pin);
-  const menuBtn = ghostBtn('…', 'Memory options');
+  const menuBtn = ghostBtn('…', t('memory.options'));
   const menu = document.createElement('div');
   menu.className = 'mem-menu hidden';
   for (const [label, fn] of [
-    ['Edit', () => renderMemForm(r)],
-    ['Forget', async () => { try { await memCall({ action: 'forget', id: r.id }); say('Forgot memory'); await renderMemoryView(); } catch (e) { say(errText(e)); } }],
+    [t('memory.edit'), () => renderMemForm(r)],
+    [t('memory.forget'), async () => { try { await memCall({ action: 'forget', id: r.id }); say(t('memory.forgot')); await renderMemoryView(); } catch (e) { say(errText(e)); } }],
   ]) {
     const b = ghostBtn(label, `${label} ${r.text.slice(0, 60)}`);
     b.onclick = () => { menu.classList.add('hidden'); fn(); };
@@ -2808,12 +2961,12 @@ function renderMemForm(row) {
   ta.className = 'mono';
   ta.rows = 3;
   ta.value = row ? row.text : '';
-  ta.setAttribute('aria-label', 'Memory text');
+  ta.setAttribute('aria-label', t('memory.textLabel'));
   form.appendChild(ta);
   const seg = document.createElement('div');
   seg.className = 'seg mem-kind-seg';
   seg.setAttribute('role', 'group');
-  seg.setAttribute('aria-label', 'Memory kind');
+  seg.setAttribute('aria-label', t('memory.kind'));
   let kind = row ? row.kind : 'fact';
   for (const k of kinds) {
     const b = document.createElement('button');
@@ -2827,11 +2980,11 @@ function renderMemForm(row) {
   const sc = document.createElement('input');
   sc.className = 'mono';
   sc.value = row ? memScopeLabel(row.scope) : 'global';
-  sc.setAttribute('aria-label', 'Memory scope (global, folder path, app:name, project:id)');
+  sc.setAttribute('aria-label', t('memory.scopePh'));
   form.appendChild(sc);
   const pinRow = document.createElement('label');
   pinRow.className = 'fld check';
-  pinRow.innerHTML = '<span class="switch-tx"><span class="flab">Pin (never expires)</span></span>';
+  pinRow.innerHTML = '<span class="switch-tx"><span class="flab">' + esc(t('memory.pin')) + '</span></span>';
   const pinBox = document.createElement('input');
   pinBox.type = 'checkbox';
   pinBox.checked = row ? !!row.pinned : false;
@@ -2846,22 +2999,22 @@ function renderMemForm(row) {
   const saveB = document.createElement('button');
   saveB.type = 'button';
   saveB.className = 'btn-primary';
-  saveB.textContent = 'Save memory';
+  saveB.textContent = t('memory.save');
   saveB.onclick = async () => {
     const scope = parseScopeLocal(sc.value);
-    if (!scope) { status.textContent = 'Scope must be global, an absolute folder path, app:name or project:id.'; return; }
+    if (!scope) { status.textContent = t('memory.scopeError'); return; }
     try {
       const r = await memCall({ action: 'save', kind, text: ta.value, scope, pinned: pinBox.checked, ...(row ? { replaceId: row.id } : {}) });
-      if (r.status === 'saved' || r.status === 'updated') { memFormMode = null; say('Memory saved'); await renderMemoryView(); }
+      if (r.status === 'saved' || r.status === 'updated') { memFormMode = null; say(t('memory.savedSr')); await renderMemoryView(); }
       else if (r.status === 'conflict') { renderConflictRow(ta.value, r.conflicts, { kind, scope, pinned: pinBox.checked }, status); }
-      else if (r.status === 'full') status.textContent = 'Memory is full — forget something first.';
-      else status.textContent = `Not saved: ${r.reason || 'blocked'}`;
+      else if (r.status === 'full') status.textContent = t('memory.full');
+      else status.textContent = t('memory.notSaved', { reason: r.reason || 'blocked' });
     } catch (e) { status.textContent = errText(e); }
   };
   const cancelB = document.createElement('button');
   cancelB.type = 'button';
   cancelB.className = 'btn';
-  cancelB.textContent = 'Cancel';
+  cancelB.textContent = t('memory.cancel');
   cancelB.onclick = () => { memFormMode = null; form.classList.add('hidden'); };
   rowBtns.appendChild(saveB);
   rowBtns.appendChild(cancelB);
@@ -2919,7 +3072,7 @@ function memConfirmRow(msg, buttons) {
   span.textContent = msg;
   div.appendChild(span);
   for (const b of buttons || []) div.appendChild(b);
-  const link = ghostBtn('Memory', 'Open Memory view');
+  const link = ghostBtn(t('memory.title'), t('memory.openView'));
   link.onclick = () => void openMemoryView();
   div.appendChild(link);
   return div;
@@ -2927,33 +3080,43 @@ function memConfirmRow(msg, buttons) {
 function renderRememberedRow(mem, status) {
   const host = memoryHost(null);
   if (!host) { pendingMemPushes.push({ event: { type: 'saved', id: mem.id, kind: mem.kind, text: mem.text } }); return; }
-  const undo = ghostBtn('Undo', 'Forget this memory');
-  undo.onclick = async () => { try { await memCall({ action: 'forget', id: mem.id }); say('Forgot memory'); row.remove(); } catch (e) { say(errText(e)); } };
-  const edit = ghostBtn('Edit', 'Edit this memory');
+  const undo = ghostBtn(t('memory.undo'), t('memory.forget'));
+  undo.onclick = async () => { try { await memCall({ action: 'forget', id: mem.id }); say(t('memory.forgot')); row.remove(); } catch (e) { say(errText(e)); } };
+  const edit = ghostBtn(t('memory.edit'), t('memory.edit'));
   edit.onclick = () => void openMemoryView(mem.id);
-  const row = memConfirmRow(`${status === 'updated' ? 'Updated memory' : 'Remembered'}: ${mem.text}`, [undo, edit]);
+  const row = memConfirmRow(status === 'updated' ? t('memory.updated', { text: mem.text }) : t('memory.remembered', { text: mem.text }), [undo, edit]);
   host.appendChild(row);
-  say(`Remembered: ${mem.text}`);
+  say(t('memory.savedSr'));
   syncChrome(); requestResize();
 }
 function renderConflictRow(newText, conflicts, saveCtx, host) {
   const old = conflicts[0] || { id: '', text: '' };
-  const replace = ghostBtn('Replace', 'Replace the old memory');
+  const replace = ghostBtn(t('memory.replace'), t('memory.replacePrompt'));
   replace.onclick = async () => {
     try {
       await memCall({ action: 'save', kind: (saveCtx && saveCtx.kind) || 'fact', text: newText, scope: (saveCtx && saveCtx.scope) || { type: 'global' }, ...(saveCtx && saveCtx.pinned ? { pinned: true } : {}), replaceId: old.id });
-      say('Memory replaced');
+      say(t('memory.replaced'));
       row.remove();
       if (view === 'memory') await renderMemoryView();
     } catch (e) { say(errText(e)); }
   };
-  const cancel = ghostBtn('Keep old', 'Keep the old memory');
+  const cancel = ghostBtn(t('memory.keepOld'), t('memory.keepOld'));
   cancel.onclick = () => row.remove();
-  const row = memConfirmRow(`Replace the old memory? Old: ${old.text} New: ${newText}`, [replace, cancel]);
+  const row = memConfirmRow(t('memory.replacePrompt'), [replace, cancel]);
+  const ul = document.createElement('ul');
+  ul.className = 'agent-list';
+  for (const txt of [old.text, newText]) {
+    const li = document.createElement('li');
+    const span = document.createElement('span');
+    span.textContent = txt;
+    li.appendChild(span);
+    ul.appendChild(li);
+  }
+  row.appendChild(ul);
   const hostEl = host || memoryHost(null);
   if (!hostEl) { pendingMemPushes.push({ event: { type: 'conflict', text: newText, conflicts } }); return; }
   hostEl.appendChild(row);
-  say('New memory conflicts with an old one');
+  say(t('memory.conflictSr'));
   syncChrome(); requestResize();
 }
 function renderSuggestRow(candidates) {
@@ -2963,27 +3126,27 @@ function renderSuggestRow(candidates) {
     return;
   }
   for (const c of candidates) {
-    const save = ghostBtn('Save', `Save memory: ${c.text.slice(0, 60)}`);
+    const save = ghostBtn(t('memory.saveBtn'), t('memory.askSave', { text: c.text.slice(0, 60) }));
     save.onclick = async () => {
       try {
         const r = await memCall({ action: 'save', kind: c.kind || 'fact', text: c.text });
-        if (r.status === 'saved' || r.status === 'updated') { say('Memory saved'); row.remove(); if (view === 'memory') await renderMemoryView(); }
+        if (r.status === 'saved' || r.status === 'updated') { say(t('memory.savedSr')); row.remove(); if (view === 'memory') await renderMemoryView(); }
         else if (r.status === 'conflict') { row.remove(); renderConflictRow(c.text, r.conflicts, { kind: c.kind || 'fact' }); }
-        else { say(`Not saved: ${r.reason || 'blocked'}`); }
+        else { say(t('memory.notSaved', { reason: r.reason || 'blocked' })); }
       } catch (e) { say(errText(e)); }
     };
-    const dismiss = ghostBtn('Dismiss', `Dismiss suggestion: ${c.text.slice(0, 60)}`);
+    const dismiss = ghostBtn(t('memory.dismiss'), t('memory.dismiss'));
     dismiss.onclick = async () => { try { await memCall({ action: 'dismiss', hash: c.hash }); } catch {} row.remove(); };
-    const row = memConfirmRow(`Remember: ${c.text}?`, [save, dismiss]);
+    const row = memConfirmRow(t('memory.askSave', { text: c.text }), [save, dismiss]);
     host.appendChild(row);
   }
-  say(`${candidates.length} memor${candidates.length === 1 ? 'y' : 'ies'} suggested`);
+  say(t('memory.suggestCount', { count: candidates.length }));
   syncChrome(); requestResize();
 }
 function renderOneTapRow(ev) {
   const host = memoryHost(null);
   if (!host) { pendingMemPushes.push({ event: ev }); return; }
-  const save = ghostBtn('Save', `Save memory: ${ev.text.slice(0, 60)}`);
+  const save = ghostBtn(t('memory.saveBtn'), t('memory.askSave', { text: ev.text.slice(0, 60) }));
   save.onclick = async () => {
     try {
       const cur = await window.nexio.getSettings();
@@ -2991,8 +3154,8 @@ function renderOneTapRow(ev) {
         // Memory is off: inline turn-on prompt, no view switch.
         row.innerHTML = '';
         const span = document.createElement('span');
-        span.textContent = 'Memory is off. Turn it on?';
-        const on = ghostBtn('Turn on', 'Turn on memory and save');
+        span.textContent = t('memory.turnOnAsk');
+        const on = ghostBtn(t('memory.turnOn'), t('memory.turnOnAsk'));
         on.onclick = async () => {
           try {
             const s2 = await window.nexio.getSettings();
@@ -3003,7 +3166,7 @@ function renderOneTapRow(ev) {
             await doOneTapSave(row, ev);
           } catch (e) { say(errText(e)); }
         };
-        const cancel = ghostBtn('Cancel', 'Keep memory off');
+        const cancel = ghostBtn(t('memory.cancel'), t('memory.cancel'));
         cancel.onclick = () => row.remove();
         row.appendChild(span);
         row.appendChild(on);
@@ -3014,11 +3177,11 @@ function renderOneTapRow(ev) {
       await doOneTapSave(row, ev);
     } catch (e) { say(errText(e)); }
   };
-  const notnow = ghostBtn('Not now', `Don't save: ${ev.text.slice(0, 60)}`);
+  const notnow = ghostBtn(t('memory.notNow'), t('memory.notNow'));
   notnow.onclick = async () => { try { await memCall({ action: 'dismiss', hash: ev.hash }); } catch {} row.remove(); };
-  const row = memConfirmRow(`Remember: ${ev.text}?`, [save, notnow]);
+  const row = memConfirmRow(t('memory.askSave', { text: ev.text }), [save, notnow]);
   host.appendChild(row);
-  say(`Remember this? ${ev.text}`);
+  say(t('memory.suggestedSr'));
   syncChrome(); requestResize();
 }
 async function doOneTapSave(row, ev) {
@@ -3032,9 +3195,9 @@ async function doOneTapSave(row, ev) {
       row.remove();
       renderConflictRow(ev.text, r.conflicts, { kind: ev.kind });
     } else if (r.status === 'full') {
-      say('Memory is full — forget something first.');
+      say(t('memory.full'));
     } else {
-      say(`Not saved: ${r.reason || 'blocked'}`);
+      say(t('memory.notSaved', { reason: r.reason || 'blocked' }));
     }
   } catch (e) { say(errText(e)); }
 }
@@ -3046,9 +3209,9 @@ async function renderMemoryPush({ runId, requestId, event }) {
   else if (event.type === 'suggest') renderSuggestRow(event.candidates || []);
   else if (event.type === 'conflict') renderConflictRow(event.text, event.conflicts || [], null);
   else if (event.type === 'blocked') {
-    const row = memConfirmRow(`Not saved: ${event.reason}`, []);
+    const row = memConfirmRow(t('memory.notSaved', { reason: event.reason }), []);
     host.appendChild(row);
-    say(`Memory not saved: ${event.reason}`);
+    say(t('memory.notSaved', { reason: event.reason }));
     syncChrome(); requestResize();
   }
 }
@@ -3067,7 +3230,7 @@ async function renderMemoryUsed(runId, ev) {
   const wrap = document.createElement('div');
   wrap.className = 'mem-used';
   wrap.dataset.memused = ev.ids.join(',');
-  const toggle = ghostBtn(`Used ${ev.count} memor${ev.count === 1 ? 'y' : 'ies'}`, 'Show used memories');
+  const toggle = ghostBtn(ev.count === 1 ? t('memory.usedOne') : t('memory.used', { count: ev.count }), t('memory.showUsed'));
   const list = document.createElement('div');
   list.className = 'hidden';
   toggle.onclick = async () => {
@@ -3082,8 +3245,8 @@ async function renderMemoryUsed(runId, ev) {
         const span = document.createElement('span');
         span.textContent = m.text;
         line.appendChild(span);
-        const f = ghostBtn('Forget', `Forget: ${m.text.slice(0, 60)}`);
-        f.onclick = async () => { try { await memCall({ action: 'forget', id }); say('Forgot memory'); line.remove(); } catch (e) { say(errText(e)); } };
+        const f = ghostBtn(t('memory.forget'), t('memory.forget'));
+        f.onclick = async () => { try { await memCall({ action: 'forget', id }); say(t('memory.forgot')); line.remove(); } catch (e) { say(errText(e)); } };
         line.appendChild(f);
         list.appendChild(line);
       } catch { /* dropped memory */ }
@@ -3104,7 +3267,7 @@ async function runRememberCommand(arg) {
   const t = (arg || '').trim();
   addMsg('user', `/remember ${t}`);
   showView('run');
-  if (!t) { addMsg('assistant', 'Usage: /remember <text>'); return; }
+  if (!t) { addMsg('assistant', t('slash.usageRemember')); return; }
   try {
     let scope = { type: 'global' };
     let kind = guessKindLocal(t);
@@ -3116,22 +3279,22 @@ async function runRememberCommand(arg) {
     const r = await memCall({ action: 'save', kind, text: t, scope });
     if (r.status === 'saved' || r.status === 'updated') renderRememberedRow(r.memory, r.status);
     else if (r.status === 'conflict') renderConflictRow(t, r.conflicts, { kind, scope });
-    else if (r.status === 'full') addMsg('assistant', 'Memory is full — forget something in Settings > Memory first.');
-    else addMsg('assistant', `Not saved: ${r.reason || 'blocked'}`);
+    else if (r.status === 'full') addMsg('assistant', t('memory.full'));
+    else addMsg('assistant', t('memory.notSaved', { reason: r.reason || 'blocked' }));
   } catch (e) { addMsg('assistant', errText(e)); }
 }
 async function runForgetCommand(arg) {
   const q = (arg || '').trim();
   addMsg('user', `/forget ${q}`);
   showView('run');
-  if (!q) { addMsg('assistant', 'Usage: /forget <text>'); return; }
+  if (!q) { addMsg('assistant', t('slash.usageForget')); return; }
   try {
     const found = await memCall({ action: 'search', q, limit: 20 });
-    if (!found.length) { addMsg('assistant', `Nothing remembered matching "${q}".`); return; }
+    if (!found.length) { addMsg('assistant', t('memory.noMatch', { q })); return; }
     const card = document.createElement('div');
     card.className = 'mem-confirm';
     const title = document.createElement('span');
-    title.textContent = `Forget ${found.length} memor${found.length === 1 ? 'y' : 'ies'}?`;
+    title.textContent = t('memory.forgetTitle', { count: found.length });
     card.appendChild(title);
     const ul = document.createElement('ul');
     ul.className = 'agent-list';
@@ -3143,16 +3306,16 @@ async function runForgetCommand(arg) {
       ul.appendChild(li);
     }
     card.appendChild(ul);
-    const go = ghostBtn(`Forget${found.length > 1 ? ' all' : ''}`, 'Forget listed memories');
+    const go = ghostBtn(t('memory.forgetAllBtn', { count: found.length }), t('memory.showUsed'));
     go.onclick = async () => {
       try {
         for (const m of found) await memCall({ action: 'forget', id: m.id });
-        say(`Forgot ${found.length} memories`);
+        say(t('memory.forgot'));
         card.remove();
         if (view === 'memory') await renderMemoryView();
       } catch (e) { say(errText(e)); }
     };
-    const cancel = ghostBtn('Cancel', 'Keep memories');
+    const cancel = ghostBtn(t('memory.cancel'), t('memory.keepOld'));
     cancel.onclick = () => card.remove();
     card.appendChild(go);
     card.appendChild(cancel);
@@ -3195,7 +3358,7 @@ function paintMemKinds(kinds, enabled) {
   if (!host) return;
   host.innerHTML = '';
   host.setAttribute('aria-disabled', String(enabled === false));
-  const labels = { preference: 'Preferences', fact: 'Facts', folder_rule: 'Folder rules', procedure: 'Procedures', episode: 'Episodes' };
+  const labels = { preference: t('memory.preferences'), fact: t('memory.facts'), folder_rule: t('memory.folders'), procedure: t('memory.procedures'), episode: t('memory.episodes') };
   for (const k of ['preference', 'fact', 'folder_rule', 'procedure', 'episode']) {
     const lab = document.createElement('label');
     lab.className = 'chip-toggle';
@@ -3204,7 +3367,7 @@ function paintMemKinds(kinds, enabled) {
     box.dataset.memkind = k;
     box.checked = !kinds || kinds[k] !== false;
     box.disabled = enabled === false;
-    box.setAttribute('aria-label', 'Remember ' + (labels[k] || k).toLowerCase());
+    try { box.setAttribute('aria-label', (labels[k] || k).toLocaleLowerCase(L.tag)); } catch { box.setAttribute('aria-label', labels[k] || k); }
     const tx = document.createElement('span');
     tx.className = 'chip-tx';
     tx.innerHTML = '<svg class="chip-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-11"/></svg>';
@@ -3308,11 +3471,6 @@ function paintKeyHints() {
       ? keysHtml(platformInfo.stopKeys) : capsHtml(currentStopHotkey);
   }
 }
-/** Toggle-hotkey caps for inline copy (onboarding); prefers main keyTokens(). */
-function hotkeyCapsHtml() {
-  if (platformInfo && platformInfo.toggleKeys) return keysHtml(platformInfo.toggleKeys);
-  return capsHtml(currentToggleHotkey);
-}
 async function loadPlatform() {
   try {
     if (!window.nexio?.getPlatform) return;
@@ -3372,7 +3530,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
   } catch (e) { return; }
   if (!trayEl || !inputEl2) return;
   var VISION_NOTICE = 'This model does not support images. Switch model to send images — image bytes were not sent.';
-  var DEFAULT_INSTR = 'Describe the attached file(s).';
+  var DEFAULT_INSTR = 'Describe the attached files.';
   var pending = [];
   var keySeq = 0;
   var sentStash = {};
@@ -3711,15 +3869,15 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
     try {
       for (var i = 0; i < list.length; i++) {
         var a = list[i];
-        if (pending.length >= 5) { showError('Too many attachments (max 5)'); break; }
-        if ((a.size || 0) > 20 * 1024 * 1024) { showError('Attachment too large: ' + base(a.name) + ' (max 20MB per file)'); continue; }
-        if (/\.exe$/i.test(a.name || '')) { showError('Rejected ' + base(a.name) + ': executable files are not allowed'); continue; }
+        if (pending.length >= 5) { showError(t('attach.count')); break; }
+        if ((a.size || 0) > 20 * 1024 * 1024) { showError(t('attach.oversizeFile', { name: base(a.name) })); continue; }
+        if (/\.exe$/i.test(a.name || '')) { showError(t('attach.exeName', { name: base(a.name) })); continue; }
         a.key = 'k' + (++keySeq);
         if (!a.kind) a.kind = (a.mime || '').indexOf('image/') === 0 ? 'image' : 'file';
         pending.push(a);
       }
       resetSecretsGate();
-      renderTray(pending.length ? (pending.length === 1 ? '1 attachment added' : pending.length + ' attachments added') : undefined);
+      renderTray(pending.length ? t('attach.added', { count: pending.length }) : undefined);
       refreshNoticeSettings();
       try { if (typeof hideSuggest === 'function') hideSuggest(); } catch (e) {} // attached: never an empty composer
       try { inputEl2.focus(); } catch (e) {}
@@ -3730,13 +3888,13 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
       var arr = [];
       for (var i = 0; i < files.length; i++) arr.push(files[i]);
       if (!arr.length) return;
-      if (pending.length + arr.length > 5) { showError('Too many attachments (max 5)'); arr = arr.slice(0, Math.max(0, 5 - pending.length)); }
+      if (pending.length + arr.length > 5) { showError(t('attach.count')); arr = arr.slice(0, Math.max(0, 5 - pending.length)); }
       var started = 0;
       arr.forEach(function (f) {
         var name = base(f.name || 'pasted-image.png');
         var mime = f.type || 'application/octet-stream';
-        if ((f.size || 0) > 20 * 1024 * 1024) { showError('Attachment too large: ' + name + ' (max 20MB per file)'); return; }
-        if (/\.exe$/i.test(name)) { showError('Rejected ' + name + ': executable files are not allowed'); return; }
+        if ((f.size || 0) > 20 * 1024 * 1024) { showError(t('attach.oversizeFile', { name: name })); return; }
+        if (/\.exe$/i.test(name)) { showError(t('attach.exeName', { name: name })); return; }
         started++;
         try {
           var r = new FileReader();
@@ -3929,7 +4087,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
       } catch (e2) {}
     });
     inputEl2.addEventListener('keydown', function (e) {
-      if (e.key === 'Backspace' && !inputEl2.value && pending.length && !e.isComposing) {
+      if (e.key === 'Backspace' && !inputEl2.value && pending.length && !e.isComposing && e.keyCode !== 229) {
         e.preventDefault();
         removeEntry(pending[pending.length - 1].key);
       }
@@ -3938,7 +4096,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
   // Empty + attach Enter sends the default instruction (core sendInner returns on '').
   function emptyAttachEnter(e) {
     try {
-      if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+      if (e.key !== 'Enter' || e.shiftKey || e.isComposing || e.keyCode === 229) return;
       if (inputEl2.value.trim() !== '' || !pending.length) return;
       e.preventDefault();
       inputEl2.value = DEFAULT_INSTR;
@@ -4166,3 +4324,621 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
     try { window.addEventListener('focus', function () { refreshNoticeSettings(); }); } catch (e) {}
   } catch (e) {}
 })();
+
+/* --- Tasks (appended): multi-task Do runs, one active view, footer badge --- */
+// var (not let): early subscribers above reference these helpers before this block executes.
+var taskCache = new Map(); // id -> TaskRow
+var taskRunCache = new Map(); // runId -> id
+var foregroundTaskId = null;
+var taskEventBuf = new Map(); // runId -> AgentEvent[] (cap 200, background detail)
+var taskDetailId = null;
+var taskShowDone = 10;
+var taskResumeSeen = false;
+
+function taskCall(a) { return window.nexio.tasks(a); }
+
+function taskEventForBackground(runId, event) {
+  try {
+    var id = taskRunCache.get(runId);
+    if (id) {
+      if (id === foregroundTaskId) return false;
+      bufferTaskEvent(runId, event);
+      return true;
+    }
+    if (foregroundTaskId) {
+      // Unknown run while a foreground task exists: assume background, refresh to confirm.
+      bufferTaskEvent(runId, event);
+      void refreshTasks();
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
+function bufferTaskEvent(runId, event) {
+  try {
+    var list = taskEventBuf.get(runId) || [];
+    list.push(event);
+    if (list.length > 200) list = list.slice(-200);
+    taskEventBuf.set(runId, list);
+    if (view === 'tasks') void renderTasksView();
+    paintTasksButton();
+  } catch (e) {}
+}
+
+function taskElapsed(ts) {
+  if (!ts) return '';
+  try {
+    var s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    var rtf = new Intl.RelativeTimeFormat(L.tag, { numeric: 'auto' });
+    if (s < 60) return rtf.format(-s, 'second');
+    if (s < 3600) return rtf.format(-Math.round(s / 60), 'minute');
+    if (s < 86400) return rtf.format(-Math.round(s / 3600), 'hour');
+    return rtf.format(-Math.round(s / 86400), 'day');
+  } catch (e) { return ''; }
+}
+
+function taskStatusIcon(state) {
+  if (state === 'running') return '<span class="ic spin" aria-hidden="true"></span>';
+  if (state === 'waiting_approval') return '<span class="ic" aria-hidden="true">' + stepSvg(ICO_WAIT) + '</span>';
+  if (state === 'done') return '<span class="ic" aria-hidden="true">' + stepSvg(ICO_OK) + '</span>';
+  if (state === 'failed' || state === 'interrupted') return '<span class="ic" aria-hidden="true">' + stepSvg(ICO_FAIL) + '</span>';
+  return '<span class="ic" aria-hidden="true">•</span>'; // queued dot / stopped
+}
+
+function taskStateText(row) {
+  if (row.detail) return row.detail;
+  if (row.state === 'waiting_approval') {
+    var n = (row.pendingApprovals || []).length;
+    return t('tasks.needsApproval') + (n > 1 ? ' (' + n + ')' : '');
+  }
+  if (row.state === 'running') return t('tasks.running') + '…';
+  if (row.state === 'queued') return t('tasks.queued') + '…';
+  if (row.resultSummary) return row.resultSummary.split('\n')[0].slice(0, 120);
+  return t('tasks.' + row.state);
+}
+
+async function refreshTasks() {
+  var res;
+  try {
+    if (!window.nexio || !window.nexio.tasks) return;
+    res = await window.nexio.tasks({ action: 'list' });
+  } catch (e) { return; }
+  var rows = (res && res.tasks) || [];
+  taskCache = new Map(rows.map(function (r) { return [r.id, r]; }));
+  taskRunCache = new Map();
+  rows.forEach(function (r) { if (r.runId) taskRunCache.set(r.runId, r.id); });
+  if (res && 'foregroundTaskId' in res) foregroundTaskId = res.foregroundTaskId || null;
+  // Replay buffered events that turned out to belong to the foreground task.
+  try {
+    for (const [runId, evs] of taskEventBuf) {
+      if (taskRunCache.get(runId) === foregroundTaskId && !agentState) {
+        agentState = { runId: runId, rows: new Map(), answerDiv: assistantDiv };
+        var steps = $('agent-steps');
+        if (steps) steps.classList.remove('hidden');
+        showView('run');
+        evs.forEach(function (ev) { handleAgentEvent(runId, ev); });
+        taskEventBuf.delete(runId);
+      }
+    }
+  } catch (e) {}
+  paintTasksButton();
+  if (view === 'tasks') void renderTasksView();
+  maybeResumeBar(rows);
+  try { syncChrome(); requestResize(); } catch (e) {}
+}
+
+function taskCounts() {
+  var running = 0, queued = 0, approval = 0;
+  taskCache.forEach(function (r) {
+    if (r.state === 'running') running++;
+    else if (r.state === 'waiting_approval') { running++; approval++; }
+    else if (r.state === 'queued') queued++;
+  });
+  return { running: running, queued: queued, approval: approval };
+}
+
+function paintTasksButton() {
+  var btn = $('btn-tasks');
+  if (!btn) return;
+  var c = taskCounts();
+  var badge = $('task-badge'), warn = $('task-warn');
+  var n = c.running + c.queued;
+  if (badge) {
+    badge.textContent = n > 0 ? String(n) : '';
+    badge.classList.toggle('hidden', n === 0);
+  }
+  if (warn) warn.classList.toggle('hidden', c.approval === 0);
+  btn.classList.toggle('warn', c.approval > 0);
+  var label;
+  if (c.approval > 0) label = c.approval + ' ' + t('tasks.waitingApproval');
+  else if (c.running > 0) label = t('tasks.running') + ' (' + c.running + ')';
+  else if ([...taskCache.values()].some(function (r) { return r.state === 'done' || r.state === 'failed'; })) label = t('tasks.done') + '. ' + t('common.view');
+  else label = t('tasks.title');
+  // why: guarded write (same MutationObserver-loop avoidance as updateRunChip).
+  // why: never wipe the button: badge + warn spans live inside it.
+  var span = btn.querySelector('.task-label');
+  if (!span) { span = document.createElement('span'); span.className = 'task-label'; btn.insertBefore(span, btn.firstChild); }
+  if (span.textContent !== label) span.textContent = label;
+  btn.setAttribute('aria-label', t('tasks.title') + (n > 0 ? ' (' + n + ')' : ''));
+}
+
+function openTasksView() { showView('tasks'); }
+
+async function renderTasksView() {
+  var host = $('task-list');
+  if (!host) return;
+  var rows = [...taskCache.values()].sort(function (a, b) { return a.createdAt - b.createdAt; });
+  var c = taskCounts();
+  var sum = $('task-summary');
+  if (sum) {
+    sum.textContent = '';
+    var span = document.createElement('span');
+    span.textContent = t('tasks.summary', { running: c.running, queued: c.queued });
+    sum.appendChild(span);
+    if (c.running > 0) {
+      var stopAll = ghostBtn(t('tasks.stopAll'), t('tasks.stopAll'));
+      stopAll.onclick = function () { void taskOp('stopAll', {}); };
+      sum.appendChild(stopAll);
+    }
+  }
+  host.innerHTML = '';
+  var empty = $('task-empty');
+  if (empty) empty.classList.toggle('hidden', rows.length > 0);
+  var approval = rows.filter(function (r) { return r.state === 'waiting_approval'; });
+  section(host, 'approval', t('tasks.needsApproval'), approval);
+  // User tasks are flat rows; subtasks nest under their parent.
+  var actives = rows.filter(function (r) { return r.state === 'running' || r.state === 'queued'; });
+  var tops = actives.filter(function (r) { return !r.parentId; });
+  var orphans = actives.filter(function (r) { return r.parentId && !taskCache.get(r.parentId); });
+  var sec = document.createElement('div');
+  sec.className = 'task-sec';
+  var h = document.createElement('div');
+  h.className = 'lb';
+  h.textContent = t('tasks.running') + ' / ' + t('tasks.queued');
+  sec.appendChild(h);
+  tops.concat(orphans).forEach(function (r) {
+    sec.appendChild(taskRow(r));
+    rows.filter(function (x) { return x.parentId === r.id; }).forEach(function (sub) { sec.appendChild(taskRow(sub, true)); });
+  });
+  if (sec.children.length > 1) host.appendChild(sec);
+  var done = rows.filter(function (r) { return r.state === 'done' || r.state === 'failed' || r.state === 'stopped' || r.state === 'interrupted'; })
+    .sort(function (a, b) { return (b.endedAt || 0) - (a.endedAt || 0); });
+  var doneShown = done.slice(0, taskShowDone);
+  if (doneShown.length) {
+    var dsec = document.createElement('div');
+    dsec.className = 'task-sec';
+    var dh = document.createElement('div');
+    dh.className = 'lb';
+    dh.textContent = t('tasks.done');
+    dsec.appendChild(dh);
+    doneShown.forEach(function (r) { dsec.appendChild(taskRow(r)); });
+    if (done.length > taskShowDone) {
+      var more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'linklike';
+      more.textContent = t('tasks.showMore');
+      more.onclick = function () { taskShowDone += 10; void renderTasksView(); };
+      dsec.appendChild(more);
+    }
+    host.appendChild(dsec);
+  }
+  maybeResumeBar(rows);
+  try { syncChrome(); requestResize(); } catch (e) {}
+}
+
+function section(host, kind, title, rows) {
+  if (!rows.length) return;
+  var sec = document.createElement('div');
+  sec.className = 'task-sec task-sec-' + kind;
+  var h = document.createElement('div');
+  h.className = 'lb';
+  h.textContent = title;
+  sec.appendChild(h);
+  rows.forEach(function (r) { sec.appendChild(taskRow(r)); });
+  host.appendChild(sec);
+}
+
+function taskRow(r, nested) {
+  var li = document.createElement('div');
+  li.className = 'task-row' + (nested ? ' task-sub' : '') + ' task-' + r.state;
+  li.dataset.tid = r.id;
+  li.setAttribute('role', 'article');
+  li.setAttribute('aria-label', r.title + ' — ' + t('tasks.' + r.state));
+  if (nested) {
+    var conn = document.createElement('span');
+    conn.className = 'task-conn';
+    conn.setAttribute('aria-hidden', 'true');
+    li.appendChild(conn);
+  }
+  var ic = document.createElement('span');
+  ic.className = 'task-ic';
+  ic.innerHTML = taskStatusIcon(r.state);
+  li.appendChild(ic);
+  var tx = document.createElement('div');
+  tx.className = 'task-tx';
+  var main = document.createElement('div');
+  main.className = 'task-title';
+  main.textContent = r.title;
+  if (nested) {
+    var tag = document.createElement('span');
+    tag.className = 'task-agent-tag';
+    tag.textContent = t('tasks.agentTag');
+    main.appendChild(document.createTextNode(' '));
+    main.appendChild(tag);
+  }
+  if (r.priority === 'high') {
+    var pri = document.createElement('span');
+    pri.className = 'task-pri';
+    pri.textContent = t('tasks.high');
+    main.appendChild(document.createTextNode(' '));
+    main.appendChild(pri);
+  }
+  tx.appendChild(main);
+  var meta = document.createElement('div');
+  meta.className = 'task-meta';
+  meta.dir = 'auto';
+  meta.textContent = taskStateText(r);
+  tx.appendChild(meta);
+  li.appendChild(tx);
+  var right = document.createElement('div');
+  right.className = 'task-right';
+  var el = document.createElement('span');
+  el.className = 'task-elapsed';
+  el.textContent = taskElapsed(r.startedAt || r.createdAt);
+  right.appendChild(el);
+  var menuBtn = document.createElement('button');
+  menuBtn.type = 'button';
+  menuBtn.className = 'task-menu-btn';
+  menuBtn.textContent = '…';
+  menuBtn.setAttribute('aria-label', t('common.details'));
+  menuBtn.setAttribute('aria-expanded', 'false');
+  var menu = document.createElement('div');
+  menu.className = 'task-menu hidden';
+  menu.setAttribute('role', 'menu');
+  taskMenuItems(r).forEach(function (it) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = it.label;
+    b.setAttribute('role', 'menuitem');
+    b.onclick = function (e) { e.stopPropagation(); menu.classList.add('hidden'); it.fn(); };
+    menu.appendChild(b);
+  });
+  menuBtn.onclick = function (e) {
+    e.stopPropagation();
+    var open = menu.classList.toggle('hidden');
+    menuBtn.setAttribute('aria-expanded', String(!open));
+  };
+  right.appendChild(menuBtn);
+  right.appendChild(menu);
+  li.appendChild(right);
+  li.onclick = function (e) {
+    if (e.target.closest('button') || e.target.closest('.task-menu') || e.target.closest('.task-detail')) return;
+    taskDetailId = taskDetailId === r.id ? null : r.id;
+    void renderTasksView();
+  };
+  // Queued rows reorder with a drag handle and Alt+Up/Alt+Down.
+  if (r.state === 'queued' && !r.parentId) {
+    li.draggable = true;
+    var handle = document.createElement('span');
+    handle.className = 'task-drag';
+    handle.textContent = '⠿';
+    handle.title = t('tasks.moveUp') + ' / ' + t('tasks.moveDown');
+    handle.setAttribute('aria-hidden', 'true');
+    li.insertBefore(handle, ic);
+    li.addEventListener('dragstart', function (e) { try { e.dataTransfer.setData('text/task-id', r.id); } catch (err) {} });
+    li.addEventListener('dragover', function (e) { e.preventDefault(); });
+    li.addEventListener('drop', function (e) {
+      e.preventDefault();
+      try {
+        var from = e.dataTransfer.getData('text/task-id');
+        if (from && from !== r.id) void taskMoveRelative(from, r.id);
+      } catch (err) {}
+    });
+  }
+  if (taskDetailId === r.id) li.appendChild(taskDetail(r));
+  return li;
+}
+
+async function taskMoveRelative(fromId, toId) {
+  // Move by repeated up/down steps toward the drop target (queue order).
+  var rows = [...taskCache.values()].filter(function (r) { return r.state === 'queued' && !r.parentId; })
+    .sort(function (a, b) { return a.createdAt - b.createdAt; });
+  var fi = rows.findIndex(function (r) { return r.id === fromId; });
+  var ti = rows.findIndex(function (r) { return r.id === toId; });
+  if (fi < 0 || ti < 0) return;
+  var dir = fi < ti ? 1 : -1;
+  for (var i = fi; i !== ti; i += dir) {
+    try { await window.nexio.tasks({ action: 'move', id: fromId, dir: dir }); } catch (e) { break; }
+  }
+  say(t('tasks.moveUp'));
+  await refreshTasks();
+}
+
+function taskMenuItems(r) {
+  var items = [];
+  items.push({ label: t('tasks.open'), fn: function () { taskDetailId = r.id; void renderTasksView(); } });
+  if (r.state === 'running' || r.state === 'waiting_approval' || r.state === 'queued') {
+    items.push({ label: t('tasks.stop'), fn: function () { void taskOp('stop', { id: r.id }); } });
+  }
+  if (r.state === 'queued' && !r.parentId) {
+    items.push({ label: t('tasks.moveUp'), fn: function () { void taskOp('move', { id: r.id, dir: -1 }); } });
+    items.push({ label: t('tasks.moveDown'), fn: function () { void taskOp('move', { id: r.id, dir: 1 }); } });
+    items.push({ label: r.priority === 'high' ? t('tasks.setNormal') : t('tasks.setHigh'), fn: function () { void taskOp('priority', { id: r.id, priority: r.priority === 'high' ? 'normal' : 'high' }); } });
+  }
+  if (r.state === 'done' || r.state === 'failed' || r.state === 'stopped' || r.state === 'interrupted') {
+    items.push({ label: t('tasks.retry'), fn: function () { void taskOp('retry', { id: r.id }); } });
+    items.push({ label: t('tasks.undo'), fn: function () { void taskUndo(r.id, false); } });
+    if (!r.parentId) items.push({ label: t('tasks.undoFamily'), fn: function () { void taskUndo(r.id, true); } });
+    items.push({ label: t('tasks.remove'), fn: function () { void taskOp('remove', { id: r.id }); } });
+  }
+  return items;
+}
+
+async function taskOp(action, params) {
+  try { await window.nexio.tasks(Object.assign({ action: action }, params)); } catch (e) { say(errText(e)); }
+  await refreshTasks();
+}
+
+async function taskUndo(id, family) {
+  try {
+    var r = await window.nexio.tasks({ action: 'undo', id: id, family: family });
+    var lines = (r.undone || []).concat((r.failed || []).map(function (f) { return t('tasks.retry') + ': ' + f; }));
+    say(lines.length ? lines.join('; ').slice(0, 300) : t('tasks.done'));
+  } catch (e) { say(errText(e)); }
+  await refreshTasks();
+}
+
+function taskDetail(r) {
+  var d = document.createElement('div');
+  d.className = 'task-detail';
+  var by = document.createElement('div');
+  by.className = 'task-by';
+  by.textContent = r.parentId ? t('tasks.createdByNexio') : t('tasks.startedByYou');
+  d.appendChild(by);
+  var you = document.createElement('div');
+  you.className = 'task-you';
+  you.dir = 'auto';
+  you.textContent = r.prompt;
+  d.appendChild(you);
+  if (r.resultSummary) {
+    var out = document.createElement('div');
+    out.className = 'task-outcome';
+    out.dir = 'auto';
+    out.textContent = r.resultSummary.slice(0, 500);
+    d.appendChild(out);
+  }
+  var chips = document.createElement('div');
+  chips.className = 'task-chips';
+  if (r.cwd) {
+    var open = ghostBtn(t('tasks.open'), r.cwd);
+    open.onclick = function () { try { window.nexio.reveal(r.cwd); } catch (e) {} };
+    chips.appendChild(open);
+  }
+  if (r.runId && r.state === 'done') {
+    var undo = ghostBtn(t('tasks.undo'), t('tasks.undo'));
+    undo.onclick = function () { void taskUndo(r.id, false); };
+    chips.appendChild(undo);
+  }
+  if (!r.parentId && r.state === 'done') {
+    var ufam = ghostBtn(t('tasks.undoFamily'), t('tasks.undoFamily'));
+    ufam.onclick = function () { void taskUndo(r.id, true); };
+    chips.appendChild(ufam);
+  }
+  if (r.state === 'failed' && r.resultSummary) {
+    var retry = ghostBtn(t('tasks.retry'), t('tasks.retry'));
+    retry.onclick = function () { void taskOp('retry', { id: r.id }); };
+    chips.appendChild(retry);
+  }
+  if (r.state === 'running' || r.state === 'waiting_approval' || r.state === 'queued') {
+    var stop = ghostBtn(t('tasks.stop'), t('tasks.stop'));
+    stop.onclick = function () { void taskOp('stop', { id: r.id }); };
+    chips.appendChild(stop);
+  }
+  d.appendChild(chips);
+  // Pending approval cards live in the task's own view only.
+  var pend = (r.pendingApprovals || []).concat(pendingCardsFor(r));
+  if (pend.length) {
+    var ahead = document.createElement('div');
+    ahead.className = 'task-appr-head';
+    var review = ghostBtn(t('tasks.reviewAll') + ' (' + pend.length + ')', t('tasks.reviewAll'));
+    review.onclick = function () {
+      var first = d.querySelector('.appr');
+      if (first) first.scrollIntoView({ block: 'nearest' });
+    };
+    ahead.appendChild(review);
+    d.appendChild(ahead);
+    pend.forEach(function (p) {
+      try {
+        var card = buildApprovalCard(p.runId, { id: p.callId, tool: p.tool, summary: p.summary, risk: 'write' });
+        d.appendChild(card);
+      } catch (e) {}
+    });
+  }
+  // Buffered step list, collapsed.
+  var evs = r.runId ? (taskEventBuf.get(r.runId) || []) : [];
+  var calls = evs.filter(function (e) { return e && (e.type === 'tool_call' || e.type === 'step'); });
+  if (calls.length) {
+    var tog = document.createElement('button');
+    tog.type = 'button';
+    tog.className = 'steps-toggle';
+    var shown = false;
+    var list = document.createElement('div');
+    list.className = 'task-steps hidden';
+    tog.textContent = calls.length + ' steps';
+    tog.setAttribute('aria-expanded', 'false');
+    tog.onclick = function () {
+      shown = !shown;
+      list.classList.toggle('hidden', !shown);
+      tog.setAttribute('aria-expanded', String(shown));
+    };
+    calls.slice(-30).forEach(function (e) {
+      var row = document.createElement('div');
+      row.className = 'astep';
+      var label = e.type === 'step' ? (e.text || '') : (e.summary || e.tool || '');
+      row.innerHTML = '<span class="tx"></span>';
+      row.querySelector('.tx').textContent = String(label).slice(0, 160);
+      list.appendChild(row);
+    });
+    d.appendChild(tog);
+    d.appendChild(list);
+  }
+  return d;
+}
+
+/** Pending cards from buffered approval_request events not yet in the row. */
+function pendingCardsFor(r) {
+  var out = [];
+  try {
+    var seen = {};
+    (r.pendingApprovals || []).forEach(function (p) { seen[p.callId] = true; });
+    var evs = (r.runId && taskEventBuf.get(r.runId)) || [];
+    evs.forEach(function (e) {
+      if (e && e.type === 'approval_request' && !seen[e.id]) {
+        out.push({ runId: r.runId, callId: e.id, tool: e.tool, summary: e.summary });
+      }
+    });
+  } catch (e) {}
+  return out;
+}
+
+function maybeResumeBar(rows) {
+  var bar = $('task-resume-bar');
+  if (!bar) return;
+  if (taskResumeSeen) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
+  var waiting = rows.filter(function (r) { return r.state === 'queued' || r.state === 'interrupted'; });
+  if (!waiting.length) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
+  bar.classList.remove('hidden');
+  bar.innerHTML = '';
+  var span = document.createElement('span');
+  span.textContent = t('tasks.resumePrompt', { n: waiting.length });
+  bar.appendChild(span);
+  var go = ghostBtn(t('tasks.resume'), t('tasks.resume'));
+  go.onclick = async function () { taskResumeSeen = true; await taskOp('resumeAll', {}); };
+  var no = ghostBtn(t('tasks.discard'), t('tasks.discard'));
+  no.onclick = async function () { taskResumeSeen = true; await taskOp('discardAll', {}); };
+  bar.appendChild(go);
+  bar.appendChild(no);
+}
+
+// --- submit routing: Enter / Ctrl+Enter / while-busy choice / ghost buttons ---
+function tasksRunningCount() {
+  var n = 0;
+  taskCache.forEach(function (r) { if (r.state === 'running' || r.state === 'waiting_approval') n++; });
+  return n;
+}
+
+function showTaskChoice(text) {
+  var box = $('task-choice');
+  if (!box) { void send({ taskAction: 'spawn' }); return; }
+  box.classList.remove('hidden');
+  box.innerHTML = '';
+  [
+    [t('tasks.runSeparately'), 'spawn'],
+    [t('tasks.addToQueue'), 'queue'],
+    [t('tasks.replaceCurrent'), 'replace'],
+  ].forEach(function (pair) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip';
+    b.textContent = pair[0];
+    b.onclick = function () {
+      hideTaskChoice();
+      var remember = box.querySelector('input');
+      if (remember && remember.checked) {
+        void window.nexio.setSettings({ taskConfirmOnSubmit: false, taskSubmitDefault: pair[1] }).catch(function () {});
+      }
+      inputEl.value = text;
+      void send({ taskAction: pair[1] });
+    };
+    box.appendChild(b);
+  });
+  var lab = document.createElement('label');
+  lab.className = 'task-dontask';
+  var cb = document.createElement('input');
+  cb.type = 'checkbox';
+  lab.appendChild(cb);
+  lab.appendChild(document.createTextNode(' ' + t('tasks.dontAsk')));
+  box.appendChild(lab);
+  say(t('tasks.runSeparately'));
+}
+
+function hideTaskChoice() {
+  var box = $('task-choice');
+  if (box) { box.classList.add('hidden'); box.innerHTML = ''; }
+}
+
+// --- slash commands for tasks (renderer-side, before the router) ---
+async function runCancelCommand(arg) {
+  var n = parseInt(String(arg || '').trim(), 10);
+  var rows = [...taskCache.values()]
+    .filter(function (r) { return r.state === 'running' || r.state === 'waiting_approval' || r.state === 'queued'; })
+    .sort(function (a, b) { return a.createdAt - b.createdAt; });
+  var target = rows[isNaN(n) ? 0 : n - 1];
+  if (!target) { say(t('tasks.empty')); return; }
+  await taskOp('stop', { id: target.id });
+}
+
+async function runClearQueueCommand() {
+  var rows = [...taskCache.values()].filter(function (r) { return r.state === 'queued'; });
+  if (!rows.length) return;
+  addMsg('user', '/clear-queue');
+  showView('run');
+  var div = addMsg('assistant', '…');
+  div.textContent = '';
+  var span = document.createElement('span');
+  span.textContent = t('tasks.clearQueueConfirm', { n: rows.length }) + ' ';
+  div.appendChild(span);
+  var go = ghostBtn(t('tasks.remove'), t('tasks.clearQueueConfirm', { n: rows.length }));
+  go.onclick = async function () { await taskOp('clearQueue', {}); say(t('tasks.cleared')); };
+  var keep = ghostBtn(t('common.cancel'), t('common.cancel'));
+  keep.onclick = function () { div.remove(); };
+  div.appendChild(go);
+  div.appendChild(keep);
+}
+
+// --- settings: Agent > Tasks section ---
+function paintTaskSettings(s) {
+  if ($('set-task-parallel')) $('set-task-parallel').value = s.taskMaxParallel || 2;
+  if ($('set-task-queued')) $('set-task-queued').value = s.taskMaxQueued || 20;
+  if ($('set-task-subtasks')) $('set-task-subtasks').checked = s.taskAllowSubtasks !== false;
+  if ($('set-task-asksub')) $('set-task-asksub').checked = s.taskAskBeforeSubtasks !== false;
+  if ($('set-task-confirm')) $('set-task-confirm').checked = s.taskConfirmOnSubmit !== false;
+  if ($('set-task-notify')) $('set-task-notify').checked = s.taskNotifications !== false;
+  if ($('set-task-prune')) $('set-task-prune').value = s.taskPruneDays || 30;
+  var seg = $('set-task-resume');
+  if (seg) seg.querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b.dataset.tr === (s.taskResume || 'ask')); });
+}
+
+function readTaskSettings(patch) {
+  var mc = parseInt($('set-task-parallel') && $('set-task-parallel').value, 10);
+  if (Number.isFinite(mc)) patch.taskMaxParallel = Math.min(4, Math.max(1, mc));
+  var mq = parseInt($('set-task-queued') && $('set-task-queued').value, 10);
+  if (Number.isFinite(mq)) patch.taskMaxQueued = Math.min(100, Math.max(1, mq));
+  if ($('set-task-subtasks')) patch.taskAllowSubtasks = $('set-task-subtasks').checked;
+  if ($('set-task-asksub')) patch.taskAskBeforeSubtasks = $('set-task-asksub').checked;
+  if ($('set-task-confirm')) patch.taskConfirmOnSubmit = $('set-task-confirm').checked;
+  if ($('set-task-notify')) patch.taskNotifications = $('set-task-notify').checked;
+  var pd = parseInt($('set-task-prune') && $('set-task-prune').value, 10);
+  if (Number.isFinite(pd)) patch.taskPruneDays = Math.min(3650, Math.max(1, pd));
+  var on = document.querySelector('#set-task-resume button.on');
+  if (on && on.dataset.tr) patch.taskResume = on.dataset.tr;
+}
+
+// --- boot: subscribe, paint, resume prompt ---
+(function () {
+  var seg = $('set-task-resume');
+  if (!seg) return;
+  seg.querySelectorAll('button').forEach(function (b) {
+    b.addEventListener('click', function (e) {
+      e.preventDefault();
+      seg.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); });
+    });
+  });
+})();
+if ($('btn-tasks')) $('btn-tasks').onclick = function () { togglePanel('tasks'); };
+if ($('btn-tasks-back')) $('btn-tasks-back').onclick = function () { showView(backTarget()); try { inputEl.focus(); } catch (e) {} };
+if (window.nexio && typeof window.nexio.onTasksChanged === 'function') {
+  window.nexio.onTasksChanged(function () { void refreshTasks(); });
+}
+void refreshTasks();

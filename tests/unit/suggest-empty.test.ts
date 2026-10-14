@@ -127,7 +127,7 @@ describe('run: Ask renders no steps, Do runs the plan -> tools -> done lifecycle
     expect(shouldShowPlanning(false, 0)).toBe(false);
     const stream = slice(appJs(), 'window.nexio.onStream((ev) => {', "window.addEventListener('focus'");
     expect(stream).not.toContain('plan-row');
-    const send = slice(appJs(), 'async function sendInner()', 'window.nexio.onStream');
+    const send = slice(appJs(), 'async function sendInner(', 'window.nexio.onStream');
     expect(send).toContain("showView('run')");
     const add = slice(appJs(), 'function addMsg(role, content)', 'function copySvg');
     expect(add).not.toContain('showView'); // no Ask yank

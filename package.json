@@ -11,6 +11,8 @@
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "node scripts/copy-renderer.js",
     "test": "vitest run",
+    "lint": "tsc -p tsconfig.main.json --noEmit && node scripts/i18n-check.mjs",
+    "i18n:check": "node scripts/i18n-check.mjs",
     "assets": "node scripts/build-assets.mjs",
     "assets:check": "node scripts/check-assets.mjs",
     "e2e": "node e2e/suite.js",

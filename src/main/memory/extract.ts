@@ -1,6 +1,8 @@
 import type { ChatMessage } from '../../shared/types';
+import { scanSecretsText } from '../../shared/attachments';
+import { graphemeLength, takeGraphemes } from '../../shared/text';
 import { streamChat } from '../ai/stream';
-import { memoryHash } from './types';
+import { blockedMemoryText, memoryHash } from './types';
 
 export interface ExtractorDeps {
   provider: import('../../shared/types').ProviderId;
@@ -45,11 +47,12 @@ export async function extractCandidates(
   if (/^\s*none\s*$/i.test(acc.trim())) return [];
   const out: string[] = [];
   for (const line of acc.split('\n')) {
-    const t = line.replace(/^[-*\d.)\s]+/, '').trim();
-    if (!t || t.length < 12 || t.length > 300) continue;
+    const t = takeGraphemes(line.replace(/^[-*\d.)\s]+/, '').trim(), 300);
+    if (!t || graphemeLength(t) < 12 || graphemeLength(t) > 300) continue;
     if (dismissedSet.has(memoryHash(t))) continue;
-    if (/password|secret|token|api[_-]?key|private key/i.test(t)) continue;
-    out.push(t.slice(0, 300));
+    // why: single structural scanner, no per-language word list.
+    if (blockedMemoryText(t, scanSecretsText)) continue;
+    out.push(t);
     if (out.length >= 3) break;
   }
   return out;

@@ -95,10 +95,21 @@ first), `protect.ts` (user-approved "never touch" rules → `extraProtected`
 permission paths; `.nexio/rules.md` file rules), `tools.ts`
 (`memory_search` read/askSafe + write trio, Ask-blocked except the
 confirmation path), `extract.ts` (explicit-remember triggers, user-messages-
-only suggestion extractor). Retrieval injects a delimited `<user_memory>`
+only suggestion extractor, `classify.ts` (language-agnostic intent: data
+packs in `src/main/i18n/intents/` + one model call, user messages only). Retrieval injects a delimited `<user_memory>`
 block via the existing `systemExtra` path; one dispatch channel
 (`nexio:memory`) plus a `nexio:memory-event` push for rows/cards. See
 `docs/memory.md` and `docs/adr/0006-local-memory.md`.
+
+## Tasks (Do-mode scheduler)
+
+`src/main/tasks/`: `taskTypes.ts` (exhaustive state machine), `taskStore.ts`
+(versioned `tasks` + `task_ctx` tables), `scheduler.ts` (queue, slots, locks,
+watchdog, fairness, caps), `subtaskTools.ts` (parent-bound `subtask_*`),
+`taskHost.ts` (submit routing, lifecycle); `src/main/agent/taskRunner.ts`
+runs tasks through the same loop/tools/policy/approvals/limits/log/undo.
+Renderer keeps one active view with per-runId routing and a Tasks view.
+See `docs/tasks.md` and `docs/adr/0007-task-queue.md`.
 
 ## Settings / storage
 
@@ -121,11 +132,20 @@ the OS. See `docs/platforms.md`.
 
 ## Intent routing (Do / Ask launcher)
 
-Non-explicit sends are classified in main before execution: a cheap
-heuristic first (`src/main/agent/intent.ts`), else one small model call.
-`act` â†’ built-in agent/tool loop, `answer`/`clarify` â†’ plain streamed
+Non-explicit sends are classified in main before execution: structural
+signals only (`src/main/agent/intent.ts` — paths and `?`/`？`/`؟` shapes),
+else one small multilingual model call that decides by meaning, never by
+English verbs. `act` → built-in agent/tool loop, `answer`/`clarify` → plain streamed
 response. An explicit pill pick wins over routing. The footer shows
 `Doing` / `Answering` for the actual path taken.
+
+## UI localization (i18n)
+
+Shared core (`src/shared/i18n.ts`, mirrored in the renderer): locale files
+in `src/main/i18n/locales/` (English canonical + Vietnamese complete),
+ICU plurals/placeholders, system-locale default with instant switching, RTL
+mirroring, per-script font fallbacks, `Intl` dates/numbers/sizes/relative
+times. `npm run i18n:check` guards parity in CI. See `docs/i18n.md`.
 
 ## Undo journal + run log
 

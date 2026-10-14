@@ -20,7 +20,7 @@ import type { AgentEvent, AgentLimits, ApprovalDecision, ApprovalOutcome, Always
 import { defaultAllowedRoots } from './agent/permissions';
 import { ALL_TOOLS } from './agent/tools/registry';
 import type { AgentMsg } from './ai/tools-chat';
-import { getLatestLog, createRunLog, appendLog } from './agent/log';
+import { getLatestLog, createRunLog, appendLog, resolveLogDir } from './agent/log';
 import { classifyIntent, clarifyQuestion } from './agent/intent';
 import { undoAvailable, undoFolder, undoRun } from './agent/undo';
 import { recordRun, listRuns, oneLineOutcome } from './agent/runs';
@@ -72,7 +72,17 @@ import { detectAttachment } from './attachments/detect';
 import { clearRunAttachments, registerRunAttachments } from './agent/tools/attachment_tools';
 import { VisionNotSupportedError } from './ai/providers/vision';
 import type { ContentPart } from './ai/providers/types';
-import type { ChatMessage, Mode, Settings } from '../shared/types';
+import type { ChatMessage, Mode, Settings, TaskAction, TaskRow } from '../shared/types';
+import {
+  initScheduler, initTaskWatchdog, pushTasksChanged, createUserTask, createSubtaskRecord, removeTask, clearQueue,
+  resumeAll, discardWaiting, undoTaskFamily, lockHooksFor, pendingApprovalsFor,
+  trackTaskApproval, clearTaskApprovals, getForegroundTaskId, setForegroundTaskId,
+  type TaskHostApi,
+} from './tasks/taskHost';
+import { type Task } from './tasks/taskTypes';
+import { updateTask as updateTaskRow } from './tasks/taskStore';
+import { TaskParkedError } from './agent/types';
+import { makeSubtaskTools } from './tasks/subtaskTools';
 
 const aborters = new Map<string, AbortController>();
 let seq = 0;
@@ -470,6 +480,12 @@ export interface SendOpts {
   /** True when the user explicitly picked the mode pill (wins over intent routing). */
   explicit?: boolean;
   attachments?: Array<{ name: string; mime?: string; size?: number; dataBase64?: string; path?: string }>;
+  /** Ctrl+Enter: always push to the queue, even if a slot is free. */
+  queued?: boolean;
+  /** While-busy choice: spawn, queue, or replace the foreground task. */
+  taskAction?: 'spawn' | 'queue' | 'replace';
+  /** Queue priority (Shift+click sends high). */
+  priority?: 'normal' | 'high';
 }
 
 /** One cheap model call for uncertain intents (heuristic runs first). */
@@ -516,7 +532,7 @@ export function prepareAttachments(
   const lim = validateLimits(staged.map((a) => ({ size: a.size || (a.dataBase64 ? Buffer.byteLength(a.dataBase64, 'base64') : 0) })));
   if (!lim.ok) {
     if (lim.code === 'count') throw new Error(t('attach.count'));
-    throw new Error(lim.error || t('attach.oversize'));
+    throw new Error(t('attach.oversize'));
   }
   const out: PreparedAttachment[] = [];
   for (const a of staged) {
@@ -1013,11 +1029,28 @@ async function runSend(
     }
   }
   if (effective === 'agent') {
+    // Routed act: task-routed Do run. Foreground runs inline (same loop as
+    // before); spawns run headless in parallel; queue pushes wait for a slot.
+    const api = taskHostApi();
+    const sch = initScheduler(api);
+    const routed = routeTaskSubmit(api, sender, { conversationId, text, cwd: cwd0, staged, opts });
+    if ('notice' in routed) {
+      if (!incognito) addMessage(d, conversationId, 'user', text);
+      sender.send(IpcChannels.chatStream, { token: routed.notice, done: false, conversationId, requestId });
+      sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
+      aborters.delete(requestId);
+      return routed.notice;
+    }
+    const taskId = routed.foregroundTaskId;
     // Routed act: full built-in loop with approvals, bridged onto this request.
     const runId = `agent-${Date.now()}-${++seq}`;
     const state: AgentRunState = { controller: aborter, approvals: new Map() };
     agentRuns.set(runId, state);
+    try { sch.beginExternal(taskId); } catch { /* record best-effort */ }
     const cwd = s.agentCwd || os.homedir();
+    let terminalStatus: 'done' | 'failed' | 'stopped' | 'interrupted' = 'done';
+    let terminalSummary = '';
+    let parkedDone = false;
     try {
       if (prepared.length) {
         // Re-key refs under the agent run id for attachment_list/read.
@@ -1032,25 +1065,66 @@ async function runSend(
         memory: mem.usedIds.length || memExtra ? { block: memExtra, usedIds: mem.usedIds } : undefined,
         incognito,
         ...(memProtected.length ? { extraProtected: memProtected } : {}),
+        taskId,
+        taskLock: lockHooksFor(taskId),
+        subtaskAskFirst: s.taskAskBeforeSubtasks !== false,
+        onApprovalState: (waiting, call) => {
+          if (waiting && call) {
+            sch.approvalWait(taskId, runId, call.tool, call.summary);
+            trackTaskApproval(taskId, runId, call.id, call.tool, call.summary);
+          } else {
+            sch.approvalResolved(taskId);
+            clearTaskApprovals(taskId);
+          }
+        },
       });
       if (full && !incognito) addMessage(d, conversationId, 'assistant', full);
+      terminalSummary = full;
       finishRun(d, sender, runId, 'agent', text, full, aborter.signal.aborted ? 'stopped' : 'done', cwd, !incognito);
       sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
       void maybeSuggestMemories(sender, d, s, key, { history, conversationId, runId, requestId });
       return full;
     } catch (e) {
+      if (e instanceof TaskParkedError) {
+        // Write-locked by another task: park as queued with the reason.
+        terminalStatus = 'interrupted';
+        terminalSummary = e.reason;
+        parkedDone = true;
+        try {
+          const cur = sch.get(taskId);
+          if (cur && cur.state === 'running') {
+            sch.finishExternal(taskId, 'interrupted', e.reason);
+            sch.retry(taskId);
+          }
+        } catch { /* record best-effort */ }
+        const notice = t('tasks.parkedNotice', { reason: e.reason });
+        if (!incognito) addMessage(d, conversationId, 'assistant', notice);
+        sender.send(IpcChannels.chatStream, { token: notice, done: false, conversationId, requestId });
+        sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
+        aborters.delete(requestId);
+        return notice;
+      }
       if (e instanceof VisionNotSupportedError) {
         const notice = t('attach.visionNotice');
         if (!incognito) addMessage(d, conversationId, 'assistant', notice);
         sender.send(IpcChannels.chatStream, { token: notice, done: false, conversationId, requestId });
         sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
         finishRun(d, sender, runId, 'agent', text, notice, 'done', cwd, !incognito);
+        terminalStatus = 'done';
+        terminalSummary = notice;
         return notice;
       }
+      terminalStatus = aborter.signal.aborted ? 'stopped' : 'failed';
+      terminalSummary = asError(e).message;
       if (!incognito) finishRun(d, sender, runId, 'agent', text, asError(e).message, 'error', cwd);
       else finishRun(d, sender, runId, 'agent', '', '', 'error', cwd, false);
       throw asError(e);
     } finally {
+      if (!parkedDone) {
+        try {
+          sch.finishExternal(taskId, aborter.signal.aborted ? 'stopped' : terminalStatus, terminalSummary);
+        } catch { /* record best-effort */ }
+      }
       agentRuns.delete(runId);
       aborters.delete(requestId);
     }
@@ -1066,6 +1140,10 @@ async function runBuiltInAgent(o: {
   controller: AbortController; state: AgentRunState; prompt: string;
   userParts?: ContentPart[]; attachMeta?: string; imageMode?: 'auto' | 'on' | 'off';
   memory?: { block?: string; usedIds: string[] }; incognito?: boolean; extraProtected?: string[];
+  taskId?: string;
+  taskLock?: { acquireWrite: (paths: string[]) => { ok: true } | { ok: false; path: string; byTask: string }; noteRead: (path: string) => string | null };
+  subtaskAskFirst?: boolean;
+  onApprovalState?: (waiting: boolean, call?: { id: string; tool: string; summary: string }) => void;
 }): Promise<string> {
   const { sender, d, s, key, content, history, cwd, runId, controller, state, prompt } = o;
   const emit = (event: AgentEvent) => {
@@ -1083,6 +1161,41 @@ async function runBuiltInAgent(o: {
     emit({ type: 'memory_used', count: o.memory.usedIds.length, ids: o.memory.usedIds });
   }
   const systemExtra = [extras.systemExtra, o.memory?.block].filter(Boolean).join('\n') || undefined;
+  const taskWaiter = approvalWaiter(state);
+  // Foreground Do runs can create subtasks (same caps + first-create confirm
+  // as scheduler-run tasks). Ask runs never reach here.
+  let subTools: Tool[] = [];
+  if (o.taskId && s.taskAllowSubtasks !== false) {
+    try {
+      const api = taskHostApi();
+      const sch = initScheduler(api);
+      const parent = sch.get(o.taskId);
+      if (parent && parent.depth < 2) {
+        const roots = s.agentAllowedRoots?.length ? s.agentAllowedRoots : defaultAllowedRoots(os.homedir(), cwd);
+        subTools = makeSubtaskTools({
+          parentId: o.taskId, runId,
+          allowedRoots: [...roots], alwaysAllow: [...(s.agentAlwaysAllow || [])],
+          attachmentIds: [], provider: s.provider, model: s.model, cwd,
+          createSubtask: async (input) => createSubtaskRecord(api, parent, input),
+          listSubtasks: (st) => sch.list().filter((x) => x.parentId === (o.taskId as string) && (!st || x.state === st)),
+          resultOf: (id) => {
+            const x = sch.get(id);
+            return x && x.parentId === o.taskId ? x : null;
+          },
+          cancelSubtask: (id) => {
+            const x = sch.get(id);
+            return !!x && x.parentId === o.taskId && sch.stop(id);
+          },
+          waitFor: (id, signal) => {
+            const x = sch.get(id);
+            if (!x || x.parentId !== o.taskId) return Promise.reject(new Error('unknown subtask'));
+            sch.releaseSlotForWait(o.taskId as string);
+            return sch.waitForTask(id, signal).finally(() => sch.reclaimSlot(o.taskId as string));
+          },
+        });
+      }
+    } catch { /* subtasks optional; the run continues without them */ }
+  }
   return runAgent(content, {
     provider: s.provider,
     apiKey: key,
@@ -1094,7 +1207,7 @@ async function runBuiltInAgent(o: {
     alwaysAllow: ((s.agentAlwaysAllow || []) as AlwaysRule[]),
     requireApprovalForWrites: s.requireApprovalForWrites !== false,
     limits: { maxToolCalls: s.agentMaxCalls || 25 },
-    tools: [...ALL_TOOLS, ...memoryTools(d, { maxItems: s.memoryMaxItems ?? 500 }), ...extras.tools],
+    tools: [...ALL_TOOLS, ...memoryTools(d, { maxItems: s.memoryMaxItems ?? 500 }), ...subTools, ...extras.tools],
     systemExtra,
     hooks: ext.hookRunner(cwd, controller.signal),
     signal: controller.signal,
@@ -1102,11 +1215,21 @@ async function runBuiltInAgent(o: {
     runId,
     incognito: o.incognito,
     ...(o.extraProtected?.length ? { extraProtected: o.extraProtected } : {}),
-    waitForApproval: approvalWaiter(state),
+    waitForApproval: o.taskId
+      ? (call) => {
+          o.onApprovalState?.(true, { id: call.id, tool: call.tool, summary: call.summary });
+          return taskWaiter(call).then(
+            (out) => { o.onApprovalState?.(false); return out; },
+            (err) => { o.onApprovalState?.(false); throw err; },
+          );
+        }
+      : taskWaiter,
     onPersistAlwaysRule: persistRule(d),
     ...(o.userParts ? { userParts: o.userParts } : {}),
     ...(o.attachMeta ? { attachMeta: o.attachMeta } : {}),
     ...(s.compatibleImages || o.imageMode ? { imageMode: (o.imageMode || s.compatibleImages || 'auto') as 'auto' | 'on' | 'off' } : {}),
+    ...(o.taskLock ? { taskLock: o.taskLock } : {}),
+    ...(o.subtaskAskFirst !== undefined ? { subtaskAskFirst: o.subtaskAskFirst } : {}),
   });
 }
 
@@ -1375,6 +1498,8 @@ const SLASH_DESC_KEYS: Record<string, string> = {
   history: 'slash.history', settings: 'slash.settings', log: 'slash.log',
   extensions: 'slash.extensions', memory: 'slash.memory', remember: 'slash.remember',
   forget: 'slash.forget', incognito: 'slash.incognito',
+  spawn: 'slash.spawn', queue: 'slash.queue', tasks: 'slash.tasks',
+  cancel: 'slash.cancel', clearQueue: 'slash.clearQueue',
 };
 
 /** Builtin slash descriptions in the current locale (user content untouched). */
@@ -1533,7 +1658,24 @@ function registerAgentIpc(): void {
     const emit = (event: AgentEvent) => {
       try { sender.send(IpcChannels.agentEvent, { runId, event }); } catch { /* window gone */ }
     };
+    // Foreground task record (Tasks view + locks + per-task approvals).
+    const api = taskHostApi();
+    const sch = initScheduler(api);
+    const cwd0 = opts.cwd || s.agentCwd || os.homedir();
+    const fg = createUserTask(api, {
+      prompt: text, origin: 'user_spawn', cwd: cwd0, provider: s.provider, model: s.model,
+      staged, conversationId, hold: true,
+    });
+    const fgTaskId = 'error' in fg ? null : fg.task.id;
+    if (fgTaskId && !sch.beginExternal(fgTaskId)) {
+      // Slot taken between create and start: run headless via the queue instead.
+      setForegroundTaskId(null);
+    } else if (fgTaskId) {
+      setForegroundTaskId(fgTaskId);
+    }
     void (async () => {
+      let terminalStatus: 'done' | 'failed' | 'stopped' | 'interrupted' = 'done';
+      let terminalSummary = '';
       try {
         const cwd = opts.cwd || s.agentCwd || os.homedir();
         routeStatus(sender, runId, 'doing');
@@ -1578,11 +1720,46 @@ function registerAgentIpc(): void {
           ...(doMem.usedIds.length || doMemExtra ? { memory: { block: doMemExtra, usedIds: doMem.usedIds } } : {}),
           ...(incognito ? { incognito: true } : {}),
           ...(doMemProtected.length ? { extraProtected: doMemProtected } : {}),
+          ...(fgTaskId ? {
+            taskId: fgTaskId,
+            taskLock: lockHooksFor(fgTaskId),
+            subtaskAskFirst: s.taskAskBeforeSubtasks !== false,
+            onApprovalState: (waiting: boolean, call?: { id: string; tool: string; summary: string }) => {
+              if (!fgTaskId) return;
+              if (waiting && call) {
+                sch.approvalWait(fgTaskId, runId, call.tool, call.summary);
+                trackTaskApproval(fgTaskId, runId, call.id, call.tool, call.summary);
+              } else {
+                sch.approvalResolved(fgTaskId);
+                clearTaskApprovals(fgTaskId);
+              }
+            },
+          } : {}),
         });
         if (full && !incognito) addMessage(d, conversationId, 'assistant', full);
+        terminalSummary = full;
         finishRun(d, sender, runId, 'agent', text, full, controller.signal.aborted ? 'stopped' : 'done', cwd, !incognito);
         void maybeSuggestMemories(sender, d, s, key, { history, conversationId, runId });
       } catch (e2) {
+        if (e2 instanceof TaskParkedError) {
+          terminalStatus = 'interrupted';
+          terminalSummary = e2.reason;
+          if (fgTaskId) {
+            try {
+              const cur = sch.get(fgTaskId);
+              if (cur && cur.state === 'running') {
+                sch.finishExternal(fgTaskId, 'interrupted', e2.reason);
+                sch.retry(fgTaskId);
+              }
+            } catch { /* record best-effort */ }
+          }
+          const notice = t('tasks.parkedNotice', { reason: e2.reason });
+          if (!incognito) addMessage(d, conversationId, 'assistant', notice);
+          emit({ type: 'text_delta', text: notice });
+          emit({ type: 'done', summary: notice });
+          finishRun(d, sender, runId, 'agent', text, notice, 'done', opts.cwd || s.agentCwd || os.homedir(), !incognito);
+          return;
+        }
         if (e2 instanceof VisionNotSupportedError) {
           const notice = t('attach.visionNotice');
           if (!incognito) addMessage(d, conversationId, 'assistant', notice);
@@ -1592,9 +1769,19 @@ function registerAgentIpc(): void {
           return;
         }
         emit({ type: 'error', message: asError(e2).message.slice(0, 500) });
+        terminalStatus = controller.signal.aborted ? 'stopped' : 'failed';
+        terminalSummary = asError(e2).message;
         if (!incognito) finishRun(d, sender, runId, 'agent', text, asError(e2).message, 'error', opts.cwd || s.agentCwd || os.homedir());
         else finishRun(d, sender, runId, 'agent', '', '', 'error', opts.cwd || s.agentCwd || os.homedir(), false);
       } finally {
+        if (fgTaskId) {
+          try {
+            const cur = sch.get(fgTaskId);
+            if (cur && (cur.state === 'running' || cur.state === 'waiting_approval')) {
+              sch.finishExternal(fgTaskId, controller.signal.aborted ? 'stopped' : terminalStatus, terminalSummary);
+            }
+          } catch { /* record best-effort */ }
+        }
         agentRuns.delete(runId);
       }
     })();
@@ -2007,6 +2194,249 @@ function registerAttachIpc(): void {
 }
 
 /** Single registration entry (main.ts calls this once at startup). */
+function taskHostApi(): TaskHostApi {
+  return {
+    db,
+    settings: () => getSettings(db()),
+    apiKeyFor: (provider) => getSecret(db(), apiKeyService(provider)) || process.env[`${provider.toUpperCase()}_API_KEY`] || '',
+    uiLocaleTag: () => uiLocaleTag(getSettings(db())),
+    homeDir: () => os.homedir(),
+    policyContext: (cwd: string) => policyFor(getSettings(db()), cwd),
+    prepareAttachments: (scopeId, staged, cwd, ctx) => prepareAttachments(scopeId, staged, cwd, ctx),
+    registerAttachments: (runId, refs) => {
+      try { registerRunAttachments(runId, refs); } catch { /* best-effort */ }
+    },
+    buildParts: (text, prepared) => buildUserParts(text, prepared),
+    attachMeta: (prepared) => prepared.length ? `Attached files: ${prepared.map((p) => p.ref.path).join('; ')}` : undefined,
+    memoryIds: (text, cwd) => {
+      try {
+        const s = getSettings(db());
+        const ret = retrieveMemories(db(), s, { prompt: text, cwd, locale: uiLocaleTag(s) });
+        return ret.items.map((m) => m.id);
+      } catch { return []; }
+    },
+    memProtected: (cwd) => {
+      try {
+        const s = getSettings(db());
+        if (!s.memoryEnabled || s.incognito) return [];
+        return memoryProtectedPaths(db(), cwd);
+      } catch { return []; }
+    },
+    extras: async () => {
+      try {
+        const ext = extService(db());
+        const ex = await ext.agentExtras();
+        return { tools: ex.tools, systemExtra: ex.systemExtra || '' };
+      } catch { return { tools: [], systemExtra: '' }; }
+    },
+    hooks: (cwd, signal) => {
+      try { return extService(db()).hookRunner(cwd, signal); } catch { return null; }
+    },
+    sender: () => {
+      try { return getPopup()?.webContents || null; } catch { return null; }
+    },
+    emitAgent: (runId, event) => {
+      try { getPopup()?.webContents.send(IpcChannels.agentEvent, { runId, event }); } catch { /* window gone */ }
+    },
+    registerRun: (runId, state) => { agentRuns.set(runId, state); },
+    unregisterRun: (runId) => { agentRuns.delete(runId); },
+    approvalWaiter: (state) => approvalWaiter(state),
+    resolveMemory: async (task, text, askFn) => {
+      try {
+        const d = db();
+        const s = getSettings(d);
+        const sender = getPopup()?.webContents || null;
+        const resolved = await resolveMemoryIntent(d, s, text, [], askFn, uiLocaleTag(s));
+        const savedText = sender ? pushResolvedMemory(sender, { runId: task.runId, conversationId: '' }, resolved) : null;
+        void savedText;
+        return { savedText };
+      } catch { return { savedText: null }; }
+    },
+    memoryStatusLine: (savedText) => {
+      try { return memoryStatusLine(getSettings(db()), savedText); } catch { return ''; }
+    },
+    classifyFn: (signal) => {
+      const d = db();
+      const s = getSettings(d);
+      const key = getSecret(d, apiKeyService(s.provider)) || process.env[`${s.provider.toUpperCase()}_API_KEY`] || '';
+      return (prompt) => classifyWithModel(s, key, prompt, signal);
+    },
+    recordRun: (rec) => {
+      try {
+        recordRun({ runId: rec.runId, kind: rec.kind, prompt: rec.prompt, outcome: rec.outcome, ts: Date.now(), status: rec.status, undoable: rec.undoable, engine: 'builtin', ...(rec.taskId ? { taskId: rec.taskId } : {}), ...(rec.parentId ? { parentId: rec.parentId } : {}), ...(rec.origin ? { origin: rec.origin } : {}) });
+      } catch { /* history must never break runs */ }
+    },
+    appendRunLog: (runId, rec) => {
+      try {
+        appendLog(path.join(resolveLogDir(), `${runId}.jsonl`), rec);
+      } catch { /* never breaks runs */ }
+    },
+    undoAvailable: (runId) => {
+      try { return undoAvailable(runId); } catch { return false; }
+    },
+    deleteTaskAttachments: (taskId) => {
+      try { deleteRunAttachments(appBaseDir(), taskId); } catch { /* best-effort */ }
+      try { clearRunAttachments(taskId); } catch { /* best-effort */ }
+    },
+    appBaseDir: () => appBaseDir(),
+  };
+}
+
+function taskRowFor(api: TaskHostApi, t: Task): TaskRow {
+  void api;
+  return {
+    id: t.id, title: t.title, prompt: t.prompt, origin: t.origin, parentId: t.parentId,
+    depth: t.depth, priority: t.priority, state: t.state,
+    ...(t.detail ? { detail: t.detail } : {}),
+    createdAt: t.createdAt,
+    ...(t.startedAt !== undefined ? { startedAt: t.startedAt } : {}),
+    ...(t.endedAt !== undefined ? { endedAt: t.endedAt } : {}),
+    ...(t.runId ? { runId: t.runId } : {}),
+    ...(t.resultSummary ? { resultSummary: t.resultSummary } : {}),
+    ...(t.snapshot?.workingFolder ? { cwd: t.snapshot.workingFolder } : {}),
+    ...(pendingApprovalsFor(t.id).length ? { pendingApprovals: pendingApprovalsFor(t.id) } : {}),
+  };
+}
+
+function registerTaskIpc(): void {
+  const api = taskHostApi();
+  initScheduler(api);
+  initTaskWatchdog(api);
+  typedHandle(IpcChannels.tasks, vObj0, async (_e, a: TaskAction) => {
+    const sch = initScheduler(api);
+    switch (a.action) {
+      case 'list':
+        return { tasks: sch.list().map((t) => taskRowFor(api, t)), foregroundTaskId: getForegroundTaskId() };
+      case 'counts': {
+        const c = sch.counts();
+        return { ...c, foregroundTaskId: getForegroundTaskId() };
+      }
+      case 'get': {
+        const t = sch.get(a.id);
+        if (!t) throw new Error('unknown task');
+        return taskRowFor(api, t);
+      }
+      case 'stop':
+        return { stopped: sch.stop(a.id) };
+      case 'stopAll': {
+        let n = 0;
+        for (const t of sch.list()) {
+          if ((t.state === 'running' || t.state === 'waiting_approval' || t.state === 'queued') && sch.stop(t.id)) n++;
+        }
+        return { stopped: n };
+      }
+      case 'retry':
+        return { queued: sch.retry(a.id) };
+      case 'remove':
+        return { removed: removeTask(api, a.id) };
+      case 'move':
+        return { moved: sch.move(a.id, a.dir) };
+      case 'priority': {
+        const t = sch.get(a.id);
+        if (!t) throw new Error('unknown task');
+        if (t.state !== 'queued') throw new Error('only queued tasks can change priority');
+        if (a.priority !== 'normal' && a.priority !== 'high') throw new Error('bad priority');
+        try {
+          updateTaskRow(api.db(), a.id, { priority: a.priority });
+        } catch { /* best-effort */ }
+        pushTasksChanged(api);
+        return { priority: a.priority };
+      }
+      case 'clearQueue':
+        return { cleared: clearQueue(api) };
+      case 'resumeAll':
+        return { resumed: resumeAll(api) };
+      case 'discardAll':
+        return { discarded: discardWaiting(api) };
+      case 'undo': {
+        const runUndo = async (runId: string) => {
+          const d = db();
+          const s = getSettings(d);
+          const cwd = s.agentCwd || os.homedir();
+          const controller = new AbortController();
+          const st: ToolExecState = {
+            cwd, policy: policyFor(s, cwd), limits: DEFAULT_LIMITS,
+            signal: controller.signal, emit: () => {}, messages: [],
+            waitForApproval: async () => ({ decision: 'deny' }),
+            onPersistAlwaysRule: persistRule(d),
+            hooks: null, logHook: () => {},
+            checkRunTimeout: () => false, toolCalls: 0, approvalWaitMs: 0, lastUntrusted: null,
+          };
+          const report = await undoRun(runId, st, new Map(ALL_TOOLS.map((x) => [x.name, x])));
+          return { undone: report.undone, failed: report.failed };
+        };
+        return undoTaskFamily(api, runUndo, a.id, a.family === true);
+      }
+      default:
+        throw new Error(`unknown tasks action: ${(a as { action?: string }).action}`);
+    }
+  });
+}
+
+/** Route a Do-bound submit through tasks. Returns notice text or null for inline foreground. */
+function routeTaskSubmit(
+  api: TaskHostApi, sender: Electron.WebContents,
+  o: { conversationId: string; text: string; cwd: string; staged: SendOpts['attachments']; opts: SendOpts },
+): { foregroundTaskId: string } | { notice: string } {
+  const sch = initScheduler(api);
+  const d = db();
+  const s = getSettings(d);
+  const text = o.text;
+  const running = sch.counts().running;
+  const wantQueue = o.opts.queued === true || o.opts.taskAction === 'queue';
+  const make = (origin: 'user_spawn' | 'user_queue', hold = false): { task: Task } | { error: string } =>
+    createUserTask(api, {
+      prompt: text, origin, cwd: o.cwd, provider: s.provider, model: s.model,
+      staged: o.staged, conversationId: o.conversationId, ...(hold ? { hold: true } : {}),
+      ...(o.opts.priority === 'high' ? { priority: 'high' as const } : {}),
+    });
+  if (wantQueue) {
+    const r = make('user_queue');
+    if ('error' in r) throw new Error(r.error);
+    setForegroundTaskId(null);
+    return { notice: t('tasks.queuedNotice', { title: r.task.title }) };
+  }
+  if (running === 0) {
+    const r = make('user_spawn', true);
+    if ('error' in r) throw new Error(r.error);
+    if (!sch.beginExternal(r.task.id)) {
+      // Lost the race (slot taken just now): fall back to queue.
+      return { notice: t('tasks.queuedNotice', { title: r.task.title }) };
+    }
+    setForegroundTaskId(r.task.id);
+    return { foregroundTaskId: r.task.id };
+  }
+  const action = o.opts.taskAction || s.taskSubmitDefault || 'spawn';
+  if (action === 'replace') {
+    const fg = getForegroundTaskId();
+    if (fg) {
+      sch.stop(fg);
+      const rec = sch.get(fg);
+      const runId = rec?.runId;
+      if (runId) agentRuns.get(runId)?.controller.abort();
+    }
+    const r = make('user_spawn', true);
+    if ('error' in r) throw new Error(r.error);
+    if (!sch.beginExternal(r.task.id)) return { notice: t('tasks.queuedNotice', { title: r.task.title }) };
+    setForegroundTaskId(r.task.id);
+    return { foregroundTaskId: r.task.id };
+  }
+  if (action === 'queue') {
+    const r = make('user_queue');
+    if ('error' in r) throw new Error(r.error);
+    return { notice: t('tasks.queuedNotice', { title: r.task.title }) };
+  }
+  // spawn (default): parallel now, or queue automatically when full.
+  const r = make('user_spawn');
+  if ('error' in r) throw new Error(r.error);
+  const cur = sch.get(r.task.id);
+  if (cur && cur.state === 'running') {
+    return { notice: t('tasks.spawnedNotice', { title: r.task.title }) };
+  }
+  const ahead = Math.max(sch.list().filter((x) => x.state === 'queued' && x.id !== r.task.id).length, 0);
+  return { notice: ahead > 0 ? t('tasks.queuedAhead', { n: ahead, title: r.task.title }) : t('tasks.queuedNotice', { title: r.task.title }) };
+}
+
 function registerMemoryIpc(): void {
   const toRow = (d: DatabaseSync, s: Settings, cwd: string, staleIds: Set<string>, m: {
     id: string; kind: MemoryKind; text: string; scope: MemoryScope; source: import('../shared/types').MemorySource;
@@ -2110,6 +2540,7 @@ export function registerIpc(): void {
   registerChatIpc();
   registerAgentIpc();
   registerMemoryIpc();
+  registerTaskIpc();
   registerPlatformIpc();
   registerHistoryIpc();
   registerExtIpc();

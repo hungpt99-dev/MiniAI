@@ -1,36 +1,27 @@
-/** Lightweight intent router: cheap heuristic first, one small model call otherwise. */
+/** Lightweight intent router: structural signals only, one small model call otherwise.
+ * No English-verb lists: non-English requests always fall through to the model,
+ * which decides by meaning (multilingual few-shots in CLASSIFY_PROMPT).
+ */
 
 export type Intent = 'act' | 'answer' | 'clarify';
 
-const ACT_VERBS =
-  /\b(open|launch|start|find|search|locate|show me|list|move|create|make|new|delete|remove|trash|rename|copy|duplicate|organize|tidy|sort|clean|run|execute|install|uninstall|download|save|change|set|update|configure|backup|compress|zip|extract|print|kill|stop|restart)\b/i;
-
-const MY_STUFF = /\bmy\s+(files?|folders?|downloads?|documents?|desktop|disk|apps?|applications?|photos?|music|videos?|email|calendar)\b/i;
-
 const PATH_LIKE = /([A-Za-z]:\\|\/(Users|home|tmp|etc|var)\/|\.(txt|md|pdf|docx?|xlsx?|png|jpe?g|mp3|mp4|zip|json|ts|js|py)\b)/;
 
-const ANSWER_LEADS =
-  /^(what is|what are|what does|what's|who is|who are|why|when|where|which|explain|define|meaning of|how does|how do|tell me about|is it true|difference between|calculate|compute|convert|translate|write|summarize|draft|review this|meaning)\b/i;
-
-const QUESTION_SHAPE = /\?$/;
+// Question shape across scripts: ? U+FF1F (CJK) U+061F (Arabic) U+037E (Greek).
+const QUESTION_SHAPE = /[?\uFF1F\u061F\u037E]\s*$/u;
 
 /**
- * Pure heuristic pass. Returns null when uncertain (caller may try one
- * cheap model call). Slash commands are never routed here.
+ * Pure structural pass. Returns null when uncertain (caller runs one cheap
+ * model call). Slash commands never route here. English-verb guessing was
+ * removed: it mis-routed other languages, so only paths and question marks
+ * shortcut; everything else asks the model.
  */
 export function heuristicIntent(text: string): Intent | null {
   const t = text.trim();
   if (!t || t.startsWith('/')) return null;
-  const answerLead = ANSWER_LEADS.test(t);
-  const actSignal = ACT_VERBS.test(t) || MY_STUFF.test(t) || PATH_LIKE.test(t);
-  // "how do I ..." with a computer object is action-ish; pure knowledge stays answer.
-  if (answerLead && !actSignal) return 'answer';
-  if (actSignal && !answerLead) return 'act';
-  if (answerLead && actSignal) {
-    // Knowledge-shaped but machine-targeted ("what's using my disk space?").
-    return /my\s+(disk|drive|storage|memory|cpu)/i.test(t) ? 'act' : 'answer';
-  }
-  // Bare question with no action signal → answer; statement otherwise → uncertain.
+  // Path-like mentions are action-ish regardless of language.
+  if (PATH_LIKE.test(t) && !QUESTION_SHAPE.test(t)) return 'act';
+  // Bare question with no path signal → answer; statement otherwise → uncertain.
   if (QUESTION_SHAPE.test(t)) return 'answer';
   return null;
 }
@@ -42,8 +33,10 @@ export const CLASSIFY_PROMPT =
   'CLARIFY if it is ambiguous and could change the machine. Reply with only that word. ' +
   'The request may be in any language — decide by meaning, not by English verbs. ' +
   'Examples: "abre mi archivo" -> ACT. "打开我的文件" -> ACT. "mở file của tôi" -> ACT. ' +
-  '"افتح الملف" -> ACT. "What is the capital of France?" -> ANSWER. ' +
-  '"Thủ đô của Pháp là gì?" -> ANSWER. "法国的首都是哪里？" -> ANSWER.\nRequest: ';
+  '"افتح الملف" -> ACT. "मेरी फ़ाइल खोलो" -> ACT. "What is the capital of France?" -> ANSWER. ' +
+  '"Thủ đô của Pháp là gì?" -> ANSWER. "法国的首都是哪里？" -> ANSWER. ' +
+  '"¿Cuál es la capital de Francia?" -> ANSWER. "फ्रांस की राजधानी क्या है?" -> ANSWER. ' +
+  '"ما هي عاصمة فرنسا؟" -> ANSWER.\nRequest: ';
 
 /** Parse a tiny model reply into an Intent; unparseable → clarify (safe). */
 export function parseIntentReply(reply: string): Intent {

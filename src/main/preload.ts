@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { IpcChannels } from '../shared/ipc-channels';
-import type { MemoryAction, MemoryPush, Mode, Settings, ExtAction } from '../shared/types';
+import type { MemoryAction, MemoryPush, Mode, Settings, ExtAction, TaskAction } from '../shared/types';
 import type { AgentEvent, ApprovalDecision } from './agent/types';
 
 export interface SendOpts {
@@ -10,6 +10,12 @@ export interface SendOpts {
   /** True when the user explicitly picked the mode pill (wins over intent routing). */
   explicit?: boolean;
   attachments?: Array<{ name: string; mime?: string; size?: number; dataBase64?: string; path?: string }>;
+  /** Ctrl+Enter: always push to the queue, even if a slot is free. */
+  queued?: boolean;
+  /** While-busy choice: spawn, queue, or replace the foreground task. */
+  taskAction?: 'spawn' | 'queue' | 'replace';
+  /** Queue priority (Shift+click sends high). */
+  priority?: 'normal' | 'high';
 }
 
 // why: raw chat + upsertTemplate stay main-only — the renderer sends via
@@ -104,6 +110,12 @@ const api = {
   attachClassify: (input: { path: string }) =>
     invoke(IpcChannels.attachClassify, input) as Promise<{ verdict: string; reason?: string }>,
   attachClear: (runId: string) => invoke(IpcChannels.attachClear, runId) as Promise<boolean>,
+  tasks: (a: TaskAction) => invoke(IpcChannels.tasks, a) as Promise<unknown>,
+  onTasksChanged: (cb: () => void) => {
+    const fn = () => cb();
+    ipcRenderer.on(IpcChannels.tasksChanged, fn);
+    return () => ipcRenderer.removeListener(IpcChannels.tasksChanged, fn);
+  },
   reveal: (dir: string) => invoke(IpcChannels.reveal, dir) as Promise<boolean>,
   runs: () => invoke(IpcChannels.runs),
   onRouteStatus: (cb: (ev: { id: string; status: 'doing' | 'answering' }) => void) => {

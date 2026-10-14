@@ -44,6 +44,15 @@ export const DEFAULT_SETTINGS: Settings = {
   suggestions: [...DEFAULT_SUGGESTIONS],
   launchAtLogin: false,
   locale: 'system',
+  taskMaxParallel: 2,
+  taskMaxQueued: 20,
+  taskAllowSubtasks: true,
+  taskAskBeforeSubtasks: true,
+  taskConfirmOnSubmit: true,
+  taskSubmitDefault: 'ask',
+  taskResume: 'ask',
+  taskNotifications: true,
+  taskPruneDays: 30,
 };
 
 export function validateSettings(s: Partial<Settings>): string[] {
@@ -91,6 +100,15 @@ export function validateSettings(s: Partial<Settings>): string[] {
   if (s.suggestions !== undefined && (!Array.isArray(s.suggestions) || s.suggestions.length > 8 || !s.suggestions.every((x) => typeof x === 'string' && x.trim()))) errors.push('suggestions must be up to 8 non-empty strings');
   if (s.launchAtLogin !== undefined && typeof s.launchAtLogin !== 'boolean') errors.push('launchAtLogin must be boolean');
   if (s.locale !== undefined && (typeof s.locale !== 'string' || !s.locale.trim() || s.locale.length > 20)) errors.push('locale must be a BCP-47 tag or "system"');
+  if (s.taskMaxParallel !== undefined && (typeof s.taskMaxParallel !== 'number' || s.taskMaxParallel < 1 || s.taskMaxParallel > 4)) errors.push('taskMaxParallel must be 1..4');
+  if (s.taskMaxQueued !== undefined && (typeof s.taskMaxQueued !== 'number' || s.taskMaxQueued < 1 || s.taskMaxQueued > 100)) errors.push('taskMaxQueued must be 1..100');
+  if (s.taskAllowSubtasks !== undefined && typeof s.taskAllowSubtasks !== 'boolean') errors.push('taskAllowSubtasks must be boolean');
+  if (s.taskAskBeforeSubtasks !== undefined && typeof s.taskAskBeforeSubtasks !== 'boolean') errors.push('taskAskBeforeSubtasks must be boolean');
+  if (s.taskConfirmOnSubmit !== undefined && typeof s.taskConfirmOnSubmit !== 'boolean') errors.push('taskConfirmOnSubmit must be boolean');
+  if (s.taskSubmitDefault !== undefined && !['ask', 'spawn', 'queue', 'replace'].includes(s.taskSubmitDefault)) errors.push('taskSubmitDefault must be ask, spawn, queue or replace');
+  if (s.taskResume !== undefined && !['ask', 'resume', 'discard'].includes(s.taskResume)) errors.push('taskResume must be ask, resume or discard');
+  if (s.taskNotifications !== undefined && typeof s.taskNotifications !== 'boolean') errors.push('taskNotifications must be boolean');
+  if (s.taskPruneDays !== undefined && (typeof s.taskPruneDays !== 'number' || s.taskPruneDays < 1 || s.taskPruneDays > 3650)) errors.push('taskPruneDays must be 1..3650');
   return errors;
 }
 

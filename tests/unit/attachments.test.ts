@@ -307,7 +307,7 @@ describe('send wiring: default instruction + image part + fake-provider answer',
     ])) as unknown as typeof fetch;
     const full = await streamChat('openai', {
       apiKey: 'k', model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'Describe the attached file(s).' }, { type: 'image', dataUrl: 'data:image/png;base64,AA', mimeType: 'image/png' }] }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Describe the attached files.' }, { type: 'image', dataUrl: 'data:image/png;base64,AA', mimeType: 'image/png' }] }],
       fetchFn: fake,
     });
     expect(full).toBe('a cat');
@@ -318,7 +318,7 @@ describe('UI strings exact + safe display', () => {
   it('keeps the exact strings the docs promise', () => {
     expect(ATTACH_STRINGS.dropHint).toBe('Drop to attach');
     expect(ATTACH_STRINGS.deleteAttachments).toBe('Delete attachments');
-    expect(ATTACH_STRINGS.defaultInstruction).toBe('Describe the attached file(s).');
+    expect(ATTACH_STRINGS.defaultInstruction).toBe('Describe the attached files.');
     expect(ATTACH_STRINGS.placeholderWithAttach).toBe('Add a note, Enter to send…');
     // why: the old two-paragraph notice and blanket secrets hint are gone;
     // the notice is one sentence decided by provider type (shared helper).

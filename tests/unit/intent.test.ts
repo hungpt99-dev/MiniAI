@@ -4,27 +4,25 @@ import {
 } from '../../src/main/agent/intent';
 
 describe('intent heuristic', () => {
-  it('routes computer actions to act', () => {
-    expect(heuristicIntent('find files I changed today')).toBe('act');
-    expect(heuristicIntent('Open my last downloaded file')).toBe('act');
-    expect(heuristicIntent('Organize Downloads by type')).toBe('act');
+  it('routes path-like mentions to act in any language', () => {
     expect(heuristicIntent('move report.pdf to Documents')).toBe('act');
-    expect(heuristicIntent('run npm test')).toBe('act');
-    expect(heuristicIntent('create notes.txt on my desktop')).toBe('act');
+    expect(heuristicIntent('mở file report.pdf giúp tôi')).toBe('act');
+    expect(heuristicIntent('打开report.pdf文件')).toBe('act');
   });
-  it('routes knowledge questions to answer', () => {
-    expect(heuristicIntent('explain what a mutex is')).toBe('answer');
+  it('routes questions to answer in any script', () => {
     expect(heuristicIntent('What is the capital of Peru?')).toBe('answer');
-    expect(heuristicIntent('calculate 18% tip on 64')).toBe('answer');
-    expect(heuristicIntent('write a haiku about rain')).toBe('answer');
-  });
-  it('treats machine-targeted analysis as act', () => {
-    expect(heuristicIntent("What's using my disk space?")).toBe('act');
+    expect(heuristicIntent('Thủ đô của Pháp là gì?')).toBe('answer');
+    expect(heuristicIntent('法国的首都是哪里？')).toBe('answer');
+    expect(heuristicIntent('ما هي عاصمة فرنسا؟')).toBe('answer');
   });
   it('returns null when uncertain or for slash input', () => {
     expect(heuristicIntent('/summarize this')).toBeNull();
     expect(heuristicIntent('')).toBeNull();
     expect(heuristicIntent('hmm')).toBeNull();
+    // English verbs alone never shortcut: the model decides by meaning.
+    expect(heuristicIntent('find files I changed today')).toBeNull();
+    expect(heuristicIntent('explain what a mutex is')).toBeNull();
+    expect(heuristicIntent('calculate 18% tip on 64')).toBeNull();
   });
 });
 
@@ -43,7 +41,7 @@ describe('intent model fallback', () => {
       expect(p).toContain(CLASSIFY_PROMPT.slice(0, 20));
       return 'ANSWER';
     };
-    expect(await classifyIntent('explain mutexes', { askModel })).toBe('answer');
+    expect(await classifyIntent('What is the capital of Peru?', { askModel })).toBe('answer');
     expect(calls).toBe(0);
     expect(await classifyIntent('hmm', { askModel })).toBe('answer');
     expect(calls).toBe(1);
@@ -63,6 +61,7 @@ describe('intent model fallback', () => {
     expect(CLASSIFY_PROMPT).toMatch(/打开我的文件/);
     expect(CLASSIFY_PROMPT).toMatch(/mở file của tôi/);
     expect(CLASSIFY_PROMPT).toMatch(/افتح الملف/);
+    expect(CLASSIFY_PROMPT).toMatch(/मेरी फ़ाइल खोलो/);
     expect(CLASSIFY_PROMPT).toMatch(/in any language/);
   });
   it('non-English requests fall through to the model call', async () => {
@@ -74,5 +73,11 @@ describe('intent model fallback', () => {
     expect(seen[0]).toContain('abre mi archivo');
     const askModel2 = async () => 'ANSWER';
     expect(await classifyIntent('法国的首都是哪里？', { askModel: askModel2 })).toBe('answer');
+    const seenHi: string[] = [];
+    const askHi = async (p: string) => { seenHi.push(p); return 'ACT'; };
+    expect(await classifyIntent('मेरी फ़ाइल खोलो', { askModel: askHi })).toBe('act');
+    expect(seenHi.length).toBe(1);
+    const askAr = async () => 'ANSWER';
+    expect(await classifyIntent('ما هي عاصمة فرنسا؟', { askModel: askAr })).toBe('answer');
   });
 });

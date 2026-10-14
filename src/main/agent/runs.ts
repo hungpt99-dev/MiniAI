@@ -12,6 +12,10 @@ export interface RunRecord {
   undoable: boolean;
   /** Execution engine; only built-in exists (unrelated to the purged settings key). */
   engine?: 'builtin';
+  /** Task family (Tasks view groups subtasks under their parent). */
+  taskId?: string;
+  parentId?: string | null;
+  origin?: string;
 }
 
 function runsFile(userDataPath?: string): string {

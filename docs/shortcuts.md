@@ -9,7 +9,9 @@ footer hints use the same mapping).
 | Stop run | `Ctrl+Alt+Esc` | `⌃⌥Esc` (Ctrl+Option+Esc) |
 | Switch Do/Ask | `Tab` | `Tab` |
 | Send | `Enter` | `Enter` |
+| Queue task ("do this later") | `Ctrl+Enter` | `Cmd+Enter` |
 | New line | `Shift+Enter` | `Shift+Enter` |
+| Reorder queued task (Tasks view) | `Alt+Up` / `Alt+Down` | `Alt+Up` / `Alt+Down` |
 | Stop / close | `Esc` | `Esc` |
 | Settings | (footer button) | `Cmd+,` |
 | Quit | (tray menu) | `Cmd+Q` |

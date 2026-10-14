@@ -81,6 +81,10 @@ If the hotkey is taken, change `hotkey` in settings. If the window disappears on
   Old `agentRuntime` / `agentBackend` / `engine` settings fall back to built-in
   and are purged on read. Details:
   [docs/architecture/local-agent.md](docs/architecture/local-agent.md).
+- Do mode runs tasks in the background: `Enter` while busy spawns in parallel,
+  `Ctrl/Cmd+Enter` queues, `/spawn` `/queue` `/tasks` `/cancel` `/clear-queue`;
+  agents split large jobs into `subtask_*` children with per-task approvals,
+  write locks, and family undo. Details: [docs/tasks.md](docs/tasks.md).
 - Slash commands and prompt templates: `/help` `/new` `/clear` `/model`
   (Ask-only) `/history` `/settings` `/log` `/extensions`; `/translate` `/rewrite`
   `/summarize` `/explain` `/analyze` `/reply`; workflows `/email-reply`
@@ -102,8 +106,8 @@ If the hotkey is taken, change `hotkey` in settings. If the window disappears on
   journaled per run and reversed in reverse order with precondition checks, never
   overwriting changed files, through the normal approval flow, never twice;
   `fs_trash` notes manual Recycle Bin restore; `shell_run` and MCP tools are never
-  undoable. New installs get a skippable 3-step onboarding (provider + key,
-  allowed folders, example prompts); existing installations skip it.
+  undoable. New installs get a skippable single-step onboarding (provider +
+  key); existing installations skip it.
 - Extensions: Agent-Skills-compatible skills, MCP servers (official SDK, stdio +
   Streamable HTTP/SSE), event hooks, and reusable workflows from `/extensions`.
   Everything installs OFF until reviewed; skills load progressively, MCP tools
@@ -134,8 +138,10 @@ extensions.
 | Configure providers and keys  | [Providers](docs/providers.md) · [Configuration](docs/configuration.md)                 |
 | Slash commands and workflows  | [Agents](docs/agents/README.md) · [Workflows](docs/agents/workflows.md)                  |
 | Do loop, tools, approvals     | [Local agent](docs/architecture/local-agent.md)                                          |
+| Tasks (spawn/queue/subtasks)  | [Tasks](docs/tasks.md) · [ADR 0007](docs/adr/0007-task-queue.md)                         |
 | Skills, MCP, hooks            | [Extensions](docs/architecture/extensions.md)                                            |
 | Popup, hotkey, platforms      | [Shortcuts](docs/shortcuts.md) · [Design](docs/design.md) · [Platforms](docs/platforms.md) |
+| Languages and localization    | [i18n](docs/i18n.md) · English + Vietnamese UI; intent packs for 15 locales |
 | Troubleshoot or check status  | [Troubleshooting](docs/development/troubleshooting.md) · [Status](docs/product/implementation-status.md) |
 | Architecture overview         | [Overview](docs/architecture/overview.md)                                                |
 
@@ -144,6 +150,8 @@ extensions.
 v0.1.0 pre-release / experimental.
 
 **Working:** popup / hotkey / tray, Ask + streaming + cancel, slash + templates, workflows, history, `Tab` switching, router, built-in Do loop, long-term memory.
+
+**Languages:** UI in English + Vietnamese (system-locale default, instant switch, RTL mirroring); memory intent + routing work in any language (15 fast-path packs, model decides verbatim); CJK/Thai/Arabic search, IME-safe composer, `Intl` dates/numbers. See [docs/i18n.md](docs/i18n.md).
 
 **Releases:** Windows portable verified (`release/Nexio-portable.exe`, nsis target configured); macOS dmg+zip (universal) build on a mac runner or via the release workflow. Unsigned builds work; signing/notarization needs owner credentials (see `docs/release.md`).
 

@@ -39,12 +39,13 @@ function fill(template: string, vars?: Record<string, string | number>): string 
 export function translate(
   dict: LocaleDict, fallback: LocaleDict, key: string,
   vars?: Record<string, string | number> & { count?: number },
+  locale?: string,
 ): string {
   try {
     const raw = dict[key] ?? fallback[key] ?? key;
     if (typeof raw === 'string') return fill(raw, vars);
     const n = typeof vars?.count === 'number' ? vars.count : 1;
-    const form = pluralKey(FALLBACK_LOCALE, n);
+    const form = pluralKey(locale || FALLBACK_LOCALE, n);
     const template = raw[form] ?? raw.other ?? Object.values(raw)[0] ?? key;
     return fill(String(template), vars);
   } catch {

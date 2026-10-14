@@ -9,6 +9,8 @@ import type {
   Settings,
   SlashMatch,
   SlashScope,
+  TaskAction,
+  TaskRow,
   Workflow,
 } from './types';
 export const IpcChannels = {
@@ -40,6 +42,8 @@ export const IpcChannels = {
   agentApprove: 'nexio:agent-approve',
   agentStop: 'nexio:agent-stop',
   agentLog: 'nexio:agent-log',
+  tasks: 'nexio:tasks',
+  tasksChanged: 'nexio:tasks-changed',
   agentPickFolder: 'nexio:agent-pick-folder',
   defaultFolders: 'nexio:default-folders',
   ext: 'nexio:ext',
@@ -72,7 +76,7 @@ export type IpcChannelValue = (typeof IpcChannels)[IpcChannelKey];
 /** Fire-and-forget renderer→main (ipcMain.on). Everything else invoke is request/response. */
 export const IpcSendKeys = ['chatCancel', 'resize', 'agentStop'] as const satisfies readonly IpcChannelKey[];
 /** Main→renderer pushes (sender.send); never handle/on registered. */
-export const IpcPushKeys = ['chatStream', 'agentEvent', 'ui', 'routeStatus', 'runSummary', 'popupShown', 'memoryEvent'] as const satisfies readonly IpcChannelKey[];
+export const IpcPushKeys = ['chatStream', 'agentEvent', 'ui', 'routeStatus', 'runSummary', 'popupShown', 'memoryEvent', 'tasksChanged'] as const satisfies readonly IpcChannelKey[];
 export const IpcSendChannels = IpcSendKeys.map((k) => IpcChannels[k]);
 export const IpcPushChannels = IpcPushKeys.map((k) => IpcChannels[k]);
 const sendPush = new Set<string>([...IpcSendKeys, ...IpcPushKeys]);
@@ -100,6 +104,12 @@ export interface SendOptions {
   requestId?: string;
   explicit?: boolean;
   attachments?: StagedAttachment[];
+  /** Submit routing: Ctrl+Enter always queues ("do this later"). */
+  queued?: boolean;
+  /** While-busy choice: spawn a separate task, queue it, or replace the foreground task. */
+  taskAction?: 'spawn' | 'queue' | 'replace';
+  /** Queue priority (Shift+click sends high). */
+  priority?: 'normal' | 'high';
 }
 
 export interface SlashEntryLike extends SlashMatch {
@@ -155,6 +165,8 @@ export interface IpcChannelMap {
   attachClassify: { args: [input: { path: string }]; result: { verdict: string; reason?: string } };
   attachClear: { args: [runId: string]; result: boolean };
   memory: { args: [a: MemoryAction]; result: unknown };
+  tasks: { args: [a: TaskAction]; result: unknown };
+  tasksChanged: { args: [{ rev: number }]; result: void };
   memoryEvent: { args: [{ runId?: string; requestId?: string; conversationId?: string; event: MemoryPush }]; result: void };
   locale: { args: []; result: { tag: string; dir: 'ltr' | 'rtl'; dict: Record<string, unknown>; fallback: Record<string, unknown>; available: Array<{ tag: string; name: string }> } };
 }

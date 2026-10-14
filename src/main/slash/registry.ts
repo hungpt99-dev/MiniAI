@@ -19,6 +19,11 @@ const BUILTINS: SlashEntry[] = [
   { trigger: '/remember', label: 'Remember', description: 'Remember this (usage: /remember <text>)', source: 'builtin', action: 'remember', scope: 'all' },
   { trigger: '/forget', label: 'Forget', description: 'Forget a memory (usage: /forget <text>)', source: 'builtin', action: 'forget', scope: 'all' },
   { trigger: '/incognito', label: 'Incognito', description: 'Toggle incognito chat (no history, no memory)', source: 'builtin', action: 'incognito', scope: 'all' },
+  { trigger: '/spawn', label: 'Spawn task', description: 'Run as a separate parallel task (usage: /spawn <text>)', source: 'builtin', action: 'spawn', scope: 'agent' },
+  { trigger: '/queue', label: 'Queue task', description: 'Add to the task queue (usage: /queue <text>)', source: 'builtin', action: 'queue', scope: 'agent' },
+  { trigger: '/tasks', label: 'Tasks', description: 'Open the Tasks view', source: 'builtin', action: 'tasks', scope: 'all' },
+  { trigger: '/cancel', label: 'Cancel task', description: 'Cancel a task (usage: /cancel <n>)', source: 'builtin', action: 'cancel', scope: 'all' },
+  { trigger: '/clear-queue', label: 'Clear queue', description: 'Clear the waiting queue (asks first)', source: 'builtin', action: 'clear-queue', scope: 'all' },
 ];
 
 function isSubsequence(query: string, target: string): boolean {

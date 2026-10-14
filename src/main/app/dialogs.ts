@@ -63,6 +63,29 @@ export async function withDialogLock<T>(
   }
 }
 
+/** Quit confirmation while tasks run (message/buttons localized by the caller). */
+export async function confirmQuitWithTasks(
+  win: BrowserWindow | null | undefined,
+  message: string,
+  quitLabel: string,
+  keepLabel: string,
+): Promise<boolean> {
+  try {
+    const r = await withDialogLock(win, () =>
+      dialog.showMessageBox({
+        type: 'question',
+        message,
+        buttons: [quitLabel, keepLabel],
+        defaultId: 1,
+        cancelId: 1,
+      }),
+    );
+    return r.response === 0;
+  } catch {
+    return true;
+  }
+}
+
 type BlurWindow = Pick<BrowserWindow, 'getChildWindows'> | null | undefined;
 
 /** True while a dialog is open, in the post-close grace window, or a child has focus. */

@@ -88,7 +88,7 @@ export interface Settings {
   launchAtLogin?: boolean;
   /** UI locale: BCP-47 tag or 'system'. Default 'system'. */
   locale?: string;
-  /** Master switch for long-term memory. Default false until onboarding asks. */
+  /** Master switch for long-term memory. Default false; enable in Settings. */
   memoryEnabled?: boolean;
   /** Per-kind opt-ins. Default all true once the master switch is on. */
   memoryKinds?: Record<MemoryKind, boolean>;
@@ -114,6 +114,24 @@ export interface Settings {
   memoryRuleApprovals?: Record<string, string>;
   /** Incognito: no history, no memory reads/writes, minimal run log. Default false. */
   incognito?: boolean;
+  /** Max parallel running tasks (scheduler, default 2, range 1..4). */
+  taskMaxParallel?: number;
+  /** Max queued top-level tasks (default 20). */
+  taskMaxQueued?: number;
+  /** Allow agents to create subtasks (default true). */
+  taskAllowSubtasks?: boolean;
+  /** Ask once before the first subtask_create per run (default true). */
+  taskAskBeforeSubtasks?: boolean;
+  /** Always ask when submitting while a task runs (default true; else stored default applies). */
+  taskConfirmOnSubmit?: boolean;
+  /** Submit-while-busy default: 'ask' | 'spawn' | 'queue' | 'replace' (default 'ask'). */
+  taskSubmitDefault?: 'ask' | 'spawn' | 'queue' | 'replace';
+  /** Resume prompt on start: 'ask' | 'resume' | 'discard' (default 'ask'). */
+  taskResume?: 'ask' | 'resume' | 'discard';
+  /** Task notifications (default true). */
+  taskNotifications?: boolean;
+  /** Prune terminal tasks/runs older than N days (default 30). */
+  taskPruneDays?: number;
 }
 
 /** Long-term memory kinds (main + renderer safe). */
@@ -157,6 +175,43 @@ export type MemoryPush =
   | { type: 'blocked'; reason: string }
   | { type: 'forgetlist'; q: string; matches: Array<{ id: string; text: string }> }
   | { type: 'onetap'; kind: 'fact' | 'preference'; text: string; hash: string; pin: boolean; lang: string };
+
+/** Single-channel task management (the tasks dispatch channel). Renderer-safe: plain data only. */
+export type TaskAction =
+  | { action: 'list' }
+  | { action: 'get'; id: string }
+  | { action: 'stop'; id: string }
+  | { action: 'stopAll' }
+  | { action: 'retry'; id: string }
+  | { action: 'remove'; id: string }
+  | { action: 'move'; id: string; dir: -1 | 1 }
+  | { action: 'priority'; id: string; priority: 'normal' | 'high' }
+  | { action: 'clearQueue' }
+  | { action: 'resumeAll' }
+  | { action: 'discardAll' }
+  | { action: 'undo'; id: string; family?: boolean }
+  | { action: 'counts' };
+
+/** Renderer-safe task row (mirrors the main Task, text already capped at save time). */
+export interface TaskRow {
+  id: string;
+  title: string;
+  prompt: string;
+  origin: 'user_spawn' | 'user_queue' | 'agent_subtask';
+  parentId: string | null;
+  depth: number;
+  priority: 'normal' | 'high';
+  state: 'queued' | 'running' | 'waiting_approval' | 'done' | 'failed' | 'stopped' | 'interrupted';
+  detail?: string;
+  createdAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  runId?: string;
+  resultSummary?: string;
+  /** Working folder snapshot (detail chips: Open folder). */
+  cwd?: string;
+  pendingApprovals?: Array<{ runId: string; callId: string; tool: string; summary: string }>;
+}
 
 /** Single-channel memory management (the memory dispatch channel). */
 export type MemoryAction =

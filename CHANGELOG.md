@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- Onboarding is now a single screen: provider tabs + one 44px API key
+  field (inside eye toggle and Test button, per-provider placeholder,
+  encrypted-device helper with key-page link, idle/loading/success/error
+  states), right-aligned Skip-for-now/Continue actions (Continue disabled
+  until the key is non-empty, Enter submits). The memory, folders and
+  example steps are gone — allowed folders stay editable in Settings.
+  Also fixed the footer tasks button painting the raw `tasks.title` key
+  before the locale loads (it now repaints on locale apply and no longer
+  wipes its badge spans).
+
+- Onboarding provider step: API key field group with per-provider
+  placeholders, show/hide toggle, encrypted-device helper + key-page link,
+  Test button with idle/loading/success/error states, one-row Skip/Continue
+  footer, Enter-to-Continue, and a boot locale load
+  so translated strings render instead of raw keys.
+
+- Tasks in Do mode: spawn parallel work (`Enter` while busy, `/spawn`),
+  queue it (`Ctrl/Cmd+Enter`, `/queue`), and agent-created `subtask_*`
+  children (capped, first-create confirmation, inherited-only permissions)
+  through one scheduler with write locks, per-task approvals, watchdog,
+  family undo, and a Tasks view. See `docs/tasks.md`.
+
+- Language-agnostic, globally ready: no per-language regex in the memory or
+  router decision path (data-driven fast-path packs for 15 locales + one
+  model call that keeps the user's own words with a BCP-47 tag; offline
+  falls back to `/remember`/`/forget`); en + vi UI locales with ICU
+  plurals/placeholders, no-restart switching, RTL mirroring, per-script
+  fonts, `Intl` dates/numbers/sizes/relative times, grapheme-safe limits,
+  NFC + trigram CJK search, IME-safe composer, localized errors/notices;
+  `npm run lint` and `npm run i18n:check` guard parity in CI. Remaining
+  English-only spots are listed in `docs/i18n.md`. See `docs/i18n.md` and
+  `docs/memory.md`.
+
 - Memory recall honesty: the model must never claim it will remember
   something unless a save succeeded (prompt rule + live memory status);
   first-person statements ("my name is …", "tôi tên là …") get a one-tap

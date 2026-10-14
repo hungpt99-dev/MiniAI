@@ -116,6 +116,21 @@
   Run logs record mode, tool name/path/size (no contents), blocks and
   redactions. Ask never enters the undo journal.
 
+## Tasks (no unattended risky actions)
+
+- Nothing auto-approves: every risky call parks its task in `waiting_approval`
+  (no timeout) and waits for the user's card in that task's own view, a footer
+  chip, and a notification naming the tool + exact action (never file contents).
+  Hidden-window tasks follow the same rules.
+- Agents can only create subtasks via parent-bound `subtask_*` tools (Do only,
+  risk write, never visible in Ask). Forged cross-parent or user-level calls
+  are rejected; subtasks inherit roots/rules, never more; prompts are
+  sanitized, capped, and secrets-scanned; untrusted content arrives as data,
+  never instructions.
+- Write locks serialize same-path writers across all tasks; approvals,
+  lock waits (paths only), and terminal states land in per-task run logs.
+  Notifications carry titles, never contents. See `docs/tasks.md`.
+
 ## Reporting a vulnerability
 
 Report via GitHub private security advisory. Do not open a public GitHub Issue.

@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { MemoryKind } from '../../shared/types';
 import { scanSecretsText } from '../../shared/attachments';
+import { graphemeLength, takeGraphemes } from '../../shared/text';
 import { blockedMemoryText } from './types';
 
 export type MemoryIntent = 'remember' | 'forget' | 'none';
@@ -78,10 +79,11 @@ function applyStrip(text: string, pack: IntentPack): string {
   let out = text.trim();
   for (const pattern of pack.strip || []) {
     try {
-      out = out.replace(new RegExp(pattern, 'i'), '');
+      out = out.replace(new RegExp(pattern, 'iu'), '');
     } catch { /* bad contributor regex never breaks matching */ }
   }
-  return out.trim().replace(/^[.,;:!?]+|[.,;:!?]+$/g, '').trim();
+  // why: strip ASCII + CJK fullwidth + Arabic/Greek question marks, not just ASCII.
+  return out.trim().replace(/^[.,;:!?。、！？，；：·…\uFF01\uFF1F\uFF0C\uFF1B\u061F\u037E]+|[.,;:!?。、！？，；：·…\uFF01\uFF1F\uFF0C\uFF1B\u061F\u037E]+$/gu, '').trim();
 }
 
 function phraseHit(lowered: string, phrases: string[], locale: string): boolean {
@@ -114,7 +116,7 @@ function kindFor(pack: IntentPack, text: string, locale: string): MemoryKind {
  */
 export function matchFastPath(text: string, locales: string[]): FastMatch | null {
   const t = text.trim();
-  if (!t || t.startsWith('/') || /\?\s*$/.test(t)) return null;
+  if (!t || t.startsWith('/') || /[?\uFF1F\u061F\u037E]\s*$/u.test(t)) return null;
   const seen = new Set<string>();
   for (const loc of [...locales, 'en']) {
     const tag = String(loc || '').toLowerCase().replace(/_/g, '-').split('-')[0] || 'en';
@@ -138,16 +140,16 @@ export function matchFastPath(text: string, locales: string[]): FastMatch | null
 const CLASSIFY_PROMPT = [
   'You classify one user message for a memory feature. Reply with exactly one JSON object, no other text.',
   'Schema: {"intent":"remember"|"forget"|"none","text":"...","kind":"preference"|"fact"|"folder_rule"|"procedure","language":"<BCP-47>","pin":true|false}',
-  '- intent "remember": the user states a durable fact about themselves (name, preference, rule, routine) OR explicitly asks to remember something. "text" is the thing itself in the user\'s own words (strip command wrappers like "remember that"; for names use the form "Your name is X"), max 300 chars.',
+  '- intent "remember": the user states a durable fact about themselves (name, preference, rule, routine) OR explicitly asks to remember something. "text" is the thing itself in the user\'s own words, exactly as written (strip command wrappers like "remember that"; never translate, never rewrite into English, keep the original script), max 300 grapheme clusters.',
   '- "pin": true for identity claims (names), otherwise false.',
   '- intent "forget": the user asks to forget or delete a memory.',
   '- intent "none": questions (anything ending in ?, "do you remember...?"), requests to act, chit-chat.',
   '- "language": BCP-47 tag of the message (en, vi, es, zh, ...). NEVER invent facts: base "text" only on the message below.',
   'Examples:',
-  '"my name is Ana" -> {"intent":"remember","text":"Your name is Ana","kind":"fact","language":"en","pin":true}',
-  '"tôi tên là Hưng" -> {"intent":"remember","text":"Your name is Hưng","kind":"fact","language":"vi"}',
+  '"my name is Ana" -> {"intent":"remember","text":"my name is Ana","kind":"fact","language":"en","pin":true}',
+  '"tôi tên là Hưng" -> {"intent":"remember","text":"tôi tên là Hưng","kind":"fact","language":"vi","pin":true}',
   '"Recuerda que hablo español" -> {"intent":"remember","text":"hablo español","kind":"preference","language":"es"}',
-  '"我叫王芳" -> {"intent":"remember","text":"Your name is 王芳","kind":"fact","language":"zh"}',
+  '"我叫王芳" -> {"intent":"remember","text":"我叫王芳","kind":"fact","language":"zh","pin":true}',
   '"do you remember my name?" -> {"intent":"none","text":"","kind":"fact","language":"en"}',
   '"delete that file" -> {"intent":"none","text":"","kind":"fact","language":"en"}',
   'Message (user-written, the ONLY source):',
@@ -189,9 +191,10 @@ export async function classifyMemoryIntent(
     return null;
   }
   const intent = o.intent === 'remember' || o.intent === 'forget' ? o.intent : 'none';
-  let outText = String(o.text || '').trim().slice(0, 300);
+  // why: grapheme cap keeps emoji/combining marks whole (never UTF-16 slice).
+  const outText = takeGraphemes(String(o.text || '').trim(), 300);
   const language = typeof o.language === 'string' && LANG_RE.test(o.language) ? o.language : 'und';
-  if (intent === 'none' || !outText) return { intent: 'none', text: '', kind: 'fact', language };
+  if (intent === 'none' || !outText || graphemeLength(outText) === 0) return { intent: 'none', text: '', kind: 'fact', language };
   const blocked = blockedMemoryText(outText, scanSecretsText);
   if (blocked) return { intent: 'none', text: '', kind: 'fact', language, blocked };
   return { intent, text: outText, kind: validKind(o.kind), language, pin: o.pin === true };

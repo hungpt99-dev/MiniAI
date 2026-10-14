@@ -90,10 +90,10 @@ describe('view-slash handler: before router/agent, cleared, palette hidden', () 
   it('renderer handles view slashes before the run guard + footer stays view-only', () => {
     const src = appJs();
     const early = src.indexOf('View-only slashes work during a run');
-    const guard = src.indexOf('if (agentRunning()) return; // one run at a time');
+    const guard = src.indexOf('if (agentRunning() && !submitOpts.queued && !submitOpts.taskAction) return; // foreground busy');
     expect(early).toBeGreaterThan(-1);
     expect(guard).toBeGreaterThan(early);
-    for (const t of ['/extensions', '/settings', '/history', '/log']) expect(src.slice(early, guard)).toContain(t);
+    for (const t of ['/extensions', '/settings', '/history', '/log', '/tasks']) expect(src.slice(early, guard)).toContain(t);
     const extLine = src.slice(src.indexOf("if ($('btn-ext'))"), src.indexOf('Launcher (appended)'));
     for (const s of ['nexio.send', 'agentStart', 'slashResolve']) expect(extLine).not.toContain(s);
   });
@@ -200,11 +200,12 @@ describe('memory view: single-view mount, list/filter/edit/pin/forget, empty sta
   it('run-view rows: Used N memories (collapsed), Remembered with Undo/Edit, suggestions with Save/Dismiss', () => {
     const src = appJs();
     expect(src).toContain('function renderMemoryUsed');
-    expect(src).toContain('Used ${ev.count}');
-    expect(src).toContain('Remembered');
-    expect(src).toContain('Remember: ${c.text}?');
-    expect(src).toContain('Replace the old memory?');
-    expect(src).toContain('Not saved:');
+    expect(src).toContain("t('memory.used'");
+    expect(src).toContain("t('memory.usedOne')");
+    expect(src).toContain("t('memory.remembered'");
+    expect(src).toContain("t('memory.askSave'");
+    expect(src).toContain('memory.replacePrompt');
+    expect(src).toContain('memory.notSaved');
     // memory_used never adopts a run; pushes attach under the answer
     expect(src).toContain("if (event.type === 'memory_used') return void renderMemoryUsed(runId, event)");
     expect(src).toContain('function memoryHost');
@@ -220,8 +221,8 @@ describe('memory view: single-view mount, list/filter/edit/pin/forget, empty sta
     expect(src).toContain('title="${esc(ev.tool)}"');
     // one-tap row with Save / Not now and the master-off turn-on flow
     expect(src).toContain('function renderOneTapRow');
-    expect(src).toContain('Remember: ${ev.text}?');
-    expect(src).toContain('Memory is off. Turn it on?');
+    expect(src).toContain("t('memory.askSave'");
+    expect(src).toContain('memory.turnOnAsk');
     expect(src).toContain('memoryEnabled: true');
     expect(src).toContain("memCall({ action: 'dismiss', hash: ev.hash })");
   });
@@ -229,8 +230,8 @@ describe('memory view: single-view mount, list/filter/edit/pin/forget, empty sta
     const src = appJs();
     const say = src.slice(src.indexOf('function say('), src.indexOf('function say(') + 200);
     expect(say).toContain('attach-live');
-    expect(src).toContain("say('Memory saved')");
-    expect(src).toContain('say(`Remembered:');
+    expect(src).toContain("t('memory.savedSr')");
+    expect(src).toContain("t('memory.remembered'");
   });
   it('slash commands clear input and never route: /memory /remember /forget /incognito', () => {
     const src = appJs();
@@ -240,17 +241,16 @@ describe('memory view: single-view mount, list/filter/edit/pin/forget, empty sta
     expect(src).toContain('function runIncognitoCommand');
     expect(src).toContain("if (early === '/memory') return void openMemoryView()");
   });
-  it('settings Memory section, onboarding step, incognito badge', () => {
+  it('settings Memory section, onboarding single screen, incognito badge', () => {
     const h = html();
     for (const id of ['id="set-mem"', 'id="set-mem-kinds"', 'id="set-mem-suggest"', 'id="set-mem-semantic"', 'id="set-mem-ask"', 'id="set-incognito"', 'id="mem-info"', 'id="btn-mem-export"', 'id="btn-mem-forgetall"', 'id="mem-import-text"', 'id="incog-badge"']) {
       expect(h).toContain(id);
     }
     const src = appJs();
-    expect(src).toContain('Step ${obStep + 1} of 4');
-    expect(src).toContain('Let Nexio remember things you tell it?');
-    expect(src).toContain('Yes, ask me each time');
-    expect(src).toContain('Only when I say "remember"');
-    expect(src).toContain('memoryOneTap: true');
+    expect(src).not.toContain('var OB_STEPS = ');
+    expect(src).not.toContain('ob-progress');
+    expect(src).toContain('onboard.title');
+    expect(src).toContain('memoryOneTap === false');
     expect(src).toContain('function paintIncognito');
     // settings status line reflects the three states
     expect(src).toContain('On: asks before saving');
@@ -260,11 +260,12 @@ describe('memory view: single-view mount, list/filter/edit/pin/forget, empty sta
 describe('settings: one switch row per boolean, helper notes, chips, footer chip', () => {
   it('every boolean setting renders a visible track (root cause: hidden input, track span missing)', () => {
     const h = html();
-    // all nine boolean rows carry the paint span; the native input is always hidden by CSS
+    // all thirteen boolean rows carry the paint span; the native input is always hidden by CSS
     const tracks = h.split('switch-track" aria-hidden').length - 1;
-    expect(tracks).toBe(9);
+    expect(tracks).toBe(13);
     for (const id of ['set-sendtemp', 'set-askread', 'set-reqapprove', 'set-mem', 'set-mem-suggest',
-      'set-mem-semantic', 'set-mem-ask', 'set-incognito', 'set-login']) {
+      'set-mem-semantic', 'set-mem-ask', 'set-incognito', 'set-login',
+      'set-task-subtasks', 'set-task-asksub', 'set-task-confirm', 'set-task-notify']) {
       const at = h.indexOf(`id="${id}"`);
       expect(at).toBeGreaterThan(-1);
       expect(h.slice(at, at + 400)).toContain('switch-track');
@@ -288,7 +289,7 @@ describe('settings: one switch row per boolean, helper notes, chips, footer chip
     const src = appJs();
     expect(src).toContain("lab.className = 'chip-toggle'");
     expect(src).toContain('chip-check');
-    expect(src).toContain("box.setAttribute('aria-label', 'Remember '");
+    expect(src).toContain('toLocaleLowerCase');
     expect(src).toContain('aria-disabled');
     expect(src).not.toContain("lab.className = 'fld check';\n    lab.innerHTML = `<span class=\"switch-tx\"");
     const css = read('src/renderer/styles.css');
@@ -394,7 +395,7 @@ describe('footer: always-visible panel shell, once, send disabled when empty', (
     expect(block).toContain('flex: none');
     expect(block).toContain('white-space: nowrap');
     expect(css).toContain('.f-hints { display: flex; align-items: center; gap: 14px; min-width: 0; overflow: hidden; }');
-    expect(css).toContain('.f-actions { margin-left: auto; display: flex; align-items: center; gap: 4px; flex: none; }');
+    expect(css).toContain('.f-actions { margin-inline-start: auto; display: flex; align-items: center; gap: 4px; flex: none; }');
     expect(css).toContain('.hint { display: inline-flex; align-items: center; gap: 6px;');
     expect(css).toContain('.badge { display: inline-flex; align-items: center; gap: 6px; height: 22px;');
     expect(css).toContain('.f-sep { width: 1px; height: 14px; background: var(--divider);');

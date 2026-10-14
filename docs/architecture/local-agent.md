@@ -55,6 +55,10 @@ when configured. Writes, `app_open` and `shell_run` are `askSafe: false`.
 | `memory_save` | write | false | Ask-blocked as a tool; Ask saves only via the confirmation row/card path |
 | `memory_update` | write | false | same rules as save |
 | `memory_forget` | write | false | multi-delete lists items on the card |
+| `subtask_create` | write | false | Do only, parent-bound; one confirmation per run, then capped silent creates |
+| `subtask_list` | write | false | own subtasks only; forged ids rejected |
+| `subtask_result` | write | false | finished-subtask status + summary, own subtasks only |
+| `subtask_cancel` | write | false | own subtasks only |
 
 ## Ask mode (read-only)
 

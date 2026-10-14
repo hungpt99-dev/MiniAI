@@ -7,6 +7,14 @@ export interface ToolContext {
   cwd: string;
 }
 
+/** Thrown out of the agent loop when a task must park (write lock held by another task). */
+export class TaskParkedError extends Error {
+  constructor(public reason: string) {
+    super(`task-parked: ${reason}`);
+    this.name = 'TaskParkedError';
+  }
+}
+
 export interface ToolResult {
   ok: boolean;
   output: string;

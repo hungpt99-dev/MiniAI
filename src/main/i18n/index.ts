@@ -89,7 +89,7 @@ export function getLocaleTag(): string {
 
 /** Translate in the current locale (English fallback). Never throws. */
 export function t(key: string, vars?: Record<string, string | number> & { count?: number }): string {
-  return translate(loadDict(currentTag), enDict(), key, vars);
+  return translate(loadDict(currentTag), enDict(), key, vars, currentTag);
 }
 
 /** Is this an RTL UI locale (mirrors layout via <html dir>). */
