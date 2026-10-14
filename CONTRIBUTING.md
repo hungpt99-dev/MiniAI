@@ -11,8 +11,8 @@ npx vitest run
 ```
 
 Requires Node >= 22.5 for tests (`node:sqlite` via
-`process.getBuiltinModule`). See README Known Limitation for the
-Electron 33 / Node 20 packaging caveat.
+`process.getBuiltinModule`). The packaged app (Electron 37 / Node 22)
+opens SQLite fine.
 
 ## Building
 

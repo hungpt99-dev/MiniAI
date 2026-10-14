@@ -30,5 +30,5 @@ Verified from source; packaged-SQLite caveat in main README.
 
 | Area | Detail |
 |---|---|
-| Packaged SQLite | Electron 33 bundles Node 20; `node:sqlite` needs 22.5+ — packaged app fails to open DB. Documented, not fixed. |
+| Packaged SQLite | Resolved by the Electron 37 upgrade (bundled Node 22.21 ≥ 22.5): Windows portable launches with working `node:sqlite`. |
 | Tray icon | `assets/icon.png` + `assets/tray/` sizes; macOS `Nexio-Template` pair. |

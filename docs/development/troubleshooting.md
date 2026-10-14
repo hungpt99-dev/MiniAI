@@ -33,10 +33,11 @@ Full kind table, recovery rules, and per-provider notes: `docs/providers.md`.
   child env from your login shell, but only zsh/bash login shells are read.
   Launching from a terminal once also refreshes the cached env.
 
-## SQLite / Electron blocker (known limitation)
+## SQLite runtime requirement (resolved)
 
 `src/main/db/sqlite.ts` loads `node:sqlite` via
 `process.getBuiltinModule`, which requires Node 22.5+.
-Electron 33.4.11 bundles Node 20.18.x, so the **packaged app fails
-to open SQLite**. Dev and tests on Node >= 22.5 work. Documented;
-not fixed — upgrading Electron is a separate decision.
+Electron 37 bundles Node 22.21.x, so the **packaged app opens SQLite
+fine** (verified: Windows portable launches, exit 0, no DB errors).
+Dev and tests on Node >= 22.5 work. The old Electron 33 / Node 20
+blocker is gone with the Electron 37 upgrade.

@@ -143,13 +143,11 @@ extensions.
 
 v0.1.0 pre-release / experimental.
 
-**Working:** popup / hotkey / tray, Ask + streaming + cancel, slash + templates, workflows, history, `Tab` switching, router, built-in Do loop.
+**Working:** popup / hotkey / tray, Ask + streaming + cancel, slash + templates, workflows, history, `Tab` switching, router, built-in Do loop, long-term memory.
 
-**Planned:** installer release.
+**Releases:** Windows portable verified (`release/Nexio-portable.exe`, nsis target configured); macOS dmg+zip (universal) build on a mac runner or via the release workflow. Unsigned builds work; signing/notarization needs owner credentials (see `docs/release.md`).
 
 **Known issues:**
-
-- Packaged app fails to open SQLite: Electron 33 bundles Node 20.18.x, but `node:sqlite` needs 22.5+. Dev and tests on Node >= 22.5 work.
 
 **Screenshots wanted:** brand assets ship in `assets/` (icon, banner, social preview); no app screenshots exist yet. Contributions welcome for: popup, slash palette, workflow run. GitHub social preview is a manual upload (no automation): Repository Settings > General > Social preview > Upload `assets/social-preview.png` (1280x640, <1MB).
 

@@ -36,3 +36,6 @@ No per-architecture native rebuilds are needed beyond Electron itself.
 `.github/workflows/ci.yml` builds + tests on `windows-latest`, `macos-latest`
 (arm64) and `macos-13` (x64 Intel check): `npm ci`, typecheck, tests, full
 build, unsigned `electron-builder --dir` smoke, artifacts upload.
+`.github/workflows/release.yml` runs on `v*` tags: Windows nsis + portable,
+macOS universal dmg + zip, unsigned unless signing secrets are set,
+artifacts uploaded per OS.

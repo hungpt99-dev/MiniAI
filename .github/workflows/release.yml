@@ -1,0 +1,45 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            args: --win nsis portable
+            artifact: release/*.exe
+          # Universal dmg+zip (arm64+x64) builds on one mac runner via
+          # electron-builder.yml `arch: [universal]`.
+          - os: macos-latest
+            args: --mac dmg zip
+            artifact: release/*.{dmg,zip}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run assets
+      - run: npm run typecheck
+      - run: npx vitest run
+      - run: npm run build
+      # Unsigned (no CSC_* secrets): Gatekeeper/SmartScreen will warn.
+      # With signing secrets set, electron-builder picks them up automatically.
+      - run: npx electron-builder ${{ matrix.args }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexio-${{ matrix.os }}
+          path: ${{ matrix.artifact }}

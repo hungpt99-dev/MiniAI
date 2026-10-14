@@ -1,14 +1,13 @@
 # AGENTS.md — Nexio
 
 Popup AI assistant (BYOK), Electron. Status: v0.1.0, Windows 10/11 +
-macOS 13+ (arm64/x64), pre-remote. Packaged app cannot open SQLite —
-see README Known Limitation.
+macOS 13+ (arm64/x64), pre-remote.
 
 ## Stack
 
-Electron 33.4.11 (Node 20.18.x, ABI 130), TypeScript 5.6, vitest 2.1.
+Electron 37.10.3 (Node 22.21.x, ABI 137), TypeScript 5.6, vitest 2.1.
 Zero runtime deps. `node:sqlite` via `process.getBuiltinModule`
-(requires Node 22.5+).
+(requires Node 22.5+) — works in the packaged app too.
 
 ## Dir map
 

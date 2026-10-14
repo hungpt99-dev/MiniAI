@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Both-OS releases: Electron 37 bundles Node 22, so the packaged app opens
+  SQLite fine — the old Electron 33 blocker is gone (docs updated). Windows
+  portable verified locally; new `release.yml` builds Windows nsis+portable
+  and macOS universal dmg+zip on `v*` tags (unsigned without signing
+  secrets). `package.json` now declares MIT.
+
 - Long-term memory (off by default): preferences, facts, folder rules,
   procedures and auto-expiring episodes in the app SQLite DB (FTS5 search,
   safeStorage encryption when available), retrieved per run (8 items,
