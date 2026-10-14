@@ -15,6 +15,18 @@ Settings live in the app SQLite DB (`getSettings`/`updateSettings` in
 | `askReadEnabled` | `true` | Ask mode may read files and the system (read-only). `false` returns Ask to plain chat with no tools. |
 | `askMcpTools` | `[]` | MCP full tool names (`mcp__server__tool`) allowed in Ask. Each also needs a trusted server and a read-only tool; default off. |
 | `askReadNoticeDismissed` | `{}` | Per-provider first-use Ask read notice (remote providers only). |
+| `memoryEnabled` | `false` | Master switch for long-term memory (asks in onboarding). |
+| `memoryKinds` | all `true` | Per-kind opt-ins: preference, fact, folder_rule, procedure, episode. |
+| `memorySuggest` | `false` | Suggest memories after runs (user messages only, one cheap call). |
+| `memorySemantic` | `false` | Reserved: retrieval stays FTS keyword search until embeddings are wired. |
+| `memoryUseInAsk` | `true` | Retrieve memory in Ask mode (read-only). |
+| `memoryMaxItems` | `500` | 10–5000 stored memories; full asks for cleanup, never drops. |
+| `memoryEpisodeDays` | `30` | Episode expiry, 1–365 days. |
+| `memoryStaleDays` | `180` | Unused non-pinned items marked stale for review, 7–3650 days. |
+| `memoryDismissed` | `[]` | Dismissed suggestion hashes (never proposed again). |
+| `memoryNoticeDismissed` | `{}` | Per-provider memory privacy notice. |
+| `memoryRuleApprovals` | `{}` | Approved `.nexio/rules.md` never-touch lines (path → hash). |
+| `incognito` | `false` | No history, no memory reads/writes, minimal run log (`/incognito`). |
 | `agentMaxCalls` | `25` | 1–100 tool calls per run. |
 | `sendTemperature` | `true` | Custom provider only: send `temperature`. Off for strict local servers. |
 | `compatibleImages` | `auto` | Custom provider only: image support `auto` (probe) / `on` / `off`. Off holds images back with the non-vision notice. |

@@ -2,6 +2,8 @@ import type {
   ChatMessage,
   Conversation,
   ExtAction,
+  MemoryAction,
+  MemoryPush,
   Mode,
   PromptTemplate,
   Settings,
@@ -52,6 +54,8 @@ export const IpcChannels = {
   undo: 'nexio:undo',
   reveal: 'nexio:reveal',
   runs: 'nexio:runs',
+  memory: 'nexio:memory',
+  memoryEvent: 'nexio:memory-event',
   attachPick: 'nexio:attach-pick',
   attachProcess: 'nexio:attach-process',
   attachClassify: 'nexio:attach-classify',
@@ -67,7 +71,7 @@ export type IpcChannelValue = (typeof IpcChannels)[IpcChannelKey];
 /** Fire-and-forget renderer→main (ipcMain.on). Everything else invoke is request/response. */
 export const IpcSendKeys = ['chatCancel', 'resize', 'agentStop'] as const satisfies readonly IpcChannelKey[];
 /** Main→renderer pushes (sender.send); never handle/on registered. */
-export const IpcPushKeys = ['chatStream', 'agentEvent', 'ui', 'routeStatus', 'runSummary', 'popupShown'] as const satisfies readonly IpcChannelKey[];
+export const IpcPushKeys = ['chatStream', 'agentEvent', 'ui', 'routeStatus', 'runSummary', 'popupShown', 'memoryEvent'] as const satisfies readonly IpcChannelKey[];
 export const IpcSendChannels = IpcSendKeys.map((k) => IpcChannels[k]);
 export const IpcPushChannels = IpcPushKeys.map((k) => IpcChannels[k]);
 const sendPush = new Set<string>([...IpcSendKeys, ...IpcPushKeys]);
@@ -149,6 +153,8 @@ export interface IpcChannelMap {
   attachProcess: { args: [input: { runId: string; name: string; dataBase64: string }]; result: { id: string; name: string; mime: string; size: number; kind: string; width?: number; height?: number; previewDataUrl?: string; sha256: string; error?: string } };
   attachClassify: { args: [input: { path: string }]; result: { verdict: string; reason?: string } };
   attachClear: { args: [runId: string]; result: boolean };
+  memory: { args: [a: MemoryAction]; result: unknown };
+  memoryEvent: { args: [{ runId?: string; requestId?: string; conversationId?: string; event: MemoryPush }]; result: void };
 }
 
 // why: every channel key needs payload/result types or the map drifts from IpcChannels.

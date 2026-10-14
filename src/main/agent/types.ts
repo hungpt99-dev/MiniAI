@@ -46,7 +46,9 @@ export type AgentEvent =
   | { type: 'text_delta'; text: string }
   | { type: 'done'; summary: string }
   | { type: 'error'; message: string }
-  | { type: 'stopped' };
+  | { type: 'stopped' }
+  /** Long-term memory used for this run (ids only, never text). */
+  | { type: 'memory_used'; count: number; ids: string[] };
 
 export type ApprovalDecision = 'allow-once' | 'deny' | 'always';
 
@@ -83,6 +85,8 @@ export interface PolicyContext {
   alwaysAllow: AlwaysRule[];
   requireApprovalForWrites: boolean;
   homeDir: string;
+  /** Extra hard-deny paths from enforced memory prohibitions (user's own "never touch" rules). */
+  extraProtected?: string[];
 }
 
 /** Plain history seed from the conversation DB (tool fidelity lives in tools-chat AgentMsg). */

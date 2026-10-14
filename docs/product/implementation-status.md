@@ -17,6 +17,14 @@ Verified from source; packaged-SQLite caveat in main README.
 
 | Do loop | Built-in tool loop in main, approvals, redacted JSONL + runs.jsonl |
 | Ask loop | Same loop, read-only: askSafe tools only, MODE_READ_ONLY guard, 8 calls / 60 s, no approvals, secrets redacted |
+| Memory | Local SQLite (memories/FTS/events), retrieval ≤8 items/~1200 tokens, enforced prohibitions, incognito; embeddings reserved |
+
+## Planned / known gaps
+
+| Area | Detail |
+|---|---|
+| Semantic search | Setting exists; retrieval stays FTS until a provider/local embeddings backend is wired. |
+| Project scopes | Memory scope type exists; no project ids flow from the app yet. |
 
 ## Planned / known gaps
 

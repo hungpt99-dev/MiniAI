@@ -23,6 +23,30 @@
 - No telemetry found in the codebase; network calls go only to
   configured providers.
 
+## Long-term memory (injection rule + Ask exception)
+
+- Memory text is encrypted at rest when `safeStorage` is available,
+  plaintext otherwise (Settings > Memory says which). Run logs record
+  memory ids and kinds only, never text.
+- Untrusted content (files, web pages, attachments, images, MCP output) can
+  NEVER create, edit or delete memories: a `memory_save`/`update`/`forget`
+  tool call following any untrusted read forces the confirmation card
+  ("Requested after reading \<source\>"), and every candidate passes the
+  secrets/PII scanner ("Not saved: looks like a secret").
+- `memory_save`/`update`/`forget` are `askSafe: false` like all writes, with
+  one documented exception: in Ask mode they stay blocked as tools — saving
+  happens only through the explicit user confirmation row/card path, which
+  writes via direct IPC to Nexio's own store (never user files) and never
+  executes a model tool call.
+- Retrieved memories are sent to the model only as a scoped `<user_memory>`
+  block (≤8 items, ~1,200 tokens), never the whole store, and never into
+  web search/fetch queries or MCP calls unless the user asked. Stored
+  memories are user-written data treated as background context, not
+  instructions — the prompt says so, and the current message wins conflicts.
+- Memory is per OS user (app data path), never shared across accounts.
+  Incognito mode performs no memory reads or writes and keeps no history.
+  "Forget everything" (typed confirmation) wipes memories and audit rows.
+
 ## macOS permissions (TCC)
 
 - Reading Desktop, Documents, Downloads, iCloud Drive and removable volumes

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Long-term memory (off by default): preferences, facts, folder rules,
+  procedures and auto-expiring episodes in the app SQLite DB (FTS5 search,
+  safeStorage encryption when available), retrieved per run (8 items,
+  ~1,200 tokens) as a `<user_memory>` block, user-approved "never touch"
+  rules enforced as permission paths, explicit "remember …" saves with
+  Undo/Edit rows, opt-in suggestion chips from user messages only, Memory
+  view + Settings section, `/memory /remember /forget /incognito`, and an
+  incognito mode with no history/memory. Untrusted content can never write
+  memories (confirmation card after any untrusted read; Ask writes blocked
+  except via the confirmation path). See `docs/memory.md` and
+  `docs/adr/0006-local-memory.md`. Semantic search stays FTS until an
+  embeddings backend is wired.
+
 - Ask mode is now read-only with teeth: the same agent loop runs with only
   `askSafe` read tools (`fs_search fs_read fs_list apps_list clipboard_read
   attachment_list attachment_read skill_load web_search web_fetch`), a dispatcher

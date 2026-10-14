@@ -1,7 +1,7 @@
 // Single-view state for the Nexio popup (renderer-safe, pure logic only).
 // The popup mounts exactly one view node inside .view; all switches go
 // through openView/goBack so Esc/Back return to returnTo. See app.js showView.
-export type ViewName = 'idle' | 'palette' | 'run' | 'settings' | 'extensions' | 'history' | 'onboard';
+export type ViewName = 'idle' | 'palette' | 'run' | 'settings' | 'extensions' | 'history' | 'memory' | 'onboard';
 
 export interface ViewState {
   view: ViewName;
@@ -27,7 +27,7 @@ export function goBack(state: ViewState, hasRun: boolean): ViewState {
   return { view: t, returnTo: state.returnTo };
 }
 
-export const VIEW_SLASHES = ['/extensions', '/settings', '/history', '/log'] as const;
+export const VIEW_SLASHES = ['/extensions', '/settings', '/history', '/log', '/memory'] as const;
 export type ViewSlash = (typeof VIEW_SLASHES)[number];
 
 export function isViewSlash(trigger: string): trigger is ViewSlash {
@@ -41,6 +41,7 @@ export interface ViewSlashDeps {
   openSettings(): void;
   openHistory(): void;
   openLog(): void;
+  openMemory(): void;
 }
 
 // View-only slashes run before router/agent: clear + hide, never submit.
@@ -51,6 +52,7 @@ export function handleViewSlash(trigger: string, deps: ViewSlashDeps): boolean {
   if (trigger === '/extensions') deps.openExtensions();
   else if (trigger === '/settings') deps.openSettings();
   else if (trigger === '/history') deps.openHistory();
+  else if (trigger === '/memory') deps.openMemory();
   else deps.openLog();
   return true;
 }

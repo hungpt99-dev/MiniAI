@@ -122,7 +122,8 @@ approval — approval cannot be skipped or timed out. Keys live in `safeStorage`
 DPAPI in the SQLite `secrets` table (XOR fallback warns, dev only);
 `redact()` masks `sk-` / `Bearer` / `api_key` before logging; dev-only env
 fallback (`OPENAI_API_KEY`, etc.). Treat attached and tool text as untrusted
-data. Read [SECURITY.md](SECURITY.md) before connecting providers or enabling
+data. Long-term memory is off by default, encrypted when `safeStorage` is
+available, and untrusted content can never write it. Read [SECURITY.md](SECURITY.md) before connecting providers or enabling
 extensions.
 
 ## Documentation

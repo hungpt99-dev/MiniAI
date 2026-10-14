@@ -49,6 +49,13 @@ blocked in Ask until opted in). `askSafe: true` only for the read tools above
 plus `skill_load` (instructions only); `web_search`/`web_fetch` only run in Ask
 when configured. Writes, `app_open` and `shell_run` are `askSafe: false`.
 
+| Tool | Risk | askSafe | Notes |
+|---|---|---|---|
+| `memory_search` | read | true | ids + capped text |
+| `memory_save` | write | false | Ask-blocked as a tool; Ask saves only via the confirmation row/card path |
+| `memory_update` | write | false | same rules as save |
+| `memory_forget` | write | false | multi-delete lists items on the card |
+
 ## Ask mode (read-only)
 
 Ask (`chat`) runs the same loop with the Ask tool set and a read-only system

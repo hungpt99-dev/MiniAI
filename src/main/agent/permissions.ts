@@ -121,6 +121,10 @@ function isForeignVolume(resolved: string, adapter: PlatformAdapter): boolean {
  * otherwise system dirs, .ssh and browser profiles are blocked even with approval.
  */
 export function isPathAllowed(resolved: string, ctx: PolicyContext, adapter: PlatformAdapter = platform()): boolean {
+  // Enforced memory prohibitions: the user's own "never touch" rules deny first.
+  try {
+    if (ctx.extraProtected?.some((r) => inside(resolved, norm(r), adapter))) return false;
+  } catch { /* fall through */ }
   if (ctx.explicitRoots && isInsideRoots(resolved, ctx.explicitRoots, adapter)) return true;
   // Symlinks/junctions resolving outside every allowed root are blocked —
   // but only when the as-written path claims to be inside (deception).

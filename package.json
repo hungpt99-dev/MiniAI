@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Nexio — a new way to interact with your computer.",
   "author": "Nexio",
+  "license": "MIT",
   "main": "dist/main/main.js",
   "scripts": {
     "dev": "npm run build:main && npm run build:renderer && electron .",

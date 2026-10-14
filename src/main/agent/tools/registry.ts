@@ -1,4 +1,6 @@
+import type { DatabaseSync } from 'node:sqlite';
 import type { Tool } from '../types';
+import { makeMemoryTools } from '../../memory/tools';
 import { fsSearchTool } from './fs_search';
 import { fsReadTool } from './fs_read';
 import { fsListTool } from './fs_list';
@@ -35,6 +37,11 @@ export const ALL_TOOLS: Tool[] = [
 ];
 
 export const TOOL_MAP: Map<string, Tool> = new Map(ALL_TOOLS.map((t) => [t.name, t]));
+
+/** Long-term memory tools (db-bound; appended by ipc/runAgent callers, never global). */
+export function memoryTools(db: DatabaseSync, opts: { maxItems?: number } = {}): Tool[] {
+  return makeMemoryTools(db, opts);
+}
 
 /** OpenAI function-calling shape shared by OpenAI-compatible providers (incl. Gemini endpoint). */
 export function toProviderTools(tools: Tool[]): Array<{ type: 'function'; function: { name: string; description: string; parameters: unknown } }> {

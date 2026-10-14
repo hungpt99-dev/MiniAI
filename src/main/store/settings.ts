@@ -29,6 +29,16 @@ export const DEFAULT_SETTINGS: Settings = {
   requireApprovalForWrites: true,
   askReadEnabled: true,
   askMcpTools: [],
+  memoryEnabled: false,
+  memoryKinds: { preference: true, fact: true, folder_rule: true, procedure: true, episode: true },
+  memorySuggest: false,
+  memorySemantic: false,
+  memoryUseInAsk: true,
+  memoryMaxItems: 500,
+  memoryEpisodeDays: 30,
+  memoryStaleDays: 180,
+  memoryDismissed: [],
+  incognito: false,
   onboarded: false,
   suggestions: [...DEFAULT_SUGGESTIONS],
   launchAtLogin: false,
@@ -55,6 +65,21 @@ export function validateSettings(s: Partial<Settings>): string[] {
   if (s.requireApprovalForWrites !== undefined && typeof s.requireApprovalForWrites !== 'boolean') errors.push('requireApprovalForWrites must be boolean');
   if (s.askReadEnabled !== undefined && typeof s.askReadEnabled !== 'boolean') errors.push('askReadEnabled must be boolean');
   if (s.askMcpTools !== undefined && (!Array.isArray(s.askMcpTools) || !s.askMcpTools.every((x) => typeof x === 'string'))) errors.push('askMcpTools must be an array of strings');
+  if (s.memoryEnabled !== undefined && typeof s.memoryEnabled !== 'boolean') errors.push('memoryEnabled must be boolean');
+  if (s.memoryKinds !== undefined && (typeof s.memoryKinds !== 'object' || Array.isArray(s.memoryKinds) ||
+    !['preference', 'fact', 'folder_rule', 'procedure', 'episode'].every((k) => typeof (s.memoryKinds as Record<string, unknown>)[k] === 'boolean'))) errors.push('memoryKinds must be a map of booleans');
+  if (s.memorySuggest !== undefined && typeof s.memorySuggest !== 'boolean') errors.push('memorySuggest must be boolean');
+  if (s.memorySemantic !== undefined && typeof s.memorySemantic !== 'boolean') errors.push('memorySemantic must be boolean');
+  if (s.memoryUseInAsk !== undefined && typeof s.memoryUseInAsk !== 'boolean') errors.push('memoryUseInAsk must be boolean');
+  if (s.memoryMaxItems !== undefined && (typeof s.memoryMaxItems !== 'number' || s.memoryMaxItems < 10 || s.memoryMaxItems > 5000)) errors.push('memoryMaxItems must be 10..5000');
+  if (s.memoryEpisodeDays !== undefined && (typeof s.memoryEpisodeDays !== 'number' || s.memoryEpisodeDays < 1 || s.memoryEpisodeDays > 365)) errors.push('memoryEpisodeDays must be 1..365');
+  if (s.memoryStaleDays !== undefined && (typeof s.memoryStaleDays !== 'number' || s.memoryStaleDays < 7 || s.memoryStaleDays > 3650)) errors.push('memoryStaleDays must be 7..3650');
+  if (s.memoryDismissed !== undefined && (!Array.isArray(s.memoryDismissed) || !s.memoryDismissed.every((x) => typeof x === 'string'))) errors.push('memoryDismissed must be an array of strings');
+  if (s.memoryNoticeDismissed !== undefined && (typeof s.memoryNoticeDismissed !== 'object' || Array.isArray(s.memoryNoticeDismissed) ||
+    !Object.values(s.memoryNoticeDismissed).every((v) => typeof v === 'boolean'))) errors.push('memoryNoticeDismissed must be a map of booleans');
+  if (s.memoryRuleApprovals !== undefined && (typeof s.memoryRuleApprovals !== 'object' || Array.isArray(s.memoryRuleApprovals) ||
+    !Object.values(s.memoryRuleApprovals).every((v) => typeof v === 'string'))) errors.push('memoryRuleApprovals must be a map of strings');
+  if (s.incognito !== undefined && typeof s.incognito !== 'boolean') errors.push('incognito must be boolean');
   if (s.onboarded !== undefined && typeof s.onboarded !== 'boolean') errors.push('onboarded must be boolean');
   if (s.attachNoticeDismissed !== undefined && (typeof s.attachNoticeDismissed !== 'object' || Array.isArray(s.attachNoticeDismissed) ||
     !Object.values(s.attachNoticeDismissed).every((v) => typeof v === 'boolean'))) errors.push('attachNoticeDismissed must be a map of booleans');

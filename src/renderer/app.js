@@ -232,11 +232,12 @@ async function sendInner() {
   // View-only slashes work during a run (background continues): clear + hide before router/agent.
   {
     const early = text.split(' ')[0];
-    if (early === '/extensions' || early === '/settings' || early === '/history' || early === '/log') {
+    if (early === '/extensions' || early === '/settings' || early === '/history' || early === '/log' || early === '/memory') {
       inputEl.value = ''; drafts[mode] = ''; hideSuggest(); grow(); hidePalette();
       if (early === '/extensions') return void openExtensions();
       if (early === '/settings') return void togglePanel('settings');
       if (early === '/history') return void togglePanel('history');
+      if (early === '/memory') return void openMemoryView();
       return void showAgentLog();
     }
   }
@@ -293,6 +294,10 @@ async function sendInner() {
       }
       if (r.found.source === 'skill') return void runSkillCommand(trigger);
       if (r.found.source === 'mcp') return void runMcpPrompt(trigger);
+      if (trigger === '/memory') { inputEl.value = ''; drafts[mode] = ''; hideSuggest(); grow(); hidePalette(); return void openMemoryView(); }
+      if (trigger === '/remember') return void runRememberCommand(rest.join(' '));
+      if (trigger === '/forget') return void runForgetCommand(rest.join(' '));
+      if (trigger === '/incognito') return void runIncognitoCommand();
       if (trigger === '/new') return void newChat();
       if (trigger === '/clear') { messagesEl.innerHTML = ''; assistantDiv = null; const st0 = $('agent-steps'); if (st0) st0.innerHTML = ''; const ch0 = $('run-chips'); if (ch0) ch0.remove(); inputEl.value = ''; drafts[mode] = ''; try { if (typeof clearAttachTray === 'function') clearAttachTray(); } catch {} hideSuggest(); showView('idle'); try { maybeSuggest(); } catch {} syncChrome(); requestResize(); return; }
       if (trigger === '/help') {
@@ -315,6 +320,7 @@ async function sendInner() {
       try {
         const claim = typeof window.attachClaimForSend === 'function' ? window.attachClaimForSend() : null;
         const sendOpts = { mode, sessionId: id, requestId: `r${Date.now()}-${++reqSeq}`, explicit: modeExplicitSession };
+        lastRequestId = sendOpts.requestId;
         if (claim && claim.attachments) sendOpts.attachments = claim.attachments;
         const sendP = window.nexio.send(id, text, sendOpts);
         try { if (claim && claim.had && typeof window.attachMarkSent === 'function') window.attachMarkSent(id); } catch { /* noop */ }
@@ -338,6 +344,7 @@ async function sendInner() {
   assistantDiv = addMsg('assistant', '…');
   try {
     const requestId = `r${Date.now()}-${++reqSeq}`;
+    lastRequestId = requestId;
     const claim = typeof window.attachClaimForSend === 'function' ? window.attachClaimForSend() : null;
     const sendOpts = { mode, sessionId: id, requestId, explicit: modeExplicitSession };
     if (claim && claim.attachments) sendOpts.attachments = claim.attachments;
@@ -470,6 +477,7 @@ function showView(name) {
   $('settings').classList.toggle('hidden', name !== 'settings');
   $('history').classList.toggle('hidden', name !== 'history');
   $('extensions').classList.toggle('hidden', name !== 'extensions');
+  $('memory').classList.toggle('hidden', name !== 'memory');
   $('onboard').classList.toggle('hidden', name !== 'onboard');
   // footer icon reflects its open panel; run/idle/palette show none
   const panelOn = (id, on) => { const b = $(id); if (b) b.classList.toggle('on', on); };
@@ -477,6 +485,7 @@ function showView(name) {
   panelOn('btn-history', name === 'history');
   panelOn('btn-settings', name === 'settings');
   if ($('view')) $('view').classList.toggle('hidden', name === 'idle');
+  if (name === 'run') flushMemPushes();
   const wasDisabled = inputEl.disabled;
   inputEl.disabled = name === 'settings' || name === 'onboard';
   if (name === 'settings') {
@@ -491,7 +500,7 @@ function showView(name) {
 // dev-only: exactly one top-level view node (idle holds none, or suggest alone)
 function assertSingleView() {
   try {
-    const ids = ['palette', 'suggest', 'run', 'settings', 'history', 'extensions', 'onboard'];
+    const ids = ['palette', 'suggest', 'run', 'settings', 'history', 'extensions', 'memory', 'onboard'];
     const vis = ids.filter((id) => { const el = $(id); return el && !el.classList.contains('hidden'); });
     const sug = $('suggest');
     const sugVisible = !!(sug && !sug.classList.contains('hidden'));
@@ -518,6 +527,15 @@ $('btn-settings').onclick = async () => {
   $('set-reqapprove').checked = s.requireApprovalForWrites !== false;
   if ($('set-askread')) $('set-askread').checked = s.askReadEnabled !== false;
   void paintAskMcp(s.askMcpTools || []);
+  if ($('set-mem')) $('set-mem').checked = s.memoryEnabled === true;
+  paintMemKinds(s.memoryKinds);
+  if ($('set-mem-suggest')) $('set-mem-suggest').checked = s.memorySuggest === true;
+  if ($('set-mem-semantic')) $('set-mem-semantic').checked = s.memorySemantic === true;
+  if ($('set-mem-ask')) $('set-mem-ask').checked = s.memoryUseInAsk !== false;
+  if ($('set-incognito')) $('set-incognito').checked = s.incognito === true;
+  incognitoOn = s.incognito === true;
+  paintIncognito();
+  void refreshMemInfo();
   $('set-suggest').value = (s.suggestions || []).join('\n');
   if ($('set-hotkey')) $('set-hotkey').value = s.hotkey || currentToggleHotkey;
   if ($('set-stophotkey') && s.agentStopHotkey) currentStopHotkey = s.agentStopHotkey;
@@ -547,6 +565,13 @@ $('btn-save-settings').onclick = async () => {
   if ($('set-askread')) patch.askReadEnabled = $('set-askread').checked;
   patch.askMcpTools = Array.from(document.querySelectorAll('#ask-mcp input[data-askmcp]'))
     .filter((c) => c.checked).map((c) => c.dataset.askmcp);
+  if ($('set-mem')) patch.memoryEnabled = $('set-mem').checked;
+  patch.memoryKinds = {};
+  document.querySelectorAll('#set-mem-kinds input[data-memkind]').forEach((c) => { patch.memoryKinds[c.dataset.memkind] = c.checked; });
+  if ($('set-mem-suggest')) patch.memorySuggest = $('set-mem-suggest').checked;
+  if ($('set-mem-semantic')) patch.memorySemantic = $('set-mem-semantic').checked;
+  if ($('set-mem-ask')) patch.memoryUseInAsk = $('set-mem-ask').checked;
+  if ($('set-incognito')) patch.incognito = $('set-incognito').checked;
   const hk = $('set-hotkey') && $('set-hotkey').value.trim();
   if (hk) patch.hotkey = hk;
   if ($('set-login')) patch.launchAtLogin = $('set-login').checked;
@@ -554,6 +579,11 @@ $('btn-save-settings').onclick = async () => {
   if (sug.length) patch.suggestions = sug;
   suggestCache = null;
   await window.nexio.setSettings(patch);
+  try {
+    const sNow = await window.nexio.getSettings();
+    incognitoOn = sNow.incognito === true;
+    paintIncognito();
+  } catch { /* badge best-effort */ }
   { const k = $('set-apikey').value.trim(); if (k) await window.nexio.setApiKey(patch.provider, k); }
   $('set-apikey').value = '';
   currentStopHotkey = $('set-stophotkey').value.trim() || 'Ctrl+Alt+Esc';
@@ -700,7 +730,7 @@ function requestResize() {
 function syncChrome() {
   const hasMsgs = messagesEl.children.length > 0;
   const palOpen = view === 'palette';
-  const panelOpen = view === 'settings' || view === 'history' || view === 'extensions' || view === 'onboard';
+  const panelOpen = view === 'settings' || view === 'history' || view === 'extensions' || view === 'memory' || view === 'onboard';
   const agentActive = (typeof agentRunning === 'function' && agentRunning()) ||
     ($('agent-steps') && $('agent-steps').children.length > 0);
   const idle = !inputEl.value && !hasMsgs && !palOpen && !panelOpen && !agentActive && attachPending() === 0;
@@ -731,6 +761,7 @@ function syncChrome() {
   }
   // single Tab keycap beside the pill: only when composer focused-and-empty (hover handled in CSS)
   document.body.classList.toggle('show-tabkey', document.activeElement === inputEl && !inputEl.value && !inputEl.disabled);
+  try { paintIncognito(); } catch { /* badge best-effort */ }
   updateRunChip();
 }
 // why: keep artboard grouped palette + selected accent + enter cap without touching core logic
@@ -858,11 +889,12 @@ document.addEventListener('keydown', (e) => {
   const setOpen = view === 'settings';
   const histOpen = view === 'history';
   const extOpen = view === 'extensions';
+  const memOpen = view === 'memory';
   const obOpen = view === 'onboard';
   const sugBox = $('suggest');
   if (sugBox && !sugBox.classList.contains('hidden')) { e.stopPropagation(); hideSuggest(); inputEl.focus(); return; }
   if (dismissRootConfirm()) { e.stopPropagation(); if (rootConfirmPrior && document.contains(rootConfirmPrior)) rootConfirmPrior.focus(); else ($('btn-agent-add-root') || inputEl).focus(); rootConfirmPrior = null; return; } // Esc drops the add-folder confirm first, restoring prior focus
-  if (setOpen || histOpen || extOpen || obOpen) { // dismiss panels before collapsing results
+  if (setOpen || histOpen || extOpen || memOpen || obOpen) { // dismiss panels before collapsing results
     e.stopPropagation();
     if (view === 'onboard') { void skipOnboard(); return; }
     showView(backTarget());
@@ -1486,6 +1518,8 @@ if (window.nexio && typeof window.nexio.onPopupShown === 'function') {
 }
 if (window.nexio && typeof window.nexio.onAgentEvent === 'function') {
   window.nexio.onAgentEvent(({ runId, event }) => {
+    // Memory usage never adopts a run: it renders as a row under the answer.
+    if (event.type === 'memory_used') return void renderMemoryUsed(runId, event);
     if (!agentState) {
       // Routed act (or undo) with no active run: adopt it so steps/approvals render.
       if (event.type === 'done' || event.type === 'error' || event.type === 'stopped') return;
@@ -2379,7 +2413,7 @@ async function skipOnboard() {
 }
 function obShell(title, inner) {
   return `<div class="set-head"><h3>${esc(title)}</h3></div>` +
-    `<div class="ob-steps">Step ${obStep + 1} of 3</div>${inner}` +
+    `<div class="ob-steps">Step ${obStep + 1} of 4</div>${inner}` +
     `<div class="row"><button id="ob-skip" class="linklike">Skip</button></div>`;
 }
 function renderOnboard() {
@@ -2416,6 +2450,26 @@ function renderOnboard() {
       renderOnboard();
     };
   } else if (obStep === 1) {
+    box.innerHTML = obShell('Let Nexio remember your preferences?',
+      `<div class="ext-empty">Names, preferences, folder rules — kept on this computer, shown before anything is saved. You can edit or forget them anytime in Settings &gt; Memory.</div>` +
+      `<div class="ext-addmenu">` +
+      `<button data-mem="suggest">Yes, and suggest memories</button>` +
+      `<button data-mem="ask" class="on">Only when I say "remember"</button>` +
+      `<button data-mem="no">No</button></div>` +
+      `<div class="row"><button id="ob-next" class="primary">Continue</button></div>`);
+    let memChoice = 'ask';
+    const paintMem = () => box.querySelectorAll('[data-mem]').forEach((b) => b.classList.toggle('on', b.dataset.mem === memChoice));
+    box.querySelectorAll('[data-mem]').forEach((b) => { b.onclick = () => { memChoice = b.dataset.mem; paintMem(); }; });
+    paintMem();
+    $('ob-next').onclick = async () => {
+      try {
+        if (memChoice === 'no') await window.nexio.setSettings({ memoryEnabled: false, memorySuggest: false });
+        else await window.nexio.setSettings({ memoryEnabled: true, memorySuggest: memChoice === 'suggest' });
+      } catch (e) { say('Could not save memory choice'); return; }
+      obStep = 2;
+      renderOnboard();
+    };
+  } else if (obStep === 2) {
     box.innerHTML = obShell('Choose allowed folders',
       `<div class="ext-empty">Nexio can only touch the folders you allow. Suggested: Desktop, Documents, Downloads.` +
       (platformInfo && platformInfo.os === 'darwin'
@@ -2457,7 +2511,7 @@ function renderOnboard() {
         await paint();
       } catch { /* cancelled */ }
     };
-    $('ob-next').onclick = () => { obStep = 2; renderOnboard(); };
+    $('ob-next').onclick = () => { obStep = 3; renderOnboard(); };
   } else {
     box.innerHTML = obShell('Try Nexio',
       `<div class="ext-empty">Say what you want. Nexio does it on your computer. Hotkey: ${hotkeyCapsHtml()} Try one:</div>` +
@@ -2478,6 +2532,570 @@ function renderOnboard() {
   $('ob-skip').onclick = () => void skipOnboard();
   syncChrome(); requestResize();
 }
+/* --- Memory (appended): Memory view, settings section, run-view rows --- */
+var lastRequestId = '';
+var memTab = 'all', memQuery = '', memEditId = null, memFormMode = null; // memFormMode: null | 'add'
+var incognitoOn = false;
+var pendingMemPushes = [];
+
+function say(m) { try { const el = document.getElementById('attach-live'); if (el) el.textContent = m; } catch {} }
+function memCall(a) { return window.nexio.memory(a); }
+function memKindLabel(k) {
+  return { preference: 'preference', fact: 'fact', folder_rule: 'folder rule', procedure: 'procedure', episode: 'episode' }[k] || k;
+}
+function memScopeLabel(sc) {
+  if (!sc || sc.type === 'global') return 'global';
+  if (sc.type === 'folder') return sc.path;
+  if (sc.type === 'app') return 'app:' + sc.name;
+  return 'project:' + sc.id;
+}
+function memScopeIsFolder(sc) { return !!sc && sc.type === 'folder'; }
+function memTimeAgo(ts) {
+  if (!ts) return 'never';
+  const d = Date.now() - ts;
+  if (d < 3600e3) return Math.max(1, Math.round(d / 60e3)) + 'm ago';
+  if (d < 86400e3) return Math.round(d / 3600e3) + 'h ago';
+  return Math.round(d / 86400e3) + 'd ago';
+}
+function guessKindLocal(t) {
+  if (/\b(never|don't|do not|keep out|folder|directory)\b/i.test(t)) return 'folder_rule';
+  if (/\b(prefer|likes?|always|reply|language|vietnamese|english)\b/i.test(t)) return 'preference';
+  if (/\b(steps?|procedure|cleanup|weekly|backup|routine)\b/i.test(t)) return 'procedure';
+  return 'fact';
+}
+function parseScopeLocal(s) {
+  const t = String(s || '').trim();
+  if (!t || t === 'global') return { type: 'global' };
+  let m = /^app:(.+)$/.exec(t);
+  if (m) return { type: 'app', name: m[1].trim() };
+  m = /^project:(.+)$/.exec(t);
+  if (m) return { type: 'project', id: m[1].trim() };
+  m = /^(?:folder:)?([A-Za-z]:[\\/].+|\/.+)$/.exec(t);
+  if (m) return { type: 'folder', path: m[1].trim() };
+  return null;
+}
+function ghostBtn(label, aria) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'switch-do-chip'; // quiet ghost button, 12px
+  b.textContent = label;
+  if (aria) b.setAttribute('aria-label', aria);
+  return b;
+}
+
+async function openMemoryView(editId) {
+  memEditId = editId || null;
+  memFormMode = null;
+  showView('memory');
+  await renderMemoryView();
+  await memPrivacyNotice();
+}
+function memTabsPaint() {
+  document.querySelectorAll('.mem-tabs button').forEach((b) => b.classList.toggle('on', b.dataset.mk === memTab));
+}
+async function renderMemoryView() {
+  memTabsPaint();
+  const ul = $('mem-list');
+  const empty = $('mem-empty');
+  const form = $('mem-form');
+  if (!ul) return;
+  ul.innerHTML = '';
+  if (form) { form.innerHTML = ''; form.classList.add('hidden'); }
+  let rows = [];
+  try {
+    rows = await memCall({ action: 'list', ...(memTab !== 'all' ? { kind: memTab } : {}), ...(memQuery ? { q: memQuery } : {}) });
+  } catch (e) {
+    ul.innerHTML = `<li><span>${esc(errText(e))}</span></li>`;
+    return;
+  }
+  // review list: stale items first
+  const stale = rows.filter((r) => r.stale);
+  const fresh = rows.filter((r) => !r.stale);
+  const rev = $('mem-review');
+  if (rev) {
+    rev.classList.toggle('hidden', !stale.length);
+    rev.innerHTML = stale.length ? `<span>Review: ${stale.length} unused memor${stale.length === 1 ? 'y' : 'ies'} — pin, edit or forget.</span>` : '';
+  }
+  const ordered = [...stale, ...fresh];
+  if (empty) empty.classList.toggle('hidden', ordered.length > 0);
+  for (const r of ordered) ul.appendChild(memRow(r));
+  if (memEditId) {
+    const row = rows.find((x) => x.id === memEditId);
+    if (row) renderMemForm(row);
+    memEditId = null;
+  } else if (memFormMode === 'add') renderMemForm(null);
+  syncChrome(); requestResize();
+}
+function memRow(r) {
+  const li = document.createElement('li');
+  li.className = 'mem-row';
+  li.dataset.mid = r.id;
+  const tx = document.createElement('div');
+  tx.className = 'mem-tx';
+  const main = document.createElement('div');
+  main.className = 'mem-text';
+  main.textContent = r.text;
+  tx.appendChild(main);
+  const meta = document.createElement('div');
+  meta.className = 'mem-meta';
+  meta.textContent = `${memKindLabel(r.kind)} · ${memScopeLabel(r.scope)} · used ${memTimeAgo(r.lastUsedAt)}${r.useCount ? ` · ×${r.useCount}` : ''}${r.stale ? ' · stale' : ''}`;
+  if (memScopeIsFolder(r.scope)) {
+    const chip = document.createElement('code');
+    chip.className = 'scope-chip';
+    chip.textContent = r.scope.path;
+    chip.title = r.scope.path;
+    meta.appendChild(document.createTextNode(' · '));
+    meta.appendChild(chip);
+  }
+  if (r.enforced) {
+    const b = document.createElement('span');
+    b.className = 'enforced-badge';
+    b.textContent = 'Enforced';
+    meta.appendChild(document.createTextNode(' '));
+    meta.appendChild(b);
+  }
+  tx.appendChild(meta);
+  li.appendChild(tx);
+  const pin = ghostBtn(r.pinned ? 'Unpin' : 'Pin', (r.pinned ? 'Unpin ' : 'Pin ') + r.text.slice(0, 60));
+  pin.onclick = async () => {
+    try {
+      await memCall({ action: 'update', id: r.id, text: r.text, pinned: !r.pinned });
+      await renderMemoryView();
+    } catch (e) { say(errText(e)); }
+  };
+  li.appendChild(pin);
+  const menuBtn = ghostBtn('…', 'Memory options');
+  const menu = document.createElement('div');
+  menu.className = 'mem-menu hidden';
+  for (const [label, fn] of [
+    ['Edit', () => renderMemForm(r)],
+    ['Forget', async () => { try { await memCall({ action: 'forget', id: r.id }); say('Forgot memory'); await renderMemoryView(); } catch (e) { say(errText(e)); } }],
+  ]) {
+    const b = ghostBtn(label, `${label} ${r.text.slice(0, 60)}`);
+    b.onclick = () => { menu.classList.add('hidden'); fn(); };
+    menu.appendChild(b);
+  }
+  menuBtn.onclick = (e) => { e.stopPropagation(); menu.classList.toggle('hidden'); };
+  li.appendChild(menuBtn);
+  li.appendChild(menu);
+  li.onclick = (e) => {
+    if (e.target.closest('button') || e.target.closest('.mem-menu')) return; // pin/menu own their clicks
+    if (e.target === li || e.target === main) renderMemForm(r);
+  };
+  return li;
+}
+function renderMemForm(row) {
+  const form = $('mem-form');
+  if (!form) return;
+  form.classList.remove('hidden');
+  const kinds = ['preference', 'fact', 'folder_rule', 'procedure', 'episode'];
+  form.innerHTML = '';
+  const ta = document.createElement('textarea');
+  ta.className = 'mono';
+  ta.rows = 3;
+  ta.value = row ? row.text : '';
+  ta.setAttribute('aria-label', 'Memory text');
+  form.appendChild(ta);
+  const seg = document.createElement('div');
+  seg.className = 'seg mem-kind-seg';
+  seg.setAttribute('role', 'group');
+  seg.setAttribute('aria-label', 'Memory kind');
+  let kind = row ? row.kind : 'fact';
+  for (const k of kinds) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = memKindLabel(k);
+    b.classList.toggle('on', k === kind);
+    b.onclick = () => { kind = k; seg.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); };
+    seg.appendChild(b);
+  }
+  form.appendChild(seg);
+  const sc = document.createElement('input');
+  sc.className = 'mono';
+  sc.value = row ? memScopeLabel(row.scope) : 'global';
+  sc.setAttribute('aria-label', 'Memory scope (global, folder path, app:name, project:id)');
+  form.appendChild(sc);
+  const pinRow = document.createElement('label');
+  pinRow.className = 'fld check';
+  pinRow.innerHTML = '<span class="switch-tx"><span class="flab">Pin (never expires)</span></span>';
+  const pinBox = document.createElement('input');
+  pinBox.type = 'checkbox';
+  pinBox.checked = row ? !!row.pinned : false;
+  pinRow.appendChild(pinBox);
+  form.appendChild(pinRow);
+  const status = document.createElement('div');
+  status.className = 'note';
+  status.setAttribute('role', 'status');
+  form.appendChild(status);
+  const rowBtns = document.createElement('div');
+  rowBtns.className = 'row';
+  const saveB = document.createElement('button');
+  saveB.type = 'button';
+  saveB.className = 'btn-primary';
+  saveB.textContent = 'Save memory';
+  saveB.onclick = async () => {
+    const scope = parseScopeLocal(sc.value);
+    if (!scope) { status.textContent = 'Scope must be global, an absolute folder path, app:name or project:id.'; return; }
+    try {
+      const r = await memCall({ action: 'save', kind, text: ta.value, scope, pinned: pinBox.checked, ...(row ? { replaceId: row.id } : {}) });
+      if (r.status === 'saved' || r.status === 'updated') { memFormMode = null; say('Memory saved'); await renderMemoryView(); }
+      else if (r.status === 'conflict') { renderConflictRow(ta.value, r.conflicts, { kind, scope, pinned: pinBox.checked }, status); }
+      else if (r.status === 'full') status.textContent = 'Memory is full — forget something first.';
+      else status.textContent = `Not saved: ${r.reason || 'blocked'}`;
+    } catch (e) { status.textContent = errText(e); }
+  };
+  const cancelB = document.createElement('button');
+  cancelB.type = 'button';
+  cancelB.className = 'btn';
+  cancelB.textContent = 'Cancel';
+  cancelB.onclick = () => { memFormMode = null; form.classList.add('hidden'); };
+  rowBtns.appendChild(saveB);
+  rowBtns.appendChild(cancelB);
+  form.appendChild(rowBtns);
+  ta.focus();
+  syncChrome(); requestResize();
+}
+async function memPrivacyNotice() {
+  try {
+    const box = $('mem-notice');
+    if (!box) return;
+    const s = await window.nexio.getSettings();
+    if ((s.memoryNoticeDismissed || {})[s.provider]) { box.classList.add('hidden'); return; }
+    const local = isLocalProviderName(s.provider, s.baseUrl);
+    box.classList.remove('hidden');
+    box.innerHTML = '';
+    const span = document.createElement('span');
+    span.textContent = local
+      ? 'Nexio keeps these notes on this computer.'
+      : `Nexio keeps these notes on this computer. When relevant, they are sent to ${providerDisplay(s.provider)} with your request.`;
+    const b = ghostBtn('Got it', 'Dismiss memory privacy notice');
+    b.onclick = async () => {
+      try {
+        const cur = await window.nexio.getSettings();
+        await window.nexio.setSettings({ memoryNoticeDismissed: { ...(cur.memoryNoticeDismissed || {}), [cur.provider]: true } });
+      } catch {}
+      box.classList.add('hidden');
+    };
+    box.appendChild(span);
+    box.appendChild(b);
+  } catch { /* notice never blocks */ }
+}
+function isLocalProviderName(provider, baseUrl) {
+  try {
+    if (provider !== 'compatible') return false;
+    const host = new URL(String(baseUrl || '')).hostname.toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local');
+  } catch { return false; }
+}
+function providerDisplay(p) { return { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', compatible: 'Custom' }[p] || p; }
+
+// --- run-view rows (Remembered / suggestions / conflicts / Used N) ---
+function memoryHost(ev) {
+  if (ev && ev.runId && agentState && agentState.runId === ev.runId && agentState.answerDiv && document.contains(agentState.answerDiv)) return agentState.answerDiv;
+  if (ev && ev.requestId && ev.requestId === lastRequestId && assistantDiv && document.contains(assistantDiv)) return assistantDiv;
+  if (assistantDiv && document.contains(assistantDiv) && (view === 'run' || view === 'idle')) return assistantDiv;
+  const divs = messagesEl.querySelectorAll('.msg.assistant');
+  if (divs.length) return divs[divs.length - 1];
+  return null;
+}
+function memConfirmRow(msg, buttons) {
+  const div = document.createElement('div');
+  div.className = 'mem-confirm';
+  const span = document.createElement('span');
+  span.textContent = msg;
+  div.appendChild(span);
+  for (const b of buttons || []) div.appendChild(b);
+  const link = ghostBtn('Memory', 'Open Memory view');
+  link.onclick = () => void openMemoryView();
+  div.appendChild(link);
+  return div;
+}
+function renderRememberedRow(mem, status) {
+  const host = memoryHost(null);
+  if (!host) { pendingMemPushes.push({ event: { type: 'saved', id: mem.id, kind: mem.kind, text: mem.text } }); return; }
+  const undo = ghostBtn('Undo', 'Forget this memory');
+  undo.onclick = async () => { try { await memCall({ action: 'forget', id: mem.id }); say('Forgot memory'); row.remove(); } catch (e) { say(errText(e)); } };
+  const edit = ghostBtn('Edit', 'Edit this memory');
+  edit.onclick = () => void openMemoryView(mem.id);
+  const row = memConfirmRow(`${status === 'updated' ? 'Updated memory' : 'Remembered'}: ${mem.text}`, [undo, edit]);
+  host.appendChild(row);
+  say(`Remembered: ${mem.text}`);
+  syncChrome(); requestResize();
+}
+function renderConflictRow(newText, conflicts, saveCtx, host) {
+  const old = conflicts[0] || { id: '', text: '' };
+  const replace = ghostBtn('Replace', 'Replace the old memory');
+  replace.onclick = async () => {
+    try {
+      await memCall({ action: 'save', kind: (saveCtx && saveCtx.kind) || 'fact', text: newText, scope: (saveCtx && saveCtx.scope) || { type: 'global' }, ...(saveCtx && saveCtx.pinned ? { pinned: true } : {}), replaceId: old.id });
+      say('Memory replaced');
+      row.remove();
+      if (view === 'memory') await renderMemoryView();
+    } catch (e) { say(errText(e)); }
+  };
+  const cancel = ghostBtn('Keep old', 'Keep the old memory');
+  cancel.onclick = () => row.remove();
+  const row = memConfirmRow(`Replace the old memory? Old: ${old.text} New: ${newText}`, [replace, cancel]);
+  const hostEl = host || memoryHost(null);
+  if (!hostEl) { pendingMemPushes.push({ event: { type: 'conflict', text: newText, conflicts } }); return; }
+  hostEl.appendChild(row);
+  say('New memory conflicts with an old one');
+  syncChrome(); requestResize();
+}
+function renderSuggestRow(candidates) {
+  const host = memoryHost(null);
+  if (!host) {
+    for (const c of candidates) pendingMemPushes.push({ event: { type: 'suggest', candidates: [c] } });
+    return;
+  }
+  for (const c of candidates) {
+    const save = ghostBtn('Save', `Save memory: ${c.text.slice(0, 60)}`);
+    save.onclick = async () => {
+      try {
+        const r = await memCall({ action: 'save', kind: c.kind || 'fact', text: c.text });
+        if (r.status === 'saved' || r.status === 'updated') { say('Memory saved'); row.remove(); if (view === 'memory') await renderMemoryView(); }
+        else if (r.status === 'conflict') { row.remove(); renderConflictRow(c.text, r.conflicts, { kind: c.kind || 'fact' }); }
+        else { say(`Not saved: ${r.reason || 'blocked'}`); }
+      } catch (e) { say(errText(e)); }
+    };
+    const dismiss = ghostBtn('Dismiss', `Dismiss suggestion: ${c.text.slice(0, 60)}`);
+    dismiss.onclick = async () => { try { await memCall({ action: 'dismiss', hash: c.hash }); } catch {} row.remove(); };
+    const row = memConfirmRow(`Remember: ${c.text}?`, [save, dismiss]);
+    host.appendChild(row);
+  }
+  say(`${candidates.length} memor${candidates.length === 1 ? 'y' : 'ies'} suggested`);
+  syncChrome(); requestResize();
+}
+async function renderMemoryPush({ runId, requestId, event }) {
+  const host = memoryHost({ runId, requestId });
+  if (!host) { pendingMemPushes.push({ event }); return; }
+  if (event.type === 'saved') renderRememberedRow({ id: event.id, kind: event.kind, text: event.text }, 'saved');
+  else if (event.type === 'suggest') renderSuggestRow(event.candidates || []);
+  else if (event.type === 'conflict') renderConflictRow(event.text, event.conflicts || [], null);
+  else if (event.type === 'blocked') {
+    const row = memConfirmRow(`Not saved: ${event.reason}`, []);
+    host.appendChild(row);
+    say(`Memory not saved: ${event.reason}`);
+    syncChrome(); requestResize();
+  }
+}
+function flushMemPushes() {
+  if (!pendingMemPushes.length) return;
+  const q = pendingMemPushes;
+  pendingMemPushes = [];
+  for (const p of q) void renderMemoryPush(p);
+}
+async function renderMemoryUsed(runId, ev) {
+  const host = (agentState && agentState.runId === runId && agentState.answerDiv && document.contains(agentState.answerDiv))
+    ? agentState.answerDiv
+    : memoryHost({ runId });
+  if (!host) return;
+  if (host.querySelector(`[data-memused="${ev.ids.join(',')}"]`)) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'mem-used';
+  wrap.dataset.memused = ev.ids.join(',');
+  const toggle = ghostBtn(`Used ${ev.count} memor${ev.count === 1 ? 'y' : 'ies'}`, 'Show used memories');
+  const list = document.createElement('div');
+  list.className = 'hidden';
+  toggle.onclick = async () => {
+    const open = list.classList.toggle('hidden');
+    toggle.setAttribute('aria-expanded', String(!open));
+    if (!open || list.children.length) return;
+    for (const id of ev.ids) {
+      try {
+        const m = await memCall({ action: 'get', id });
+        const line = document.createElement('div');
+        line.className = 'mem-used-line';
+        const span = document.createElement('span');
+        span.textContent = m.text;
+        line.appendChild(span);
+        const f = ghostBtn('Forget', `Forget: ${m.text.slice(0, 60)}`);
+        f.onclick = async () => { try { await memCall({ action: 'forget', id }); say('Forgot memory'); line.remove(); } catch (e) { say(errText(e)); } };
+        line.appendChild(f);
+        list.appendChild(line);
+      } catch { /* dropped memory */ }
+    }
+    syncChrome(); requestResize();
+  };
+  wrap.appendChild(toggle);
+  wrap.appendChild(list);
+  host.appendChild(wrap);
+  syncChrome(); requestResize();
+}
+if (window.nexio && typeof window.nexio.onMemoryEvent === 'function') {
+  window.nexio.onMemoryEvent((ev) => { void renderMemoryPush(ev); });
+}
+
+// --- slash commands ---
+async function runRememberCommand(arg) {
+  const t = (arg || '').trim();
+  addMsg('user', `/remember ${t}`);
+  showView('run');
+  if (!t) { addMsg('assistant', 'Usage: /remember <text>'); return; }
+  try {
+    let scope = { type: 'global' };
+    let kind = guessKindLocal(t);
+    if (kind === 'folder_rule') {
+      const m = t.match(/[A-Za-z]:[\\/][^\s]+|(\/[^\s]+)/);
+      const cand = m && m[0];
+      if (cand && (/^[A-Za-z]:[\\/]/.test(cand) || (cand.match(/\//g) || []).length >= 2)) scope = { type: 'folder', path: cand };
+    }
+    const r = await memCall({ action: 'save', kind, text: t, scope });
+    if (r.status === 'saved' || r.status === 'updated') renderRememberedRow(r.memory, r.status);
+    else if (r.status === 'conflict') renderConflictRow(t, r.conflicts, { kind, scope });
+    else if (r.status === 'full') addMsg('assistant', 'Memory is full — forget something in Settings > Memory first.');
+    else addMsg('assistant', `Not saved: ${r.reason || 'blocked'}`);
+  } catch (e) { addMsg('assistant', errText(e)); }
+}
+async function runForgetCommand(arg) {
+  const q = (arg || '').trim();
+  addMsg('user', `/forget ${q}`);
+  showView('run');
+  if (!q) { addMsg('assistant', 'Usage: /forget <text>'); return; }
+  try {
+    const found = await memCall({ action: 'search', q, limit: 20 });
+    if (!found.length) { addMsg('assistant', `Nothing remembered matching "${q}".`); return; }
+    const card = document.createElement('div');
+    card.className = 'mem-confirm';
+    const title = document.createElement('span');
+    title.textContent = `Forget ${found.length} memor${found.length === 1 ? 'y' : 'ies'}?`;
+    card.appendChild(title);
+    const ul = document.createElement('ul');
+    ul.className = 'agent-list';
+    for (const m of found.slice(0, 10)) {
+      const li = document.createElement('li');
+      const span = document.createElement('span');
+      span.textContent = m.text;
+      li.appendChild(span);
+      ul.appendChild(li);
+    }
+    card.appendChild(ul);
+    const go = ghostBtn(`Forget${found.length > 1 ? ' all' : ''}`, 'Forget listed memories');
+    go.onclick = async () => {
+      try {
+        for (const m of found) await memCall({ action: 'forget', id: m.id });
+        say(`Forgot ${found.length} memories`);
+        card.remove();
+        if (view === 'memory') await renderMemoryView();
+      } catch (e) { say(errText(e)); }
+    };
+    const cancel = ghostBtn('Cancel', 'Keep memories');
+    cancel.onclick = () => card.remove();
+    card.appendChild(go);
+    card.appendChild(cancel);
+    const host = memoryHost(null) || addMsg('assistant', '');
+    host.appendChild(card);
+    syncChrome(); requestResize();
+  } catch (e) { addMsg('assistant', errText(e)); }
+}
+async function runIncognitoCommand() {
+  try {
+    const s = await window.nexio.getSettings();
+    const next = !s.incognito;
+    await window.nexio.setSettings({ incognito: next });
+    incognitoOn = next;
+    paintIncognito();
+    addMsg('assistant', next ? 'Incognito on: no history, no memory reads or writes.' : 'Incognito off.');
+    showView('run');
+    say(next ? 'Incognito on' : 'Incognito off');
+  } catch (e) { addMsg('assistant', errText(e)); }
+}
+function paintIncognito() {
+  const b = $('incog-badge');
+  if (!b) return;
+  const show = !incognitoOn;
+  if (b.classList.contains('hidden') !== show) return; // no DOM churn on the hot path
+  b.classList.toggle('hidden', show);
+}
+async function refreshIncognito() {
+  try {
+    const s = await window.nexio.getSettings();
+    incognitoOn = s.incognito === true;
+    paintIncognito();
+  } catch { /* badge stays hidden */ }
+}
+void refreshIncognito();
+
+// --- settings: Memory section ---
+function paintMemKinds(kinds) {
+  const host = $('set-mem-kinds');
+  if (!host) return;
+  host.innerHTML = '';
+  for (const k of ['preference', 'fact', 'folder_rule', 'procedure', 'episode']) {
+    const lab = document.createElement('label');
+    lab.className = 'fld check';
+    lab.innerHTML = `<span class="switch-tx"><span class="flab">${esc(memKindLabel(k))}</span></span>`;
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.dataset.memkind = k;
+    box.checked = !kinds || kinds[k] !== false;
+    box.setAttribute('role', 'switch');
+    lab.appendChild(box);
+    host.appendChild(lab);
+  }
+}
+async function refreshMemInfo() {
+  const el = $('mem-info');
+  if (!el) return;
+  try {
+    const info = await memCall({ action: 'info' });
+    el.textContent = `${info.count} memories · ${info.bytes >= 1024 ? (info.bytes / 1024).toFixed(1) + ' KB' : info.bytes + ' B'} · ${info.encrypted ? 'encrypted' : 'not encrypted — enable device encryption'}${info.stale ? ` · ${info.stale} to review` : ''}`;
+    const desc = $('set-mem-semdesc');
+    if (desc) desc.textContent = 'Off: keyword search only. On: still keyword search (embeddings not wired yet).';
+  } catch { el.textContent = 'Memory unavailable.'; }
+}
+if ($('btn-mem-open')) $('btn-mem-open').onclick = () => void openMemoryView();
+if ($('btn-mem-export')) $('btn-mem-export').onclick = async () => {
+  try {
+    const r = await memCall({ action: 'export' });
+    copyText(r.json);
+    const el = $('mem-info');
+    if (el) el.textContent = `Exported ${r.count} memories (copied JSON, no embeddings).`;
+    say(`Exported ${r.count} memories to clipboard`);
+  } catch (e) { say(errText(e)); }
+};
+if ($('btn-mem-forgetall')) $('btn-mem-forgetall').onclick = () => { const c = $('mem-forgetall-confirm'); if (c) c.classList.toggle('hidden'); };
+if ($('btn-mem-forgetall-go')) $('btn-mem-forgetall-go').onclick = async () => {
+  const inp = $('mem-forgetall-input');
+  try {
+    const r = await memCall({ action: 'forgetAll', confirm: inp ? inp.value.trim() : '' });
+    if (r.deleted) { say('Forgot everything'); if (inp) inp.value = ''; void refreshMemInfo(); if (view === 'memory') await renderMemoryView(); }
+    else say('Type "forget everything" to confirm');
+  } catch (e) { say(errText(e)); }
+};
+if ($('btn-mem-preview')) $('btn-mem-preview').onclick = async () => {
+  const ta = $('mem-import-text');
+  const st = $('mem-import-status');
+  try {
+    const r = await memCall({ action: 'import', json: ta ? ta.value : '', dry: true });
+    if (st) st.textContent = `Preview: ${r.imported} new, ${r.updated} updates, ${r.skipped} skipped${r.errors.length ? ' — ' + r.errors.slice(0, 3).join('; ') : ''}`;
+    const go = $('btn-mem-import');
+    if (go) go.classList.toggle('hidden', !(r.imported + r.updated));
+  } catch (e) { if (st) st.textContent = errText(e); }
+};
+if ($('btn-mem-import')) $('btn-mem-import').onclick = async () => {
+  const ta = $('mem-import-text');
+  const st = $('mem-import-status');
+  try {
+    const r = await memCall({ action: 'import', json: ta ? ta.value : '' });
+    if (st) st.textContent = `Imported ${r.imported}, updated ${r.updated}, skipped ${r.skipped}.`;
+    if (ta) ta.value = '';
+    void refreshMemInfo();
+    if (view === 'memory') await renderMemoryView();
+  } catch (e) { if (st) st.textContent = errText(e); }
+};
+if ($('btn-mem-add')) $('btn-mem-add').onclick = () => { memFormMode = 'add'; renderMemForm(null); };
+if ($('btn-mem-add2')) $('btn-mem-add2').onclick = () => { memFormMode = 'add'; renderMemForm(null); };
+if ($('btn-memory-back')) $('btn-memory-back').onclick = () => { showView(backTarget()); inputEl.focus(); };
+document.querySelectorAll('.mem-tabs button').forEach((b) => {
+  b.onclick = () => { memTab = b.dataset.mk; memTabsPaint(); void renderMemoryView(); };
+});
+if ($('mem-search')) $('mem-search').addEventListener('input', (e) => {
+  memQuery = e.target.value.trim();
+  clearTimeout(window._memSearchT);
+  window._memSearchT = setTimeout(() => void renderMemoryView(), 200);
+});
+
 void maybeOnboard();
 /* --- Platform (appended): per-OS key caps, secret-store copy, hotkey status --- */
 var platformInfo = null;

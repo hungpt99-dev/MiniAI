@@ -34,3 +34,23 @@ npm run dist   # electron-builder --win portable
 - Live provider smoke is manual and opt-in (`NEXIO_LIVE_SMOKE=1`,
   see `docs/development/testing.md`); never commit keys or transcripts.
 - Update docs (`docs/`) when behavior changes.
+
+## Long-term memory rules
+
+- Single access layer: `src/main/memory/store.ts` owns the `memories`,
+  `memory_fts` and `memory_events` tables. No other module touches them.
+- New tools need an explicit `askSafe` flag (`memory_search` is read/askSafe;
+  save/update/forget are write and Ask-blocked). New kinds need a Settings
+  opt-in key plus a Memory view tab.
+- Never store secrets: every save path (tool, channel, import, extractor)
+  goes through the secrets/PII scanner. Never log memory text — run logs
+  carry ids/kinds only (see `logEvent` in `src/main/agent/loop.ts`).
+- Untrusted content (files, web, attachments, MCP) must never write
+  memories. Keep the `lastUntrusted` provenance gate in `executeToolCall`
+  and the Ask dispatcher block; add a regression test for any new write
+  path (`tests/unit/memory*.test.ts`).
+- Retrieval budgets (8 items, ~1,200 tokens) and text caps (300/500 chars)
+  are constants in `src/main/memory/types.ts`. Raise them only with a test.
+- Self-verify end to end: drive new memory flows through the real `send`
+  handler with a scripted provider (`tests/unit/memory-e2e.test.ts`
+  pattern), not just the store.

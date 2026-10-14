@@ -156,6 +156,81 @@ describe('e2e-fake: fresh shows no Planning, slow run shows the chip', () => {
   });
 });
 
+describe('memory view: single-view mount, list/filter/edit/pin/forget, empty state', () => {
+  it('declares no duplicate top-level functions (later defs would shadow earlier ones)', () => {
+    const src = appJs();
+    const names = [...src.matchAll(/^function ([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]);
+    const dupes = names.filter((n, i) => names.indexOf(n) !== i);
+    expect(dupes).toEqual([]);
+  });
+  it('mounts exactly one memory node with tabs, search, list, form and add', () => {
+    const h = html();
+    expect(h.split('id="memory"').length - 1).toBe(1);
+    const mem = h.slice(h.indexOf('id="memory"'), h.indexOf('id="memory"') + 3000);
+    expect(mem).toContain('id="btn-memory-back"');
+    for (const t of ['data-mk="all"', 'data-mk="preference"', 'data-mk="fact"', 'data-mk="folder_rule"', 'data-mk="procedure"', 'data-mk="episode"']) {
+      expect(mem).toContain(t);
+    }
+    for (const id of ['id="mem-search"', 'id="mem-list"', 'id="mem-form"', 'id="btn-mem-add"', 'id="mem-empty"', 'id="mem-review"']) {
+      expect(mem).toContain(id);
+    }
+    const src = appJs();
+    expect(src).toContain("$('memory').classList.toggle('hidden', name !== 'memory')");
+  });
+  it('lists, filters, edits, pins and forgets through the memory channel', () => {
+    const src = appJs();
+    for (const fn of ['function openMemoryView', 'function renderMemoryView', 'function memRow(', 'function renderMemForm', 'function renderMemoryUsed', 'function renderMemoryPush']) {
+      expect(src).toContain(fn);
+    }
+    expect(src).toContain("memCall({ action: 'list'");
+    expect(src).toContain("memCall({ action: 'forget', id:");
+    expect(src).toContain("memCall({ action: 'update', id:");
+    expect(src).toContain('enforced-badge');
+    expect(src).toContain('scope-chip');
+    // no native selects in the memory form (seg buttons for kind)
+    const form = src.slice(src.indexOf('function renderMemForm'), src.indexOf('function memPrivacyNotice'));
+    expect(form).toContain('mem-kind-seg');
+    expect(form).not.toContain('createElement(\'select\')');
+  });
+  it('run-view rows: Used N memories (collapsed), Remembered with Undo/Edit, suggestions with Save/Dismiss', () => {
+    const src = appJs();
+    expect(src).toContain('function renderMemoryUsed');
+    expect(src).toContain('Used ${ev.count}');
+    expect(src).toContain('Remembered');
+    expect(src).toContain('Remember: ${c.text}?');
+    expect(src).toContain('Replace the old memory?');
+    expect(src).toContain('Not saved:');
+    // memory_used never adopts a run; pushes attach under the answer
+    expect(src).toContain("if (event.type === 'memory_used') return void renderMemoryUsed(runId, event)");
+    expect(src).toContain('function memoryHost');
+  });
+  it('sr-only announcements go through the single live region', () => {
+    const src = appJs();
+    const say = src.slice(src.indexOf('function say('), src.indexOf('function say(') + 200);
+    expect(say).toContain('attach-live');
+    expect(src).toContain("say('Memory saved')");
+    expect(src).toContain('say(`Remembered:');
+  });
+  it('slash commands clear input and never route: /memory /remember /forget /incognito', () => {
+    const src = appJs();
+    expect(src).toContain("if (trigger === '/memory')");
+    expect(src).toContain('function runRememberCommand');
+    expect(src).toContain('function runForgetCommand');
+    expect(src).toContain('function runIncognitoCommand');
+    expect(src).toContain("if (early === '/memory') return void openMemoryView()");
+  });
+  it('settings Memory section, onboarding step, incognito badge', () => {
+    const h = html();
+    for (const id of ['id="set-mem"', 'id="set-mem-kinds"', 'id="set-mem-suggest"', 'id="set-mem-semantic"', 'id="set-mem-ask"', 'id="set-incognito"', 'id="mem-info"', 'id="btn-mem-export"', 'id="btn-mem-forgetall"', 'id="mem-import-text"', 'id="incog-badge"']) {
+      expect(h).toContain(id);
+    }
+    const src = appJs();
+    expect(src).toContain('Step ${obStep + 1} of 4');
+    expect(src).toContain('Let Nexio remember your preferences?');
+    expect(src).toContain('Only when I say "remember"');
+    expect(src).toContain('function paintIncognito');
+  });
+});
 describe('footer: always-visible panel shell, once, send disabled when empty', () => {
   it('renders exactly once, outside .view, after it, as .f-hints + .f-actions', () => {
     const h = html();

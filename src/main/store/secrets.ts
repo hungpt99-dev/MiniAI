@@ -104,3 +104,20 @@ export function redact(text: string): string {
 export function apiKeyService(provider: string): string {
   return `apikey:${provider}`;
 }
+
+/** Prefix-marked string encryption for at-rest data (memory text). Falls back to plaintext with a marker. */
+export function encryptText(s: string): { cipher: string; encrypted: boolean } {
+  const ss = loadSafeStorage();
+  if (ss) return { cipher: 'enc:' + ss.encryptString(s).toString('base64'), encrypted: true };
+  return { cipher: 'plain:' + s, encrypted: false };
+}
+
+export function decryptText(cipher: string): string {
+  if (cipher.startsWith('enc:')) {
+    const ss = loadSafeStorage();
+    if (!ss) throw new Error('No decryption backend available for this data');
+    return ss.decryptString(Buffer.from(cipher.slice(4), 'base64'));
+  }
+  if (cipher.startsWith('plain:')) return cipher.slice(6);
+  return cipher; // legacy unwrapped row
+}

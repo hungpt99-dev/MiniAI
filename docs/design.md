@@ -59,3 +59,13 @@ Dark-background brand only — there is no light variant.
   region; `Backspace` removes the focused (or last) chip.
 - Ask history shows 160px thumbs/chips with a "Delete attachments" menu.
   Vision-failure notices carry a one-click "Switch model" button.
+
+## Memory view
+
+- Like Extensions: title "Memory" + back, segmented tabs
+  (All | Preferences | Facts | Folders | Procedures | Episodes), search
+  field, 56px rows (14px text 2-line clamp, 12px muted meta with kind, scope
+  chip in mono, last-used, "Enforced" badge in accent on surface), pin
+  toggle + overflow menu (Edit, Forget) on the right, inline edit form
+  (textarea, kind seg, scope input, pin, Save/Cancel), "Add memory" primary
+  button. Run-view rows reuse the 12px ghost button. No native selects.

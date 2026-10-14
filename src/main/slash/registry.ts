@@ -15,6 +15,10 @@ const BUILTINS: SlashEntry[] = [
   { trigger: '/settings', label: 'Settings', description: 'Open settings', source: 'builtin', action: 'settings', scope: 'all' },
   { trigger: '/log', label: 'Agent log', description: 'Open the latest agent run log', source: 'builtin', action: 'log', scope: 'all' },
   { trigger: '/extensions', label: 'Extensions', description: 'Manage skills, MCP servers, hooks, workflows', source: 'builtin', action: 'extensions', scope: 'all' },
+  { trigger: '/memory', label: 'Memory', description: 'View and edit what Nexio remembers', source: 'builtin', action: 'memory', scope: 'all' },
+  { trigger: '/remember', label: 'Remember', description: 'Remember this (usage: /remember <text>)', source: 'builtin', action: 'remember', scope: 'all' },
+  { trigger: '/forget', label: 'Forget', description: 'Forget a memory (usage: /forget <text>)', source: 'builtin', action: 'forget', scope: 'all' },
+  { trigger: '/incognito', label: 'Incognito', description: 'Toggle incognito chat (no history, no memory)', source: 'builtin', action: 'incognito', scope: 'all' },
 ];
 
 function isSubsequence(query: string, target: string): boolean {

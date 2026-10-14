@@ -20,6 +20,7 @@ import {
   ASK_READ_ONLY_MESSAGE,
   ASK_WEB_CONFIRM_MESSAGE,
   allowedInAsk,
+  isMemoryWriteTool,
   type RunMode,
 } from './mode-policy';
 import { ASK_SYSTEM_PROMPT } from './prompts/ask';
@@ -72,6 +73,10 @@ export interface RunAgentOpts {
   userParts?: import('../ai/providers/types').ContentPart[];
   /** Metadata-only Do context line (file paths, never bytes). */
   attachMeta?: string;
+  /** Incognito: run normally but write nothing to the run log or undo journal. */
+  incognito?: boolean;
+  /** Extra hard-deny paths (enforced memory prohibitions). */
+  extraProtected?: string[];
   imageMode?: 'auto' | 'on' | 'off';
 }
 
@@ -152,6 +157,8 @@ export interface ToolExecState {
   lastUntrusted: string | null;
   /** Ask mode: read-only. Never shows approval cards; writes are blocked. */
   mode?: RunMode;
+  /** Call ids of memory tools (their log lines carry ids/kinds only, never text). */
+  memoryCalls?: Set<string>;
 }
 
 export type ToolCallOutcome = 'ran' | 'denied' | 'blocked' | 'rejected' | 'timeout';
@@ -171,6 +178,8 @@ export async function executeToolCall(
 ): Promise<ToolCallOutcome> {
   const input = (rawInput && typeof rawInput === 'object' ? rawInput : {}) as Record<string, unknown>;
   const askMode = st.mode === 'ask';
+  // Memory tool calls are logged with ids/kinds only — mark them up front.
+  if (tool ? tool.name.startsWith('memory_') : callName.startsWith('memory_')) st.memoryCalls?.add(callId);
   const blockedAsk = (name: string, summary: string) => {
     const output = `[${ASK_READ_ONLY_CODE}] ${ASK_READ_ONLY_MESSAGE}`;
     st.messages.push({ role: 'tool', toolCallId: callId, toolName: name, content: `Error: ${output}` });
@@ -201,6 +210,17 @@ export async function executeToolCall(
     return 'rejected';
   }
   let forceApproval = false;
+  if (isMemoryWriteTool(tool.name)) {
+    // Injection rule: untrusted content can never write memories silently.
+    // A memory call following any file/web/attachment/MCP read needs the
+    // confirmation card ("Requested after reading <source>").
+    if (st.lastUntrusted) forceApproval = true;
+    // Forgetting several items always lists them on the confirmation card.
+    if (tool.name === 'memory_forget') {
+      const ids = Array.isArray(input.ids) ? (input.ids as unknown[]).filter((x) => typeof x === 'string') : [];
+      if (ids.length > 1 || (typeof input.query === 'string' && input.query.trim())) forceApproval = true;
+    }
+  }
   // Hooks never run in Ask mode.
   if (st.hooks && !askMode) {
     const { verdict, records } = await st.hooks('PreToolUse', { tool: tool.name, input, cwd: st.cwd });
@@ -382,29 +402,49 @@ export async function runAgent(userText: string, opts: RunAgentOpts): Promise<st
     alwaysAllow: opts.alwaysAllow || [],
     requireApprovalForWrites: opts.requireApprovalForWrites !== false,
     homeDir,
+    // Enforced memory prohibitions deny here, in the same layer as all paths.
+    ...(opts.extraProtected?.length ? { extraProtected: opts.extraProtected } : {}),
   };
   const log = createRunLog(opts.logDir, opts.runId);
+  const incognito = opts.incognito === true;
+  const memoryCalls = new Set<string>();
+  /** Log-safe copy of an event: memory text never reaches the run log. */
+  const logEvent = (event: AgentEvent): Record<string, unknown> => {
+    if ((event.type === 'tool_call' || event.type === 'approval_request') &&
+      typeof event.tool === 'string' && event.tool.startsWith('memory_')) {
+      return { type: event.type, id: event.id, tool: event.tool, risk: event.risk };
+    }
+    if (event.type === 'tool_result' && memoryCalls.has(event.id)) {
+      if (event.ok) {
+        const { output, ...rest } = event;
+        return { ...rest, outputSize: output.length };
+      }
+      if (/^(Conflicts with:|Forgot:)/.test(event.output)) return { ...event, output: '[memory text withheld]' };
+      return event;
+    }
+    if (askMode && event.type === 'tool_result' && event.ok) {
+      const { output, ...rest } = event;
+      return { ...rest, outputSize: output.length };
+    }
+    return event as unknown as Record<string, unknown>;
+  };
   const emit = (event: AgentEvent) => {
     try {
-      // Ask run log: mode, tool name/path/size — never file contents.
+      // Incognito: nothing reaches the run log.
       // Failures (incl. MODE_READ_ONLY blocks) keep their short message.
-      // (Do-mode logging is unchanged.)
-      if (askMode && event.type === 'tool_result' && event.ok) {
-        const { output, ...rest } = event;
-        appendLog(log.path, { runId: log.runId, mode, event: { ...rest, outputSize: output.length } });
-      } else {
-        appendLog(log.path, { runId: log.runId, mode, event });
-      }
+      // (Do-mode logging is otherwise unchanged.)
+      if (!incognito) appendLog(log.path, { runId: log.runId, mode, event: logEvent(event) });
     } catch { /* logging never breaks the run */ }
     opts.emit(event);
   };
   const logHook = (rec: Record<string, unknown>) => {
+    if (incognito) return;
     try {
       appendLog(log.path, { runId: log.runId, mode, ...rec });
     } catch { /* logging never breaks the run */ }
   };
   try {
-    appendLog(log.path, { runId: log.runId, mode, toolCalls: tools.map((t) => t.name) });
+    if (!incognito) appendLog(log.path, { runId: log.runId, mode, toolCalls: tools.map((t) => t.name) });
   } catch { /* logging never breaks the run */ }
 
   const sysExtra = [opts.systemExtra, opts.attachMeta].filter(Boolean).join('\n') || undefined;
@@ -432,14 +472,16 @@ export async function runAgent(userText: string, opts: RunAgentOpts): Promise<st
     // Hooks never run in Ask mode.
     hooks: askMode ? null : (opts.hooks ?? null),
     logHook,
-    // Journal only for identified Do runs — Ask changes nothing, so it never enters undo.
+    // Journal only for identified, non-incognito Do runs — Ask changes nothing,
+    // incognito keeps nothing, so neither enters undo.
     // Without runId there is no journal key — and tests stay hermetic.
-    undo: !askMode && opts.runId ? { runId: opts.runId, prompt: userText, dir: opts.undoDir } : undefined,
+    undo: !askMode && !incognito && opts.runId ? { runId: opts.runId, prompt: userText, dir: opts.undoDir } : undefined,
     checkRunTimeout: () => Date.now() - start - st.approvalWaitMs > limits.runTimeoutMs,
     toolCalls: 0,
     approvalWaitMs: 0,
     lastUntrusted: null,
     mode,
+    memoryCalls,
   };
   const elapsed = () => Date.now() - start - st.approvalWaitMs;
   const checkAbort = () => {

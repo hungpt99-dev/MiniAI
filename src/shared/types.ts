@@ -86,7 +86,84 @@ export interface Settings {
   askReadNoticeDismissed?: Record<string, boolean>;
   /** Launch at login via app.setLoginItemSettings. Off by default. */
   launchAtLogin?: boolean;
+  /** Master switch for long-term memory. Default false until onboarding asks. */
+  memoryEnabled?: boolean;
+  /** Per-kind opt-ins. Default all true once the master switch is on. */
+  memoryKinds?: Record<MemoryKind, boolean>;
+  /** Suggest memories after runs (one cheap call, user messages only). Default false. */
+  memorySuggest?: boolean;
+  /** Semantic search (provider embeddings). Default false; retrieval stays FTS until wired. */
+  memorySemantic?: boolean;
+  /** Use memory in Ask mode. Default true. */
+  memoryUseInAsk?: boolean;
+  /** Max stored memories. Default 500. */
+  memoryMaxItems?: number;
+  /** Episode expiry in days. Default 30. */
+  memoryEpisodeDays?: number;
+  /** Days until an unused non-pinned item is marked stale. Default 180. */
+  memoryStaleDays?: number;
+  /** Dismissed suggestion hashes (never propose again). */
+  memoryDismissed?: string[];
+  /** Memory privacy notice dismissed, keyed by provider id. Absent = show once. */
+  memoryNoticeDismissed?: Record<string, boolean>;
+  /** Approved folder-rule file lines: path -> line hash. */
+  memoryRuleApprovals?: Record<string, string>;
+  /** Incognito: no history, no memory reads/writes, minimal run log. Default false. */
+  incognito?: boolean;
 }
+
+/** Long-term memory kinds (main + renderer safe). */
+export type MemoryKind = 'preference' | 'fact' | 'folder_rule' | 'procedure' | 'episode';
+
+/** Memory scope: global, one folder, one app, or one project. */
+export type MemoryScope =
+  | { type: 'global' }
+  | { type: 'folder'; path: string }
+  | { type: 'app'; name: string }
+  | { type: 'project'; id: string };
+
+export type MemorySource = 'user_said' | 'user_approved' | 'import' | 'system';
+
+/** Renderer-safe memory row (text already capped at save time). */
+export interface MemoryRow {
+  id: string;
+  kind: MemoryKind;
+  text: string;
+  scope: MemoryScope;
+  source: MemorySource;
+  createdAt: number;
+  updatedAt: number;
+  lastUsedAt: number;
+  useCount: number;
+  pinned: boolean;
+  confidence: number;
+  expiresAt?: number;
+  link?: string;
+  enforced?: boolean;
+  stale?: boolean;
+}
+
+/** Push events for memory rows/cards (memory-event channel). */
+export type MemoryPush =
+  | { type: 'saved'; id: string; kind: MemoryKind; text: string }
+  | { type: 'suggest'; candidates: Array<{ text: string; hash: string }> }
+  | { type: 'conflict'; text: string; conflicts: Array<{ id: string; text: string }> }
+  | { type: 'blocked'; reason: string };
+
+/** Single-channel memory management (the memory dispatch channel). */
+export type MemoryAction =
+  | { action: 'list'; kind?: MemoryKind; q?: string }
+  | { action: 'get'; id: string }
+  | { action: 'save'; kind: MemoryKind; text: string; scope?: MemoryScope; pinned?: boolean; source?: MemorySource; replaceId?: string }
+  | { action: 'update'; id: string; text: string; pinned?: boolean }
+  | { action: 'forget'; id: string }
+  | { action: 'forgetQuery'; q: string }
+  | { action: 'search'; q: string; limit?: number }
+  | { action: 'export' }
+  | { action: 'import'; json: string; dry?: boolean }
+  | { action: 'forgetAll'; confirm: string }
+  | { action: 'dismiss'; hash: string }
+  | { action: 'info' };
 
 export interface NexioError {
   code: 'auth' | 'rate-limit' | 'timeout' | 'network' | 'model' | 'unknown' | 'validation' | 'aborted';

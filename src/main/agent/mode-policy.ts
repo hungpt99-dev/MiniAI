@@ -28,6 +28,16 @@ export function askTools<T extends Pick<Tool, 'name' | 'risk' | 'askSafe'>>(tool
 }
 
 /**
+ * memory_save/update/forget are write tools the model may call. In Ask they
+ * stay blocked (askSafe false) EXCEPT through the explicit user confirmation
+ * row/card path, which saves via direct IPC and never executes a tool call.
+ * See docs/security.md and src/main/memory/tools.ts (directSaveMemory).
+ */
+export function isMemoryWriteTool(name: string): boolean {
+  return name === 'memory_save' || name === 'memory_update' || name === 'memory_forget';
+}
+
+/**
  * MCP tools in Ask: allowed only when ALL are true — server trusted (risk
  * already mapped to 'read' on trusted servers), readOnlyHint, and the user
  * enabled "Allow in Ask mode" for that exact tool (default off).

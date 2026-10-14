@@ -86,6 +86,20 @@ MCP (official SDK, stdio + Streamable HTTP/SSE, trust-gated), hooks
 can only make permissions stricter), workflows (ext + legacy). One typed
 dispatch channel (`nexio:ext`). Everything installs OFF until reviewed.
 
+## Long-term memory
+
+`src/main/memory/`: `store.ts` (single access layer: CRUD, FTS5 + token
+search, dedupe, conflicts, decay, export/import over the app SQLite DB),
+`retrieve.ts` (per-run budgets: 8 items, ~1,200 tokens, scope filter, pinned
+first), `protect.ts` (user-approved "never touch" rules → `extraProtected`
+permission paths; `.nexio/rules.md` file rules), `tools.ts`
+(`memory_search` read/askSafe + write trio, Ask-blocked except the
+confirmation path), `extract.ts` (explicit-remember triggers, user-messages-
+only suggestion extractor). Retrieval injects a delimited `<user_memory>`
+block via the existing `systemExtra` path; one dispatch channel
+(`nexio:memory`) plus a `nexio:memory-event` push for rows/cards. See
+`docs/memory.md` and `docs/adr/0006-local-memory.md`.
+
 ## Settings / storage
 
 SQLite `%APPDATA%/Nexio/nexio.db` (WAL), override `NEXIO_DATA_DIR`
@@ -122,4 +136,4 @@ for the History â†’ Run Log view.
 
 ## Popup views (single-view)
 
-`src/shared/view.ts` owns the view state (`idle|palette|run|settings|extensions|history` + `returnTo`); `src/renderer/app.js showView()` mounts exactly one node in `.view` (dev asserts) with the run unit (`#messages/#agent-steps/#answer-meta/#actions/chips`) wrapped in `#run`. View-only slashes (`/extensions /settings /history /log`) and the footer buttons never submit/route/start runs; background runs surface a single `Running/Done / View` footer chip. Planning rows exist only while active; failures expand steps; approvals block view switches so cards are never buried.
+`src/shared/view.ts` owns the view state (`idle|palette|run|settings|extensions|history|memory` + `returnTo`); `src/renderer/app.js showView()` mounts exactly one node in `.view` (dev asserts) with the run unit (`#messages/#agent-steps/#answer-meta/#actions/chips`) wrapped in `#run`. View-only slashes (`/extensions /settings /history /log /memory`) and the footer buttons never submit/route/start runs; background runs surface a single `Running/Done / View` footer chip. Planning rows exist only while active; failures expand steps; approvals block view switches so cards are never buried.

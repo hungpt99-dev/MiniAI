@@ -7,3 +7,5 @@
 - `development/testing.md` â€” typecheck + vitest.
 - `development/troubleshooting.md` â€” incl. SQLite/Electron blocker.
 - `agents/` â€” Do-loop notes; `AGENTS.md` (repo root) is canonical.
+- `memory.md` — long-term memory: kinds, storage, retrieval, privacy.
+- `adr/0006-local-memory.md` — why local SQLite + FTS first, embeddings optional.

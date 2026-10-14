@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { IpcChannels } from '../shared/ipc-channels';
-import type { Mode, Settings, ExtAction } from '../shared/types';
+import type { MemoryAction, MemoryPush, Mode, Settings, ExtAction } from '../shared/types';
 import type { AgentEvent, ApprovalDecision } from './agent/types';
 
 export interface SendOpts {
@@ -81,6 +81,12 @@ const api = {
     return () => ipcRenderer.removeListener(IpcChannels.agentEvent, fn);
   },
   ext: (a: ExtAction) => invoke(IpcChannels.ext, a),
+  memory: (a: MemoryAction) => invoke(IpcChannels.memory, a),
+  onMemoryEvent: (cb: (ev: { runId?: string; requestId?: string; conversationId?: string; event: MemoryPush }) => void) => {
+    const fn = (_e: unknown, data: { runId?: string; requestId?: string; conversationId?: string; event: MemoryPush }) => cb(data);
+    ipcRenderer.on(IpcChannels.memoryEvent, fn);
+    return () => ipcRenderer.removeListener(IpcChannels.memoryEvent, fn);
+  },
   getPlatform: () => invoke(IpcChannels.platform),
   getHotkeyStatus: () => invoke(IpcChannels.hotkeyStatus),
   setHotkey: (hotkey: string) => invoke(IpcChannels.setHotkey, hotkey),
