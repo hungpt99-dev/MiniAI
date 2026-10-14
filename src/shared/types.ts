@@ -74,10 +74,16 @@ export interface Settings {
   agentStopHotkey?: string;
   agentMaxCalls?: number;
   requireApprovalForWrites?: boolean;
+  /** Ask mode may read files and the system (read-only). Default true; off = plain chat. */
+  askReadEnabled?: boolean;
+  /** MCP full tool names (mcp__server__tool) allowed in Ask. Default []. */
+  askMcpTools?: string[];
   onboarded?: boolean;
   suggestions?: string[];
   /** Attachment notice dismissed, keyed by provider id. Absent = show. */
   attachNoticeDismissed?: Record<string, boolean>;
+  /** Ask read notice dismissed, keyed by provider id. Absent = show once. */
+  askReadNoticeDismissed?: Record<string, boolean>;
   /** Launch at login via app.setLoginItemSettings. Off by default. */
   launchAtLogin?: boolean;
 }

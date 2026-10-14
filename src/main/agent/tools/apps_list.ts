@@ -6,6 +6,7 @@ export const appsListTool: Tool = {
   description: 'List running applications / processes (name only, no window control).',
   inputSchema: { type: 'object', properties: {} },
   risk: 'read',
+  askSafe: true,
   describe: () => 'List running applications',
   run: async (_input, ctx) => {
     try {

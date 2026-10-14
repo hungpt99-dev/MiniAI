@@ -12,6 +12,7 @@ export const clipboardWriteTool: Tool = {
     required: ['text'],
   },
   risk: 'write',
+  askSafe: false,
   describe: (input) => `Write ${String(input.text || '').length} chars to clipboard`,
   run: async (input) => clipboardWriteText(String(input.text || '')),
 };

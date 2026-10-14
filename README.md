@@ -30,6 +30,8 @@ Press `Alt+Space`, say what you want done, dismiss. Nexio finds files, opens app
 and organizes things for you. When you have not picked a mode, Nexio routes
 automatically (heuristic first, one cheap model call when uncertain) and shows
 `Doing` / `Answering` in the footer. An explicit mode pick always wins.
+Ask can read your files to answer questions (read-only, never changes anything);
+Do can change them (with approval cards before risky actions).
 
 ## Install
 

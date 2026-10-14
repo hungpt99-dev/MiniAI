@@ -19,6 +19,7 @@ export const webSearchTool: Tool = {
     required: ['query'],
   },
   risk: 'read',
+  askSafe: true,
   describe: (input) => `Web search: ${String(input.query || '')}`,
   run: async (input, ctx) => {
     const cfg = searchConfig();

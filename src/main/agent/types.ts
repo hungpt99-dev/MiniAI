@@ -28,6 +28,11 @@ export interface Tool {
   description: string;
   inputSchema: JsonSchema;
   risk: Risk;
+  /**
+   * Explicit Ask-mode opt-in (default false: blocked in Ask until set true).
+   * True only for read-only tools that cannot create, modify, open or run anything.
+   */
+  askSafe?: boolean;
   /** Exact human-readable action shown in approval (full command / path / URL). */
   describe(input: Record<string, unknown>): string;
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;

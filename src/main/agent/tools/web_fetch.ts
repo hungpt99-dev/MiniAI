@@ -12,6 +12,7 @@ export const webFetchTool: Tool = {
     required: ['url'],
   },
   risk: 'read',
+  askSafe: true,
   describe: (input) => `Fetch URL ${String(input.url || '')}`,
   run: async (input, ctx) => {
     const url = String(input.url || '');

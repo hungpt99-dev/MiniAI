@@ -33,6 +33,7 @@ export const attachmentListTool: Tool = {
   description: 'List files attached to this run (name, type, size). Read-only.',
   inputSchema: { type: 'object', properties: { runId: { type: 'string', description: 'Run id' } }, required: ['runId'] },
   risk: 'read',
+  askSafe: true,
   describe: (input) => `List attachments for run ${String(input.runId || '')}`,
   run: async (input) => {
     const runId = String(input.runId || '');
@@ -52,6 +53,7 @@ export const attachmentReadTool: Tool = {
     required: ['runId', 'id'],
   },
   risk: 'read',
+  askSafe: true,
   describe: (input) => `Read attachment ${String(input.id || '')}`,
   run: async (input) => {
     const runId = String(input.runId || '');

@@ -16,6 +16,7 @@ Verified from source; packaged-SQLite caveat in main README.
 | Workflows | prompt → transform → conditional → user-input → output |
 
 | Do loop | Built-in tool loop in main, approvals, redacted JSONL + runs.jsonl |
+| Ask loop | Same loop, read-only: askSafe tools only, MODE_READ_ONLY guard, 8 calls / 60 s, no approvals, secrets redacted |
 
 ## Planned / known gaps
 

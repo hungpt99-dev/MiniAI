@@ -43,3 +43,26 @@ No external agent CLI is wrapped. Chat mode is untouched.
 Read: `fs_search fs_read fs_list apps_list clipboard_read web_search
 web_fetch attachment_list attachment_read`. Write: `app_open clipboard_write fs_write fs_move fs_copy
 fs_trash` (trash only, never delete). Destructive: `shell_run`.
+
+Every tool carries an explicit `askSafe` flag (default `false`; new tools are
+blocked in Ask until opted in). `askSafe: true` only for the read tools above
+plus `skill_load` (instructions only); `web_search`/`web_fetch` only run in Ask
+when configured. Writes, `app_open` and `shell_run` are `askSafe: false`.
+
+## Ask mode (read-only)
+
+Ask (`chat`) runs the same loop with the Ask tool set and a read-only system
+prompt (`src/main/agent/prompts/ask.ts`). Policy lives in
+`src/main/agent/mode-policy.ts` (`allowedInAsk`: `risk === 'read'` and
+`askSafe`). Three layers: (a) the model only sees askSafe tools, (b) the
+dispatcher guard blocks anything else with `MODE_READ_ONLY` (covers forged or
+injected names), (c) read implementations cannot write (no shell, no write
+syscalls). Limits: 8 calls, 60s total, 30s per tool. No approval cards in Ask:
+reads inside allowed roots auto-run; reads outside return "Outside the allowed
+folders…"; web calls right after a file read wait for explicit user
+confirmation. Skills load instructions only (scripts never run in Ask); MCP
+tools only when the server is trusted, the tool is read-only, and the user
+opted that tool into Ask (default off); hooks and workflows never run in Ask
+(`/workflow` in Ask shows "Workflows run in Do mode" + switch chip). File text
+read in Ask goes to the selected provider (one-time remote-provider notice);
+secrets are redacted before the model ("Secrets hidden") and never logged.

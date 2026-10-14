@@ -155,3 +155,62 @@ describe('e2e-fake: fresh shows no Planning, slow run shows the chip', () => {
     expect(src).toContain('window.nexio.resize(h)');
   });
 });
+
+describe('footer: always-visible panel shell, once, send disabled when empty', () => {
+  it('renders exactly once, outside .view, after it', () => {
+    const h = html();
+    expect(h.split('<footer').length - 1).toBe(1);
+    expect(h.split('id="hints"').length - 1).toBe(1);
+    const viewOpen = h.indexOf('id="view"');
+    const footerOpen = h.indexOf('<footer');
+    expect(footerOpen).toBeGreaterThan(viewOpen);
+    // no per-view footer copies: every view section starts before the single footer
+    for (const id of ['id="run"', 'id="settings"', 'id="history"', 'id="extensions"', 'id="onboard"']) {
+      expect(h.indexOf(id)).toBeLessThan(footerOpen);
+    }
+    expect(h.slice(footerOpen, h.indexOf('</footer>'))).toContain('id="hints"');
+    // right-side icon group present in the single copy
+    const foot = h.slice(footerOpen, footerOpen + 8000);
+    for (const id of ['id="btn-ext"', 'id="btn-history"', 'id="btn-settings"', 'id="btn-attach"', 'id="btn-send"']) {
+      expect(foot).toContain(id);
+    }
+  });
+  it('no view or mode switch ever hides it (idle/palette/run/settings/extensions/history, chat+agent)', () => {
+    const src = appJs();
+    expect(src).not.toMatch(/\$\('hints'\)\)\.classList/);
+    for (const line of src.split('\n')) {
+      if (line.includes('hints') && !line.includes('hint-')) expect(line).not.toContain('hidden');
+    }
+    for (const fn of ['function showView', 'function updateModeUI', 'function syncChrome']) {
+      const start = src.indexOf(fn);
+      const end = src.indexOf('function ', start + 10);
+      const body = end === -1 ? src.slice(start) : src.slice(start, end);
+      expect(body).not.toMatch(/hints['"]?\)\)?\.(classList\.toggle|classList\.add|remove\(\))/);
+    }
+  });
+  it('idle hints read Tab/Enter/Esc-close, typing keeps Enter-run/Esc-clear', () => {
+    const src = appJs();
+    expect(src).toContain("escLabel = (hasInput || hasAttach || hasMsgs) ? 'clear' : 'close'");
+    expect(src).toContain("'hidden', !(inputEl && !inputEl.value && document.activeElement === inputEl && !inputEl.disabled)");
+  });
+  it('send disables while input and attachments are empty', () => {
+    const src = appJs();
+    const start = src.indexOf('function syncChrome');
+    const body = src.slice(start, src.indexOf('renderPalette = function'));
+    expect(body).toContain("sendEmpty = !inputEl.value && attachPending() === 0");
+    expect(body).toContain('sendBtn.disabled = sendEmpty');
+  });
+  it('footer metrics: 48px floor, 8/14/8/22 padding, divider top, never scrolled away', () => {
+    const css = read('src/renderer/styles.css');
+    const block = css.slice(css.indexOf('#hints {'), css.indexOf('#hints {') + 300);
+    expect(block).toContain('48px');
+    expect(block).toContain('8px 14px 8px 22px');
+    expect(block).toContain('1px solid var(--divider)');
+    expect(block).toContain('flex: none');
+    expect(css).toContain('.fbtn.send:disabled');
+    // .view stays the only scroller; footer is in-flow after it so resize includes it
+    expect(css).toMatch(/\.view \{[^}]*flex: 1/);
+    const src = appJs();
+    expect(src).toContain("panel.scrollHeight");
+  });
+});

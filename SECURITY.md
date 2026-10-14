@@ -64,6 +64,23 @@
   name/type/size/SHA256 only — never bytes. First use shows
   "Attachments stay on this computer … (localhost processing)".
 
+## Ask-mode read-only guarantee
+
+- Ask runs the same agent loop with only `askSafe` read tools; the model never
+  sees write tools. A dispatcher guard blocks any other call with
+  `MODE_READ_ONLY` (covers hallucinated or injected names) and logs it.
+- Read implementations cannot write: no shell, no write syscalls, no
+  temp-file side effects outside the app cache. No approval card ever appears
+  in Ask; reads inside allowed roots auto-run under the same roots /
+  protected-path / symlink / traversal / size-cap rules as Do.
+- Main exfiltration shape ("read, then send elsewhere") is gated: web calls
+  right after a file read wait for the user's explicit confirmation, and file
+  contents never enter search queries or fetch URLs unless explicitly asked.
+  File text read in Ask goes to the selected provider (one-time notice on
+  remote providers); secrets are redacted before the model and never logged.
+  Run logs record mode, tool name/path/size (no contents), blocks and
+  redactions. Ask never enters the undo journal.
+
 ## Reporting a vulnerability
 
 Report via GitHub private security advisory. Do not open a public GitHub Issue.

@@ -13,6 +13,7 @@ export const fsListTool: Tool = {
     required: ['path'],
   },
   risk: 'read',
+  askSafe: true,
   describe: (input) => `List directory ${String(input.path || '')}`,
   run: async (input) => {
     const p = String(input.path || '');

@@ -16,6 +16,7 @@ export const fsWriteTool: Tool = {
     required: ['path', 'content'],
   },
   risk: 'write',
+  askSafe: false,
   describe: (input) => `Write ${String(input.content || '').length} chars to ${String(input.path || '')}${input.overwrite ? ' (overwrite)' : ''}`,
   run: async (input) => {
     const p = String(input.path || '');

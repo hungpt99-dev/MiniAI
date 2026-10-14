@@ -18,6 +18,7 @@ export const fsSearchTool: Tool = {
     required: ['query'],
   },
   risk: 'read',
+  askSafe: true,
   describe: (input) => `Search files named "*${String(input.query || '')}*" under ${String(input.root || '(working folder)')}`,
   run: async (input, ctx) => {
     const query = String(input.query || '').toLowerCase();

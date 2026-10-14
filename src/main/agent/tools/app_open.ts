@@ -13,6 +13,7 @@ export const appOpenTool: Tool = {
     required: ['nameOrPath'],
   },
   risk: 'write',
+  askSafe: false,
   describe: (input) => `Open ${String(input.nameOrPath || '')} with the OS default handler`,
   run: async (input) => {
     const target = String(input.nameOrPath || '').trim();

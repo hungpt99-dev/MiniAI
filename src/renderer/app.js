@@ -45,7 +45,9 @@ function updateModeUI() {
   $('tab-agent').setAttribute('aria-selected', String(!isChat));
   const chip = $('agent-cwd');
   if (chip) chip.classList.toggle('hidden', isChat);
-  inputEl.placeholder = isChat ? 'Ask anything…' : 'What do you want to do?';
+  inputEl.placeholder = isChat ? 'Ask about your files or anything else...' : 'What do you want to do?';
+  const ro = $('hint-readonly');
+  if (ro) ro.classList.toggle('hidden', !isChat);
 }
 
 // why: autosize composer up to 224px, then internal scroll
@@ -260,6 +262,14 @@ async function sendInner() {
         return;
       }
       if (r.found.source === 'workflow') {
+        // Workflows run in Do mode only: offer the switch chip in Ask.
+        if (mode === 'chat') {
+          addMsg('user', text);
+          showView('run');
+          const div = addMsg('assistant', 'Workflows run in Do mode.');
+          div.appendChild(switchToDoChip(text));
+          return;
+        }
         // v1 extension workflows open an input form; legacy ones run directly.
         try {
           const info = await window.nexio.ext({ action: 'workflowInfo', trigger });
@@ -322,6 +332,7 @@ async function sendInner() {
   addMsg('user', text);
   showView('run');
   const id = await ensureConv();
+  lastAskPrompt = mode === 'chat' ? text : '';
   assistantDiv = addMsg('assistant', '…');
   try {
     const requestId = `r${Date.now()}-${++reqSeq}`;
@@ -498,6 +509,8 @@ $('btn-settings').onclick = async () => {
   $('set-stophotkey').value = s.agentStopHotkey || 'Ctrl+Alt+Esc';
   $('set-maxcalls').value = s.agentMaxCalls || 25;
   $('set-reqapprove').checked = s.requireApprovalForWrites !== false;
+  if ($('set-askread')) $('set-askread').checked = s.askReadEnabled !== false;
+  void paintAskMcp(s.askMcpTools || []);
   $('set-suggest').value = (s.suggestions || []).join('\n');
   if ($('set-hotkey')) $('set-hotkey').value = s.hotkey || currentToggleHotkey;
   if ($('set-stophotkey') && s.agentStopHotkey) currentStopHotkey = s.agentStopHotkey;
@@ -524,6 +537,9 @@ $('btn-save-settings').onclick = async () => {
   const mc = parseInt($('set-maxcalls').value, 10);
   if (Number.isFinite(mc)) patch.agentMaxCalls = Math.min(100, Math.max(1, mc));
   patch.requireApprovalForWrites = $('set-reqapprove').checked; // shell_run always needs approval regardless
+  if ($('set-askread')) patch.askReadEnabled = $('set-askread').checked;
+  patch.askMcpTools = Array.from(document.querySelectorAll('#ask-mcp input[data-askmcp]'))
+    .filter((c) => c.checked).map((c) => c.dataset.askmcp);
   const hk = $('set-hotkey') && $('set-hotkey').value.trim();
   if (hk) patch.hotkey = hk;
   if ($('set-login')) patch.launchAtLogin = $('set-login').checked;
@@ -699,7 +715,13 @@ function syncChrome() {
   const hasAnswer = view === 'run' && !!messagesEl.querySelector('.msg.assistant');
   if ($('answer-meta')) $('answer-meta').classList.toggle('hidden', !hasAnswer);
   if ($('actions')) $('actions').classList.toggle('hidden', !hasAnswer);
-  if ($('hints')) $('hints').classList.toggle('hidden', idle);
+  // why: footer lives in the panel shell outside .view — always visible, every state
+  var sendBtn = $('btn-send');
+  if (sendBtn) {
+    var sendEmpty = !inputEl.value && attachPending() === 0;
+    sendBtn.disabled = sendEmpty;
+    sendBtn.setAttribute('aria-disabled', String(sendEmpty));
+  }
   // single Tab keycap beside the pill: only when composer focused-and-empty (hover handled in CSS)
   document.body.classList.toggle('show-tabkey', document.activeElement === inputEl && !inputEl.value && !inputEl.disabled);
   updateRunChip();
@@ -860,6 +882,29 @@ document.addEventListener('keydown', (e) => {
 // var (not let): boot code above calls syncChrome() before this block executes.
 var agentState = null; // {runId, rows:Map, answerDiv}
 var agentCwd = '';
+// Last Ask prompt (for the "Switch to Do and run this" chip — resends, never auto-runs).
+var lastAskPrompt = '';
+var WRITE_LIKE = /\b(create|make|new|delete|remove|trash|rename|move|copy|duplicate|run|execute|open|launch|install|save|write|organize)\b/i;
+
+// Quiet ghost chip: switches to Do and re-sends the same prompt. The Do run
+// still shows its normal approval card; nothing executes without approval.
+function switchToDoChip(promptText) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'switch-do-chip';
+  btn.textContent = 'Switch to Do and run this';
+  btn.title = 'Switch to Do mode and re-send this prompt (approvals still apply)';
+  btn.onclick = () => {
+    const text = (promptText || '').trim() || (inputEl.value || '').trim();
+    if (!text) return;
+    selectMode('agent');
+    inputEl.value = text;
+    drafts.agent = text;
+    grow();
+    void send();
+  };
+  return btn;
+}
 
 function agentRunning() { return !!agentState; }
 
@@ -1011,8 +1056,11 @@ function handleAgentEvent(runId, ev) {
     finalizeSpinners();
     // planning narration is replaced by the N-steps header once tools run
     document.querySelectorAll('#agent-steps .plan-row').forEach((r) => r.remove());
+    // Ask mode is read-only: tag tool names in muted text, never approval cards.
+    const askTag = (typeof mode !== 'undefined' && mode === 'chat')
+      ? ' <span class="ask-tag">Read-only</span>' : '';
     const row = addAgentRow('tool',
-      iconFor('run') + `<div class="tx"><span class="tool-name">${esc(ev.tool)}</span> ` +
+      iconFor('run') + `<div class="tx"><span class="tool-name">${esc(ev.tool)}</span>${askTag} ` +
       `<span>${esc(ev.summary || '')}</span>` +
       (ev.afterUntrusted ? `<div class="untrusted-note" style="font-size:12px;color:var(--warn)">Requested after reading ${esc(ev.afterUntrusted)}</div>` : '') +
       `</div><span class="dur"></span>`);
@@ -1036,7 +1084,23 @@ function handleAgentEvent(runId, ev) {
   } else if (ev.type === 'tool_result') {
     const row = st.rows.get(ev.id);
     const dur = fmtDur(ev.durationMs);
-    if (row) {
+    // A blocked Ask call shows a failed step with a switch chip, never an approval card.
+    if (!ev.ok && typeof ev.output === 'string' && ev.output.includes('MODE_READ_ONLY')) {
+      if (row) {
+        const ic = row.querySelector('.ic');
+        if (ic) { ic.classList.remove('spin'); ic.innerHTML = stepSvg(ICO_FAIL); }
+        const tx = row.querySelector('.tx');
+        if (tx) {
+          tx.innerHTML = '';
+          tx.appendChild(document.createTextNode('Blocked: Ask mode is read-only. '));
+          tx.appendChild(switchToDoChip(lastAskPrompt));
+        }
+      } else {
+        const r = addAgentRow('tool', iconFor('fail') + '<div class="tx">Blocked: Ask mode is read-only.</div>');
+        r.querySelector('.tx').appendChild(switchToDoChip(lastAskPrompt));
+      }
+      agentScroll();
+    } else if (row) {
       const ic = row.querySelector('.ic');
       if (ic) { ic.classList.remove('spin'); ic.innerHTML = stepSvg(ev.ok ? ICO_OK : ICO_FAIL); }
       const d = row.querySelector('.dur');
@@ -1089,6 +1153,14 @@ function handleAgentEvent(runId, ev) {
     collapseSteps();
     clearRunCards(runId);
     endAgentRun();
+    // Ask: a write-shaped request answered as text gets the quiet switch chip.
+    // Nothing ran in Ask; the Do re-send still needs its normal approvals.
+    try {
+      if (typeof mode !== 'undefined' && mode === 'chat' && st.answerDiv &&
+        st.rows.size === 0 && WRITE_LIKE.test(lastAskPrompt || '')) {
+        st.answerDiv.appendChild(switchToDoChip(lastAskPrompt));
+      }
+    } catch {}
     renderRunChips(runId);
     setRouteStatus(null);
     syncChrome();
@@ -1289,6 +1361,48 @@ function confirmAddRoot(picked) {
   rootConfirmPrior = document.activeElement;
   add.focus();
   requestResize();
+}
+
+// Ask-mode MCP allowlist: per-tool "Allow in Ask mode" toggles, default off.
+// Only trusted-server read tools can appear here; the main process re-checks.
+async function paintAskMcp(allowed) {
+  const ul = $('ask-mcp');
+  if (!ul) return;
+  ul.innerHTML = '';
+  const allow = new Set(allowed || []);
+  let defs = [];
+  try {
+    const data = await window.nexio.ext({ action: 'list' });
+    for (const m of (data && data.mcp) || []) {
+      for (const t of m.toolDefs || []) defs.push(`mcp__${m.name}__${t.name}`);
+    }
+  } catch { /* extensions optional */ }
+  const known = defs.length ? defs : [...allow];
+  if (!known.length) {
+    const li = document.createElement('li');
+    const span = document.createElement('span');
+    span.textContent = 'No MCP tools known — start a server in Extensions to browse them.';
+    li.appendChild(span);
+    ul.appendChild(li);
+    return;
+  }
+  for (const full of known) {
+    const li = document.createElement('li');
+    const label = document.createElement('label');
+    label.className = 'fld check';
+    const span = document.createElement('span');
+    span.textContent = full;
+    span.title = full;
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.dataset.askmcp = full;
+    box.checked = allow.has(full);
+    box.setAttribute('aria-label', `Allow ${full} in Ask mode`);
+    label.appendChild(span);
+    label.appendChild(box);
+    li.appendChild(label);
+    ul.appendChild(li);
+  }
 }
 
 function ruleLabel(r) {

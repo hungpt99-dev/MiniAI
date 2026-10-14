@@ -89,6 +89,7 @@ export function makeSkillLoadTool(opts: {
       required: ['name'],
     },
     risk: 'read',
+    askSafe: true,
     describe: (input) => `Load skill ${String(input.name || '')}${input.file ? ` file ${String(input.file)}` : ''}`,
     run: async (input) => {
       const name = String(input.name || '').trim();

@@ -12,6 +12,9 @@ Settings live in the app SQLite DB (`getSettings`/`updateSettings` in
 | `agentAllowedRoots` | `[]` | Extra readable roots (home/Desktop/Documents/Downloads implied). |
 | `agentAlwaysAllow` | `[]` | Scoped always-allow rules, revocable. |
 | `requireApprovalForWrites` | `true` | Cannot disable approval for `shell_run`. |
+| `askReadEnabled` | `true` | Ask mode may read files and the system (read-only). `false` returns Ask to plain chat with no tools. |
+| `askMcpTools` | `[]` | MCP full tool names (`mcp__server__tool`) allowed in Ask. Each also needs a trusted server and a read-only tool; default off. |
+| `askReadNoticeDismissed` | `{}` | Per-provider first-use Ask read notice (remote providers only). |
 | `agentMaxCalls` | `25` | 1–100 tool calls per run. |
 | `sendTemperature` | `true` | Custom provider only: send `temperature`. Off for strict local servers. |
 | `compatibleImages` | `auto` | Custom provider only: image support `auto` (probe) / `on` / `off`. Off holds images back with the non-vision notice. |

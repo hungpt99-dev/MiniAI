@@ -16,6 +16,7 @@ export const fsReadTool: Tool = {
     required: ['path'],
   },
   risk: 'read',
+  askSafe: true,
   describe: (input) => `Read file ${String(input.path || '')}`,
   run: async (input) => {
     const p = String(input.path || '');

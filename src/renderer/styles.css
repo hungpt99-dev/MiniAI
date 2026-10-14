@@ -148,8 +148,8 @@ body.show-tabkey #modebar:not(.hidden) + #mode-hint { display: inline !important
 #palette .lb { font-size: 12px; color: var(--muted); padding: 8px 14px 4px; letter-spacing: .06em; font-weight: 500; }
 
 /* footer: hints 12 muted + ghost 32 icons, filled accent send; .view keeps the single divider */
-#hints { display: flex; gap: 8px; align-items: center; padding: 8px 22px; font-size: 12px;
-  color: var(--muted); border-top: 0; flex: none; }
+#hints { display: flex; gap: 8px; align-items: center; min-height: 48px; padding: 8px 14px 8px 22px; font-size: 12px;
+  color: var(--muted); border-top: 1px solid var(--divider); flex: none; }
 #hints .sp { margin-left: auto; }
 #hints .fbtn { flex: none; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
   border: 0; background: transparent; color: var(--muted); border-radius: 8px;
@@ -157,6 +157,7 @@ body.show-tabkey #modebar:not(.hidden) + #mode-hint { display: inline !important
 #hints .fbtn:hover { background: var(--hover); color: var(--text); }
 #hints .fbtn.send { background: var(--accent); color: var(--on-accent); }
 #hints .fbtn.send:hover { background: var(--accent); color: var(--on-accent); filter: brightness(1.08); }
+#hints .fbtn.send:disabled { opacity: .35; cursor: default; filter: none; }
 #hints .fbtn svg { width: 18px; height: 18px; display: block; }
 
 /* in-flow view sections: static, no own border/radius/bg/shadow */
@@ -219,6 +220,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 @keyframes aspin { to { transform: rotate(360deg); } }
 .astep .tx { flex: 1; min-width: 0; }
 .astep .tool-name { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--text-soft); }
+/* Ask mode: muted Read-only tag on tool names; ghost switch chip (12px). */
+.astep .ask-tag { font-size: 12px; color: var(--muted); font-weight: 400; }
+.switch-do-chip { background: none; border: 1px solid var(--border); color: var(--muted); font-size: 12px;
+  border-radius: 999px; padding: 2px 10px; cursor: pointer; font-family: inherit; margin-top: 6px; }
+.switch-do-chip:hover { color: var(--text-soft); background: var(--hover); }
+#hint-readonly { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; }
+#hint-readonly svg { width: 14px; height: 14px; flex: none; }
 .astep .dur { flex: none; font-size: 12px; color: var(--muted); }
 .astep .show-out { background: none; border: 0; color: var(--muted); font-size: 12px; cursor: pointer;
   padding: 2px 0; font-family: inherit; text-decoration: underline; }

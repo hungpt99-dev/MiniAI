@@ -27,6 +27,8 @@ export const DEFAULT_SETTINGS: Settings = {
   agentStopHotkey: 'Ctrl+Alt+Esc',
   agentMaxCalls: 25,
   requireApprovalForWrites: true,
+  askReadEnabled: true,
+  askMcpTools: [],
   onboarded: false,
   suggestions: [...DEFAULT_SUGGESTIONS],
   launchAtLogin: false,
@@ -51,9 +53,13 @@ export function validateSettings(s: Partial<Settings>): string[] {
   if (s.agentStopHotkey !== undefined && (typeof s.agentStopHotkey !== 'string' || !s.agentStopHotkey.trim())) errors.push('agentStopHotkey must be non-empty');
   if (s.agentMaxCalls !== undefined && (typeof s.agentMaxCalls !== 'number' || s.agentMaxCalls < 1 || s.agentMaxCalls > 100)) errors.push('agentMaxCalls must be 1..100');
   if (s.requireApprovalForWrites !== undefined && typeof s.requireApprovalForWrites !== 'boolean') errors.push('requireApprovalForWrites must be boolean');
+  if (s.askReadEnabled !== undefined && typeof s.askReadEnabled !== 'boolean') errors.push('askReadEnabled must be boolean');
+  if (s.askMcpTools !== undefined && (!Array.isArray(s.askMcpTools) || !s.askMcpTools.every((x) => typeof x === 'string'))) errors.push('askMcpTools must be an array of strings');
   if (s.onboarded !== undefined && typeof s.onboarded !== 'boolean') errors.push('onboarded must be boolean');
   if (s.attachNoticeDismissed !== undefined && (typeof s.attachNoticeDismissed !== 'object' || Array.isArray(s.attachNoticeDismissed) ||
     !Object.values(s.attachNoticeDismissed).every((v) => typeof v === 'boolean'))) errors.push('attachNoticeDismissed must be a map of booleans');
+  if (s.askReadNoticeDismissed !== undefined && (typeof s.askReadNoticeDismissed !== 'object' || Array.isArray(s.askReadNoticeDismissed) ||
+    !Object.values(s.askReadNoticeDismissed).every((v) => typeof v === 'boolean'))) errors.push('askReadNoticeDismissed must be a map of booleans');
   if (s.suggestions !== undefined && (!Array.isArray(s.suggestions) || s.suggestions.length > 8 || !s.suggestions.every((x) => typeof x === 'string' && x.trim()))) errors.push('suggestions must be up to 8 non-empty strings');
   if (s.launchAtLogin !== undefined && typeof s.launchAtLogin !== 'boolean') errors.push('launchAtLogin must be boolean');
   return errors;

@@ -34,6 +34,7 @@ export const shellRunTool: Tool = {
     required: ['command'],
   },
   risk: 'destructive',
+  askSafe: false,
   describe: (input) => `Run with ${platform().shellName}: ${String(input.command || '')}${input.cwd ? ` (cwd: ${String(input.cwd)})` : ''}`,
   run: async (input, ctx) => {
     const command = String(input.command || '').trim();

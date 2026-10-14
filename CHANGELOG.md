@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Ask mode is now read-only with teeth: the same agent loop runs with only
+  `askSafe` read tools (`fs_search fs_read fs_list apps_list clipboard_read
+  attachment_list attachment_read skill_load web_search web_fetch`), a dispatcher
+  guard blocks forged write calls with `MODE_READ_ONLY`, no approval cards ever
+  appear in Ask, limits are 8 calls / 60s, secrets are redacted before the model,
+  web calls right after a file read wait for explicit confirmation, and a quiet
+  "Switch to Do and run this" chip re-sends the prompt in Do (approvals still
+  apply). Settings → Agent gains the Ask-mode toggle (default on) and per-tool
+  MCP opt-ins (default off).
+
 - README banner redesign (1280x360): new `design/banner.svg` promoted C2PA-free
   to `assets/banner.svg`; `banner.png` regenerated at 2560x720. PNG text uses
   system fonts (bundled woff2 subsets don't match resvg); SVG is canonical.

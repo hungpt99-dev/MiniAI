@@ -34,7 +34,7 @@ import type { SourceInput } from './extensions/sources';
 import { setPopupHeight, togglePopup, getPopup } from './popup';
 import { openExternalUrl, pickAttachFiles, pickFile, pickFolder, revealPath, withDialogLock } from './app/dialogs';
 import { resolveDbPath } from './db/db';
-import { ATTACH_LIMITS, ATTACH_STRINGS, sniffMime, validateLimits, scanSecretsText } from '../shared/attachments';
+import { ATTACH_LIMITS, ATTACH_STRINGS, isLocalProvider, sniffMime, validateLimits, scanSecretsText } from '../shared/attachments';
 import { attachmentLogRecord, classifyAttachPath, decodeText, deleteRunAttachments, processImage, resolveAttachMime, saveAttachment, sha256, sweepOldAttachments } from './attachments';
 import { clearRunAttachments, registerRunAttachments } from './agent/tools/attachment_tools';
 import { VisionNotSupportedError } from './ai/providers/vision';
@@ -560,10 +560,11 @@ async function runSend(
   }
   const userParts = buildUserParts(text, prepared);
   // Intent routing: an explicit pill selection wins; otherwise classify.
+  // Ask mode (chat) never routes to the Do loop. Do behavior is unchanged:
   // act → built-in agent loop, answer/clarify → plain streamed response.
   // Attachments skip clarify (empty+attach sends the default instruction).
   let effective = mode;
-  if (!opts.explicit && !text.trim().startsWith('/') && !staged.length) {
+  if (mode !== 'chat' && !opts.explicit && !text.trim().startsWith('/') && !staged.length) {
     const intent = await classifyIntent(text, {
       askModel: (prompt) => classifyWithModel(s, key, prompt, aborter.signal),
     });
@@ -579,6 +580,119 @@ async function runSend(
     effective = intent === 'act' ? 'agent' : 'chat';
   }
   routeStatus(sender, requestId, effective === 'agent' ? 'doing' : 'answering');
+  if (effective === 'chat') {
+    // Ask mode: same agent loop with the read-only tool set when the toggle is
+    // on; plain streamed chat when the user turned Ask reading off.
+    if (s.askReadEnabled === false) {
+      const frozen: RouteInput = {
+        mode: effective, sessionId, requestId, prompt: text,
+      };
+      try {
+        const full = await routeRequest(
+          { ...frozen, cwd: s.agentCwd, signal: aborter.signal, onToken: (t) => sender.send(IpcChannels.chatStream, { token: t, done: false, conversationId, requestId }) },
+          {
+            chat: async (input) => {
+              let acc = '';
+              const msgs = staged.length
+                ? [...history, { id: 'attach', role: 'user' as const, content: userParts, createdAt: Date.now() }]
+                : history;
+              await streamChat(s.provider, {
+                apiKey: key, model: s.model, baseUrl: s.baseUrl, temperature: chatTemperature(s),
+                messages: msgs as Parameters<typeof streamChat>[1]['messages'],
+                signal: input.signal, imageMode: s.compatibleImages || 'auto',
+                onToken: (t) => { acc += t; input.onToken?.(t); },
+              });
+              return acc;
+            },
+          },
+        );
+        addMessage(d, conversationId, 'assistant', full);
+        sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
+        return full;
+      } catch (e) {
+        if (e instanceof VisionNotSupportedError || /vision-not-supported/.test(asError(e).message)) {
+          const notice = ATTACH_STRINGS.visionNotice;
+          addMessage(d, conversationId, 'assistant', notice);
+          sender.send(IpcChannels.chatStream, { token: notice, done: false, conversationId, requestId });
+          sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
+          return notice;
+        }
+        throw asError(e);
+      } finally {
+        aborters.delete(requestId);
+      }
+    }
+    // Read-only Ask run. Step/tool events stream on agentEvent under the
+    // request id (the renderer adopts them into the step list); the final
+    // text is also persisted to chat history like a plain answer.
+    const runId = requestId;
+    const state: AgentRunState = { controller: aborter, approvals: new Map() };
+    agentRuns.set(runId, state);
+    const cwd = s.agentCwd || os.homedir();
+    try {
+      if (prepared.length) {
+        registerRunAttachments(runId, prepared.map((p) => p.ref));
+      }
+      // First-use notice on remote providers (once per provider).
+      if (!isLocalProvider(s.provider, s.baseUrl) && !(s.askReadNoticeDismissed || {})[s.provider]) {
+        const names: Record<string, string> = { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', compatible: 'Custom' };
+        const label = names[s.provider] || s.provider;
+        sender.send(IpcChannels.agentEvent, {
+          runId,
+          event: { type: 'step', id: `${runId}-asknotice`, text: `Nexio will send text from files it reads to ${label} to answer. Local providers keep it on this computer.` },
+        });
+        try {
+          updateSettings(d, { askReadNoticeDismissed: { ...(s.askReadNoticeDismissed || {}), [s.provider]: true } });
+        } catch { /* notice is best-effort */ }
+      }
+      const emit = (event: AgentEvent) => {
+        try { sender.send(IpcChannels.agentEvent, { runId, event }); } catch { /* window gone */ }
+      };
+      const ext = extService(d);
+      let extras: { tools: Tool[]; systemExtra: string; needsTrust: { server: string }[] } = { tools: [], systemExtra: '', needsTrust: [] };
+      try {
+        extras = await ext.agentExtras();
+      } catch { /* Ask runs without extensions rather than failing */ }
+      const full = await runAgent(text, {
+        provider: s.provider,
+        apiKey: key,
+        model: s.model,
+        baseUrl: s.baseUrl,
+        cwd,
+        history,
+        allowedRoots: s.agentAllowedRoots?.length ? s.agentAllowedRoots : undefined,
+        alwaysAllow: [],
+        requireApprovalForWrites: true,
+        mode: 'ask',
+        askMcpAllow: s.askMcpTools || [],
+        tools: [...ALL_TOOLS, ...extras.tools],
+        systemExtra: extras.systemExtra || undefined,
+        hooks: null,
+        signal: aborter.signal,
+        emit,
+        runId,
+        waitForApproval: async () => ({ decision: 'deny' }),
+        ...(staged.length ? { userParts } : {}),
+        ...(prepared.length ? { attachMeta: `Attached files: ${prepared.map((p) => p.ref.path).join('; ')}` } : {}),
+        ...(s.compatibleImages ? { imageMode: s.compatibleImages } : {}),
+      });
+      if (full) addMessage(d, conversationId, 'assistant', full);
+      try { clearRunAttachments(runId); } catch { /* refs are run-scoped memory only */ }
+      return full;
+    } catch (e) {
+      if (e instanceof VisionNotSupportedError || /vision-not-supported/.test(asError(e).message)) {
+        const notice = ATTACH_STRINGS.visionNotice;
+        addMessage(d, conversationId, 'assistant', notice);
+        sender.send(IpcChannels.chatStream, { token: notice, done: false, conversationId, requestId });
+        sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
+        return notice;
+      }
+      throw asError(e);
+    } finally {
+      agentRuns.delete(runId);
+      aborters.delete(requestId);
+    }
+  }
   if (effective === 'agent') {
     // Routed act: full built-in loop with approvals, bridged onto this request.
     const runId = `agent-${Date.now()}-${++seq}`;
@@ -617,44 +731,8 @@ async function runSend(
       aborters.delete(requestId);
     }
   }
-  const frozen: RouteInput = {
-    mode: effective, sessionId, requestId, prompt: text,
-  };
-  try {
-    const full = await routeRequest(
-      { ...frozen, cwd: s.agentCwd, signal: aborter.signal, onToken: (t) => sender.send(IpcChannels.chatStream, { token: t, done: false, conversationId, requestId }) },
-      {
-        chat: async (input) => {
-          let acc = '';
-          const msgs = staged.length
-            ? [...history, { id: 'attach', role: 'user' as const, content: userParts, createdAt: Date.now() }]
-            : history;
-          await streamChat(s.provider, {
-            apiKey: key, model: s.model, baseUrl: s.baseUrl, temperature: chatTemperature(s),
-            messages: msgs as Parameters<typeof streamChat>[1]['messages'],
-            signal: input.signal, imageMode: s.compatibleImages || 'auto',
-            onToken: (t) => { acc += t; input.onToken?.(t); },
-          });
-          return acc;
-        },
-      },
-    );
-    addMessage(d, conversationId, 'assistant', full);
-    sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
-    return full;
-  } catch (e) {
-    if (e instanceof VisionNotSupportedError || /vision-not-supported/.test(asError(e).message)) {
-      // Non-vision model: notice + one-click switch, bytes never sent, never silent.
-      const notice = ATTACH_STRINGS.visionNotice;
-      addMessage(d, conversationId, 'assistant', notice);
-      sender.send(IpcChannels.chatStream, { token: notice, done: false, conversationId, requestId });
-      sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
-      return notice;
-    }
-    throw asError(e);
-  } finally {
-    aborters.delete(requestId);
-  }
+  // Unreachable: chat returns in the Ask branch above, agent in the Do branch.
+  throw asError(new Error(`route-error: unexpected mode ${String(effective)}`));
 }
 
 /** Shared built-in agent execution (Send routing + explicit agentStart). */

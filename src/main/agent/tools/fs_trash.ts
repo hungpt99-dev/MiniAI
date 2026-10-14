@@ -15,6 +15,7 @@ export const fsTrashTool: Tool = {
     required: ['path'],
   },
   risk: 'write',
+  askSafe: false,
   describe: (input) => `Move ${String(input.path || '')} to the ${platform().trashWord}`,
   run: async (input) => {
     const p = String(input.path || '');

@@ -14,6 +14,7 @@ export const fsMoveTool: Tool = {
     required: ['from', 'to'],
   },
   risk: 'write',
+  askSafe: false,
   describe: (input) => `Move ${String(input.from || '')} → ${String(input.to || '')}`,
   run: async (input) => {
     const from = String(input.from || '');
