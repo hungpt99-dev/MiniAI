@@ -48,6 +48,8 @@ function updateModeUI() {
   inputEl.placeholder = isChat ? 'Ask about your files or anything else...' : 'What do you want to do?';
   const ro = $('hint-readonly');
   if (ro) ro.classList.toggle('hidden', !isChat);
+  const sep = $('hint-sep');
+  if (sep) sep.classList.toggle('hidden', !isChat);
 }
 
 // why: autosize composer up to 224px, then internal scroll
@@ -469,6 +471,11 @@ function showView(name) {
   $('history').classList.toggle('hidden', name !== 'history');
   $('extensions').classList.toggle('hidden', name !== 'extensions');
   $('onboard').classList.toggle('hidden', name !== 'onboard');
+  // footer icon reflects its open panel; run/idle/palette show none
+  const panelOn = (id, on) => { const b = $(id); if (b) b.classList.toggle('on', on); };
+  panelOn('btn-ext', name === 'extensions');
+  panelOn('btn-history', name === 'history');
+  panelOn('btn-settings', name === 'settings');
   if ($('view')) $('view').classList.toggle('hidden', name === 'idle');
   const wasDisabled = inputEl.disabled;
   inputEl.disabled = name === 'settings' || name === 'onboard';

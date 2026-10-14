@@ -157,7 +157,7 @@ describe('e2e-fake: fresh shows no Planning, slow run shows the chip', () => {
 });
 
 describe('footer: always-visible panel shell, once, send disabled when empty', () => {
-  it('renders exactly once, outside .view, after it', () => {
+  it('renders exactly once, outside .view, after it, as .f-hints + .f-actions', () => {
     const h = html();
     expect(h.split('<footer').length - 1).toBe(1);
     expect(h.split('id="hints"').length - 1).toBe(1);
@@ -168,12 +168,29 @@ describe('footer: always-visible panel shell, once, send disabled when empty', (
     for (const id of ['id="run"', 'id="settings"', 'id="history"', 'id="extensions"', 'id="onboard"']) {
       expect(h.indexOf(id)).toBeLessThan(footerOpen);
     }
-    expect(h.slice(footerOpen, h.indexOf('</footer>'))).toContain('id="hints"');
+    const foot = h.slice(footerOpen, h.indexOf('</footer>'));
+    expect(foot).toContain('class="f-hints"');
+    expect(foot).toContain('class="f-actions"');
+    expect(foot.indexOf('f-hints')).toBeLessThan(foot.indexOf('f-actions'));
     // right-side icon group present in the single copy
-    const foot = h.slice(footerOpen, footerOpen + 8000);
     for (const id of ['id="btn-ext"', 'id="btn-history"', 'id="btn-settings"', 'id="btn-attach"', 'id="btn-send"']) {
       expect(foot).toContain(id);
     }
+  });
+  it('hints are single cap+label units; badge + separator lead, Ask-only', () => {
+    const h = html();
+    const foot = h.slice(h.indexOf('<footer'), h.indexOf('</footer>'));
+    // each hint pairs one .k cap with its label inside .hint
+    expect(foot).toContain('<span class="hint" id="hint-tab"><span class="k">Tab</span><span>switch mode</span></span>');
+    expect(foot).toContain('<span class="hint" id="hint-enter"><span class="k">Enter</span><span>run</span></span>');
+    expect(foot).toContain('<span class="hint" id="hint-esc">');
+    // badge carries the label, separator follows it, both hidden in Do
+    expect(foot).toContain('class="badge hidden" id="hint-readonly" aria-label="Ask mode is read-only"');
+    expect(foot).toContain('class="f-sep hidden" id="hint-sep"');
+    expect(foot.indexOf('hint-readonly')).toBeLessThan(foot.indexOf('hint-sep'));
+    expect(foot.indexOf('hint-sep')).toBeLessThan(foot.indexOf('hint-nav'));
+    const src = appJs();
+    expect(src).toContain("sep.classList.toggle('hidden', !isChat)");
   });
   it('no view or mode switch ever hides it (idle/palette/run/settings/extensions/history, chat+agent)', () => {
     const src = appJs();
@@ -199,15 +216,30 @@ describe('footer: always-visible panel shell, once, send disabled when empty', (
     const body = src.slice(start, src.indexOf('renderPalette = function'));
     expect(body).toContain("sendEmpty = !inputEl.value && attachPending() === 0");
     expect(body).toContain('sendBtn.disabled = sendEmpty');
+    expect(body).toContain('aria-disabled');
   });
-  it('footer metrics: 48px floor, 8/14/8/22 padding, divider top, never scrolled away', () => {
+  it('footer metrics: 48px, 8/14/8/22 padding, divider top, groups, caps, buttons, never scrolled away', () => {
     const css = read('src/renderer/styles.css');
-    const block = css.slice(css.indexOf('#hints {'), css.indexOf('#hints {') + 300);
-    expect(block).toContain('48px');
+    const block = css.slice(css.indexOf('#hints {'), css.indexOf('#hints {') + 400);
+    expect(block).toContain('height: 48px');
     expect(block).toContain('8px 14px 8px 22px');
     expect(block).toContain('1px solid var(--divider)');
     expect(block).toContain('flex: none');
-    expect(css).toContain('.fbtn.send:disabled');
+    expect(block).toContain('white-space: nowrap');
+    expect(css).toContain('.f-hints { display: flex; align-items: center; gap: 14px; min-width: 0; overflow: hidden; }');
+    expect(css).toContain('.f-actions { margin-left: auto; display: flex; align-items: center; gap: 4px; flex: none; }');
+    expect(css).toContain('.hint { display: inline-flex; align-items: center; gap: 6px;');
+    expect(css).toContain('.badge { display: inline-flex; align-items: center; gap: 6px; height: 22px;');
+    expect(css).toContain('.f-sep { width: 1px; height: 14px; background: var(--divider);');
+    expect(css).toContain('height: 20px; padding: 0 6px;');
+    // disabled send: surface + border + muted, never opacity or darkened accent
+    const dis = css.slice(css.indexOf('.fbtn.send:disabled'), css.indexOf('.fbtn.send:disabled') + 200);
+    expect(dis).toContain('var(--surface)');
+    expect(dis).toContain('var(--border)');
+    expect(dis).toContain('var(--muted)');
+    expect(dis).not.toContain('opacity');
+    expect(css).toContain(':focus-visible');
+    expect(css).toContain('prefers-reduced-motion');
     // .view stays the only scroller; footer is in-flow after it so resize includes it
     expect(css).toMatch(/\.view \{[^}]*flex: 1/);
     const src = appJs();
