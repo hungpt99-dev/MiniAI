@@ -1,10 +1,13 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ATTACH_LIMITS, safeName } from '../shared/attachments';
+import { ATTACH_LIMITS, safeName, scanSecretsText } from '../shared/attachments';
 import { isInsideRoots, isPathAllowed, normalizeAndResolve } from './agent/permissions';
 import type { PolicyContext } from './agent/types';
 import { platform } from './platform/index';
+import { detectAttachment, type Detection } from './attachments/detect';
+import { decideAttachPolicy, formatRejection, type AttachDecision } from './attachments/policy';
+import { extractDocumentText } from './attachments/extract';
 
 export interface StoredAttachment {
   id: string;
@@ -171,4 +174,73 @@ export function classifyAttachPath(raw: string, cwd: string, ctx: PolicyContext)
 /** Log-safe attachment record: name/type/size/SHA256 only — never bytes. */
 export function attachmentLogRecord(a: Pick<StoredAttachment, 'name' | 'mime' | 'size' | 'sha256'>): { name: string; type: string; size: number; sha256: string } {
   return { name: a.name, type: a.mime, size: a.size, sha256: a.sha256 };
+}
+
+/** Chip state for document/reference files (renderer badges + tooltips). */
+export type DocState = 'extracted' | 'reference' | 'macros' | 'encrypted';
+
+export interface ClassifiedAttachment {
+  det: Detection;
+  decision: AttachDecision;
+  /** Final mime (bytes win; .md names keep markdown for text). */
+  mime: string;
+  docState?: DocState;
+  docNote?: string;
+  /** Extracted plain text when action is document_extract and it worked. */
+  extractedText?: string;
+  /** Secrets scanner hit on the extracted text (chip warn / context note). */
+  secretsInExtracted?: boolean;
+  /** 'kind (evidence), rule X' for the Details toggle. */
+  details: string;
+}
+
+/**
+ * Single classify pipeline shared by picker preview, paste/drop processing
+ * and the send path: detect (bytes, never extension) -> policy -> optional
+ * extraction. Never throws (worst case: unknown -> reference_only).
+ */
+export function classifyAttachment(bytes: Buffer, name: string): ClassifiedAttachment {
+  let det: Detection;
+  try {
+    det = detectAttachment(bytes);
+  } catch {
+    det = { kind: 'unknown', mime: 'application/octet-stream', flags: [], evidence: 'inspection failed', confidence: 'low' };
+  }
+  let decision = decideAttachPolicy(det);
+  let mime = det.mime;
+  if (det.kind === 'text' && /\.m(d|arkdown)$/i.test(name)) mime = 'text/markdown';
+  const details = `${det.kind} (${det.evidence}), rule ${decision.rule}`;
+  let docState: DocState | undefined;
+  let docNote: string | undefined;
+  let extractedText: string | undefined;
+  let secretsInExtracted = false;
+  if (decision.action === 'reference_only') {
+    if (decision.rule === 'macro-warn') { docState = 'macros'; docNote = decision.note; }
+    else if (decision.rule === 'encrypted-note') { docState = 'encrypted'; docNote = decision.note; }
+    else { docState = 'reference'; docNote = decision.note || 'Nexio can see the file name and path but not its contents.'; }
+  } else if (decision.action === 'document_extract') {
+    let ext: { text: string; outline: string[]; images: number } | null = null;
+    try {
+      ext = extractDocumentText(bytes, det.kind);
+    } catch { ext = null; }
+    if (ext && ext.text.trim()) {
+      docState = 'extracted';
+      const outline = ext.outline.length ? `Outline: ${ext.outline.slice(0, 20).join(' | ')}\n` : '';
+      const imgs = ext.images ? `${ext.images} embedded image(s) listed, not read.\n` : '';
+      extractedText = `${outline}${imgs}${ext.text}`;
+      try { secretsInExtracted = scanSecretsText(extractedText); } catch { /* no badge without evidence */ }
+      docNote = `Extracted text from ${det.kind}${ext.images ? ` (${ext.images} images ignored)` : ''}.`;
+    } else {
+      // Extraction unavailable or empty: stay accepted, clearly reference-only.
+      decision = { action: 'reference_only', rule: 'doc-reference', note: 'Added as reference only, contents not read.' };
+      docState = 'reference';
+      docNote = decision.note;
+    }
+  }
+  return { det, decision, mime, docState, docNote, extractedText, secretsInExtracted, details };
+}
+
+/** Rejection error for an attachment, with a Details line for the UI toggle. */
+export function attachmentRejected(name: string, c: ClassifiedAttachment): Error {
+  return new Error(formatRejection(name, c.det, c.decision));
 }

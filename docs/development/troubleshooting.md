@@ -5,6 +5,23 @@
 - 401 → wrong key; 429 → rate limit; 60 s timeout; model error → name.
 - Missing icons: run `npm run assets`, then `npm run assets:check`.
 
+## Rejected file
+
+A rejection names the exact reason plus a **Details** toggle
+(`detected <kind> (<evidence>), rule <rule>`):
+
+| Message | Meaning | Action |
+|---|---|---|
+| `Not attached: X is an executable (…)` | PE/ELF/Mach-O, installer, shortcut or code package, by content | rename check won't help — the bytes are the verdict |
+| `Not attached: X is empty.` | 0 bytes | attach a non-empty file |
+| `Attachment refused: …` | path policy (outside roots, protected, symlink escape) | Allow once / add the folder / Remove |
+| `Attachment too large …` | over 20MB/file or 50MB total | compress or split |
+
+Valid Office files (docx/xlsx/pptx/…) are accepted: text is extracted
+when possible, otherwise the chip reads "Reference only". A corrupt file
+is kept as reference, never crashes. Password-protected files say
+"Encrypted. Contents not readable." Details: `docs/attachments.md`.
+
 ## Providers
 
 Settings → Test reports the normalized kind + action. Common cases:

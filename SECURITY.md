@@ -68,8 +68,15 @@
 
 ## Attachments
 
-- File types are sniffed by magic bytes, never the extension; renamed
-  executables and unknown binaries are rejected inline (never silent).
+- File types are detected by magic bytes + structure, never the extension:
+  ZIP containers are opened (OOXML/ODF/EPUB/JAR classified by central
+  directory), OLE2 by stream markers. Renamed executables reject even when
+  the extension claims otherwise; unknown types become reference-only,
+  never rejected. Details: `docs/attachments.md`.
+- Rejected inline (never silent), with a specific reason: executables,
+  installers, shortcuts and code packages (`exe elf macho msi lnk url scf
+  appx jar apk` by content), empty files. Macros and encrypted files are
+  accepted as reference-only with a visible warning — never opened or run.
 - Limits: max 5 files, 20MB per file, 200KB text truncation, 50MB total.
 - Images are re-encoded via Electron `nativeImage` (no extra dependency):
   EXIF is stripped, orientation applied, longest edge capped at 2048px.
@@ -81,7 +88,9 @@
   symlink-escaping paths are refused ("Remove"). Attachment reads never grant
   permission; writes still need approval with the exact path.
 - Attachment content is untrusted data (delimited, system-prompt rule, and
-  "Requested after reading \<name\>" on follow-up approvals). Tray text shows
+  "Requested after reading \<name\>" on follow-up approvals). Extracted
+  document text counts too; embedded images are ignored, macros never run.
+  Tray text shows
   "Attachment text may contain secrets — confirm before sharing."
 - Temp files live in `<data>/attachments/<conversationId>` with safe names and are
   deleted on conversation delete/Clear, plus a 7-day orphan sweep. Run logs keep

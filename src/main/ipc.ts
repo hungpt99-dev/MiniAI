@@ -60,8 +60,9 @@ import type { SourceInput } from './extensions/sources';
 import { setPopupHeight, togglePopup, getPopup } from './popup';
 import { openExternalUrl, pickAttachFiles, pickFile, pickFolder, revealPath, withDialogLock } from './app/dialogs';
 import { resolveDbPath } from './db/db';
-import { ATTACH_LIMITS, ATTACH_STRINGS, isLocalProvider, sniffMime, validateLimits, scanSecretsText } from '../shared/attachments';
-import { attachmentLogRecord, classifyAttachPath, decodeText, deleteRunAttachments, processImage, resolveAttachMime, saveAttachment, sha256, sweepOldAttachments } from './attachments';
+import { ATTACH_LIMITS, ATTACH_STRINGS, isLocalProvider, validateLimits, scanSecretsText } from '../shared/attachments';
+import { attachmentLogRecord, attachmentRejected, classifyAttachPath, classifyAttachment, decodeText, deleteRunAttachments, processImage, saveAttachment, sha256, sweepOldAttachments } from './attachments';
+import { detectAttachment } from './attachments/detect';
 import { clearRunAttachments, registerRunAttachments } from './agent/tools/attachment_tools';
 import { VisionNotSupportedError } from './ai/providers/vision';
 import type { ContentPart } from './ai/providers/types';
@@ -501,11 +502,11 @@ export function prepareAttachments(
       bytes = Buffer.from(a.dataBase64, 'base64');
     } else throw new Error(`Attachment rejected: ${origName} (no data)`);
     if (bytes.length > ATTACH_LIMITS.maxFileBytes) throw new Error(`${ATTACH_STRINGS.oversizeError}: ${origName} (max 20MB per file)`);
-    const u8 = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length);
-    const sniffed = sniffMime(u8, origName);
-    if (sniffed === 'exe' || sniffed === null) throw new Error(`Rejected ${origName}: executable or unknown content (type checked, not extension)`);
-    // Trust sniffed bytes over the claimed extension (markdown names keep text/markdown).
-    const mime = resolveAttachMime(sniffed, a.mime, origName);
+    // Detect by content (never the extension), then apply the policy table.
+    const cls = classifyAttachment(bytes, origName);
+    if (cls.decision.action === 'reject') throw attachmentRejected(origName, cls);
+    // Trust detected bytes over the claimed extension (markdown names keep text/markdown).
+    const mime = cls.mime;
     if (mime.startsWith('image/')) {
       const proc = processImage(bytes, mime);
       const stored = saveAttachment(appBaseDir(), scopeId, origName, proc.mime, proc.bytes, { width: proc.width, height: proc.height, dataUrl: proc.dataUrl });
@@ -522,10 +523,21 @@ export function prepareAttachments(
         log: attachmentLogRecord(stored),
         ref: { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, sha256: stored.sha256, path: stored.path, kind: 'text' },
       });
+    } else if (cls.decision.action === 'document_extract' && cls.extractedText !== undefined) {
+      // Extracted document text is untrusted data like any other tool result.
+      const body = (cls.secretsInExtracted ? '[Note: this document may contain secrets — confirm before sharing.]\n' : '')
+        + `[Extracted from ${origName} (${cls.det.kind})]\n` + cls.extractedText;
+      const { text, truncated } = decodeText(Buffer.from(body, 'utf8'));
+      const stored = saveAttachment(appBaseDir(), scopeId, origName, 'text/plain', Buffer.from(text, 'utf8'), { truncated });
+      out.push({
+        part: { type: 'file_ref', name: stored.name, mimeType: stored.mime, size: stored.size, sha256: stored.sha256, text },
+        log: attachmentLogRecord(stored),
+        ref: { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, sha256: stored.sha256, path: stored.path, kind: 'text' },
+      });
     } else {
-      // PDFs and other files: file_ref text only (bytes never go to the model).
+      // Reference-only (and anything else): original bytes, metadata note.
       const stored = saveAttachment(appBaseDir(), scopeId, origName, mime, bytes);
-      const note = mime === 'application/pdf' ? '[PDF attached — text extraction is best-effort; open the file for full content]' : `[binary ${mime} attached — metadata only]`;
+      const note = cls.docNote ? `[${origName} attached — ${cls.docNote}]` : `[binary ${mime} attached — metadata only]`;
       out.push({
         part: { type: 'file_ref', name: stored.name, mimeType: stored.mime, size: stored.size, sha256: stored.sha256, text: note },
         log: attachmentLogRecord(stored),
@@ -1698,21 +1710,47 @@ function registerAttachIpc(): void {
         let mime = 'application/octet-stream';
         let previewDataUrl: string | undefined;
         let hasSecrets = false;
+        let docState: 'extracted' | 'reference' | 'macros' | 'encrypted' | undefined;
+        let docNote: string | undefined;
+        let details: string | undefined;
+        let preview: string | undefined;
         try {
           const st = fs.statSync(p);
           size = st.size;
           if (st.isFile() && size <= ATTACH_LIMITS.maxFileBytes) {
-            const fd = fs.openSync(p, 'r');
-            try {
-              const head = Buffer.alloc(Math.min(size, 8192));
-              const n = fs.readSync(fd, head, 0, head.length, 0);
-              const sniffed = sniffMime(new Uint8Array(head.buffer, head.byteOffset, n), name);
-              if (sniffed && sniffed !== 'exe') {
-                mime = sniffed;
-                // why: evidence for the chip badge comes from bytes already
-                // read here — never shown without a real pattern match.
-                if (size > 0 && !mime.startsWith('image/')) {
-                  try { hasSecrets = scanSecretsText(head.subarray(0, n).toString('utf8')); } catch { /* no badge */ }
+            if (size <= 2 * 1024 * 1024) {
+              // Small files: full classify up front (chip badges + preview).
+              try {
+                const full = fs.readFileSync(p);
+                const cls = classifyAttachment(full, name);
+                if (cls.decision.action !== 'reject') {
+                  mime = cls.mime;
+                  docState = cls.docState;
+                  docNote = cls.docNote;
+                  details = cls.details;
+                  if (cls.extractedText !== undefined) {
+                    preview = cls.extractedText.slice(0, 200);
+                    hasSecrets = cls.secretsInExtracted === true;
+                  }
+                }
+              } catch { /* fall through to head sniff */ }
+            }
+            if (!details) {
+              const fd = fs.openSync(p, 'r');
+              try {
+                const head = Buffer.alloc(Math.min(size, 8192));
+                const n = fs.readSync(fd, head, 0, head.length, 0);
+                const det = detectAttachment(head.subarray(0, n));
+                if (det.kind !== 'unknown' || mime === 'application/octet-stream') {
+                  if (det.kind !== 'unknown') mime = det.mime;
+                  // why: evidence for the chip badge comes from bytes already
+                  // read here — never shown without a real pattern match.
+                  if (size > 0 && !mime.startsWith('image/')) {
+                    try { hasSecrets = hasSecrets || scanSecretsText(head.subarray(0, n).toString('utf8')); } catch { /* no badge */ }
+                  }
+                  if (det.flags.includes('macros')) { docState = 'macros'; docNote = 'Contains macros. Nexio will not run it.'; }
+                  else if (det.flags.includes('encrypted')) { docState = 'encrypted'; docNote = 'Encrypted. Contents not readable.'; }
+                  details = `${det.kind} (${det.evidence})`;
                 }
                 if (mime.startsWith('image/')) {
                   try {
@@ -1720,8 +1758,13 @@ function registerAttachIpc(): void {
                     previewDataUrl = processImage(full, mime).dataUrl;
                   } catch { /* chips-only fallback */ }
                 }
-              }
-            } finally { fs.closeSync(fd); }
+              } finally { fs.closeSync(fd); }
+            } else if (mime.startsWith('image/') && !previewDataUrl) {
+              try {
+                const full = fs.readFileSync(p);
+                previewDataUrl = processImage(full, mime).dataUrl;
+              } catch { /* chips-only fallback */ }
+            }
           }
         } catch { /* keep defaults */ }
         let verdict = 'allow';
@@ -1731,7 +1774,7 @@ function registerAttachIpc(): void {
           verdict = v.verdict;
           reason = v.reason;
         } catch (e) { verdict = 'deny'; reason = (e as Error).message; }
-        return { path: p, name, size, mime, previewDataUrl, verdict, reason, hasSecrets };
+        return { path: p, name, size, mime, previewDataUrl, verdict, reason, hasSecrets, docState, docNote, details, preview };
       });
     } catch { return []; }
   });
@@ -1741,20 +1784,34 @@ function registerAttachIpc(): void {
       // Pre-cap the base64 payload before decoding so oversize input never allocates.
       if ((input.dataBase64 || '').length > Math.ceil(ATTACH_LIMITS.maxFileBytes * 4 / 3) + 64) throw new Error(`${ATTACH_STRINGS.oversizeError}: ${input.name} (max 20MB per file)`);
       const bytes = Buffer.from(input.dataBase64 || '', 'base64');
-      if (!bytes.length) throw new Error(`Rejected ${input.name}: empty file`);
+      if (!bytes.length) throw new Error(`Not attached: ${input.name} is empty.`);
       if (bytes.length > ATTACH_LIMITS.maxFileBytes) throw new Error(`${ATTACH_STRINGS.oversizeError}: ${input.name} (max 20MB per file)`);
-      const u8 = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length);
-      const sniffed = sniffMime(u8, input.name);
-      if (sniffed === 'exe' || sniffed === null) throw new Error(`Rejected ${input.name}: executable or unknown content (type checked, not extension)`);
-      const mime = resolveAttachMime(sniffed, undefined, input.name);
+      const cls = classifyAttachment(bytes, input.name);
+      if (cls.decision.action === 'reject') throw attachmentRejected(input.name, cls);
+      const mime = cls.mime;
+      const meta = { docState: cls.docState, docNote: cls.docNote, details: cls.details };
       if (mime.startsWith('image/')) {
         const proc = processImage(bytes, mime);
         const stored = saveAttachment(appBaseDir(), runId, input.name, proc.mime, proc.bytes, { width: proc.width, height: proc.height, dataUrl: proc.dataUrl });
-        return { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, kind: 'image', width: stored.width, height: stored.height, previewDataUrl: stored.previewDataUrl, sha256: stored.sha256 };
+        return { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, kind: 'image', width: stored.width, height: stored.height, previewDataUrl: stored.previewDataUrl, sha256: stored.sha256, ...meta };
       }
-      const { text, truncated } = decodeText(bytes);
-      const stored = saveAttachment(appBaseDir(), runId, input.name, mime, Buffer.from(text, 'utf8'), { truncated });
-      return { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, kind: stored.kind, sha256: stored.sha256 };
+      if (cls.decision.action === 'document_extract' && cls.extractedText !== undefined) {
+        const body = (cls.secretsInExtracted ? '[Note: this document may contain secrets — confirm before sharing.]\n' : '')
+          + `[Extracted from ${input.name} (${cls.det.kind})]\n` + cls.extractedText;
+        const { text, truncated } = decodeText(Buffer.from(body, 'utf8'));
+        const stored = saveAttachment(appBaseDir(), runId, input.name, 'text/plain', Buffer.from(text, 'utf8'), { truncated });
+        return {
+          id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, kind: 'text', sha256: stored.sha256,
+          preview: text.slice(0, 200), hasSecrets: cls.secretsInExtracted === true, ...meta,
+        };
+      }
+      if (mime.startsWith('text/') || mime.includes('markdown')) {
+        const { text, truncated } = decodeText(bytes);
+        const stored = saveAttachment(appBaseDir(), runId, input.name, mime, Buffer.from(text, 'utf8'), { truncated });
+        return { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, kind: 'text', sha256: stored.sha256, ...meta };
+      }
+      const stored = saveAttachment(appBaseDir(), runId, input.name, mime, bytes);
+      return { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, kind: 'file', sha256: stored.sha256, ...meta };
     } catch (e) { throw asError(e); }
   });
   typedHandle(IpcChannels.attachClassify, vAttachClass, async (_e, input: { path: string }) => {

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Attachments: valid Word/Excel/PowerPoint files no longer rejected —
+  ZIP-based formats are now classified by central-directory structure
+  (docx/xlsx/pptx/odt/epub/jar), OLE2 by stream markers, with a policy
+  table (extract / reference-only / reject). Built-in text extraction for
+  docx/xlsx/pptx/odt/rtf (no new dependencies); PDF stays reference-only.
+  Rejections are specific ("Not attached: X is an executable …" + Details
+  toggle); unknown files become reference-only, never rejected. See
+  `docs/attachments.md`.
+
 - Both-OS releases: Electron 37 bundles Node 22, so the packaged app opens
   SQLite fine — the old Electron 33 blocker is gone (docs updated). Windows
   portable verified locally; new `release.yml` builds Windows nsis+portable

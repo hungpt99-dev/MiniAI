@@ -3289,10 +3289,41 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
     try {
       var d = document.createElement('div');
       d.className = 'attach-err';
-      d.textContent = msg;
+      var text = String(msg || '');
+      var cut = text.indexOf('\nDetails: ');
+      d.textContent = cut >= 0 ? text.slice(0, cut) : text;
+      if (cut >= 0) {
+        var det = document.createElement('button');
+        det.type = 'button';
+        det.className = 'abadge muted';
+        det.textContent = 'Details';
+        det.setAttribute('aria-expanded', 'false');
+        det.setAttribute('aria-label', 'Show rejection details');
+        (function (detail, btn) {
+          btn.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            var open = btn.getAttribute('aria-expanded') === 'true';
+            var pre = d.querySelector('pre.adetails');
+            if (pre) {
+              pre.classList.toggle('hidden', open);
+              btn.setAttribute('aria-expanded', String(!open));
+              btn.textContent = open ? 'Details' : 'Hide details';
+            } else {
+              var p = document.createElement('pre');
+              p.className = 'adetails';
+              p.textContent = detail;
+              d.appendChild(p);
+              btn.setAttribute('aria-expanded', 'true');
+              btn.textContent = 'Hide details';
+            }
+            chrome();
+          });
+        })(text.slice(cut + 10), det);
+        d.appendChild(det);
+      }
       trayEl.appendChild(d);
       trayEl.classList.remove('hidden');
-      announce(msg);
+      announce(cut >= 0 ? text.slice(0, cut) : text);
       chrome();
       setTimeout(function () { try { if (d.parentNode) d.parentNode.removeChild(d); chrome(); } catch (e) {} }, 6000);
     } catch (e) {}
@@ -3327,6 +3358,9 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
           item.setAttribute('role', 'listitem');
           item.tabIndex = 0;
           item.title = base(a.name) + ' (' + fmtSize(a.size) + ')';
+          if (a.docNote) item.title += ' — ' + a.docNote;
+          if (a.docState === 'extracted' && a.preview) item.title += '\n' + String(a.preview).slice(0, 200);
+          if (a.docState === 'reference' && !a.docNote) item.title += ' — Nexio can see the file name and path but not its contents.';
           item.innerHTML = fileSvg() + '<span class="aname"></span><span class="asz"></span>';
           item.querySelector('.aname').textContent = base(a.name);
           item.querySelector('.asz').textContent = fmtSize(a.size);
@@ -3352,6 +3386,14 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
             wb.title = 'May contain secrets';
             wb.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v5"/><circle cx="12" cy="18" r="0.5"/></svg>Review';
             item.appendChild(wb);
+          }
+          if (a.docState) {
+            var db = document.createElement('span');
+            var dlabel = a.docState === 'extracted' ? 'Extracted' : a.docState === 'macros' ? 'Macros' : a.docState === 'encrypted' ? 'Encrypted' : 'Reference only';
+            db.className = 'abadge ' + (a.docState === 'macros' ? 'warn' : a.docState === 'extracted' ? 'acc' : 'muted');
+            db.textContent = dlabel;
+            db.title = a.docNote || dlabel;
+            item.appendChild(db);
           }
           if (a.verdict === 'approval') {
             var b = document.createElement('span');
@@ -3610,6 +3652,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
               kind: (r.mime || '').indexOf('image/') === 0 ? 'image' : 'file',
               verdict: r.verdict === 'approval' ? 'approval' : undefined,
               hasSecrets: r.hasSecrets === true,
+              docState: r.docState, docNote: r.docNote, details: r.details, preview: r.preview,
             });
           });
           if (ok.length) addEntries(ok);
@@ -3641,6 +3684,18 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
         d.innerHTML = fileSvg() + '<span></span><span class="asz"></span>';
         d.querySelector('span').textContent = base(a.name);
         d.querySelector('.asz').textContent = fmtSize(a.size) + ' ' + (a.mime || '');
+        if (a.docNote) {
+          var dn = document.createElement('div');
+          dn.className = 'ap-cap';
+          dn.textContent = a.docNote;
+          d.appendChild(dn);
+        }
+        if (a.preview) {
+          var pv = document.createElement('pre');
+          pv.className = 'out';
+          pv.textContent = String(a.preview).slice(0, 500);
+          d.appendChild(pv);
+        }
         prevEl.appendChild(d);
       }
       var cap = document.createElement('div');
