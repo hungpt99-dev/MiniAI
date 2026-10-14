@@ -267,6 +267,17 @@ describe('footer: always-visible panel shell, once, send disabled when empty', (
     const src = appJs();
     expect(src).toContain("sep.classList.toggle('hidden', !isChat)");
   });
+  it('settings button shows the gear, not the sun', () => {
+    const h = html();
+    expect(h.split('id="btn-settings"').length - 1).toBe(1);
+    // Lucide settings gear (cog path + r=3 circle), 18px / stroke 1.8 like the other footer icons
+    expect(h).toContain('M12.22 2h-.44a2 2 0 0 0-2 2v.18');
+    expect(h).toContain('<circle cx="12" cy="12" r="3"/>');
+    // old sun/brightness glyph gone everywhere (dark-only UI, no theme toggle)
+    expect(h).not.toContain('M12 2.8v3');
+    const src = appJs();
+    expect(src).not.toContain('M12 2.8v3');
+  });
   it('no view or mode switch ever hides it (idle/palette/run/settings/extensions/history, chat+agent)', () => {
     const src = appJs();
     expect(src).not.toMatch(/\$\('hints'\)\)\.classList/);

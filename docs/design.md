@@ -60,6 +60,13 @@ Dark-background brand only — there is no light variant.
 - Ask history shows 160px thumbs/chips with a "Delete attachments" menu.
   Vision-failure notices carry a one-click "Switch model" button.
 
+## Footer icons
+
+- Inline SVGs, 18px, stroke `currentColor` 1.8, round caps (no icon
+  dependency). Settings uses the Lucide "settings" gear (ISC license):
+  cog path + `r=3` center circle. No sun/brightness glyphs anywhere —
+  the UI is dark-only with no theme toggle.
+
 ## Memory view
 
 - Like Extensions: title "Memory" + back, segmented tabs
