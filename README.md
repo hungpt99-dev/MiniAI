@@ -1,131 +1,37 @@
-<!-- Banner spans the full README width on purpose: width="100%", no max-width cap. -->
-<img src="assets/banner.svg" width="100%" alt="Nexio — a new way to interact with your computer." />
+# Nexio — A new way to interact with your computer.
 
-# Nexio
+<p align="center">
+  <img src="assets/banner.svg" width="100%" alt="Nexio — a new way to interact with your computer." />
+</p>
 
-A new way to interact with your computer.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
+  <a href="docs/platforms.md"><img src="https://img.shields.io/badge/Platform-Windows_x64-lightgrey.svg" alt="Platform: Windows x64" /></a>
+  <a href="docs/platforms.md"><img src="https://img.shields.io/badge/Platform-macOS_13+-lightgrey.svg" alt="Platform: macOS 13+" /></a>
+  <a href="docs/product/implementation-status.md"><img src="https://img.shields.io/badge/Status-v0.1.0_pre--release_experimental-orange.svg" alt="Status: v0.1.0 pre-release experimental" /></a>
+</p>
 
 Nexio is the smart layer between you and your computer. Press a hotkey, say what
-you want, and AI finds, opens, organizes and does it. Risky actions need your approval.
+you want, and AI finds, opens, organizes and does it. Say what you want. Nexio does
+it on your computer.
 
-Say what you want. Nexio does it on your computer.
+**Yours, with your keys.** Bring your own provider keys, keep history in a local
+SQLite file. Risky actions pause for your approval, every action is shown exactly
+before it runs, every run is written to a log, and deletes go to the Recycle Bin
+so they can be undone.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Platform: Windows x64](https://img.shields.io/badge/Platform-Windows_x64-lightgrey.svg)](docs/development/setup.md)
-[![Platform: macOS 13+](https://img.shields.io/badge/Platform-macOS_13+-lightgrey.svg)](docs/platforms.md)
-[![Status: v0.1.0 pre-release experimental](https://img.shields.io/badge/Status-v0.1.0_pre--release_experimental-orange.svg)](docs/product/implementation-status.md)
-
-[Why Nexio](#why-nexio) · [Features](#features) · [When to use it](#when-to-use-it) · [Quick Start](#quick-start) · [Build / Dev](#build--dev) · [Status](#status) · [Contributing](#contributing) · [License](#license) · [Docs](docs/README.md)
+[Why Nexio](#why-nexio) · [Docs](docs/README.md) · [Quick start](#quick-start) · [How it fits together](#how-it-fits-together) · [Security](#security) · [Status](#status) · [Contributing](#contributing)
 
 ## Why Nexio
 
 Most AI tools live in a browser tab. Nexio lives on a hotkey.
 
 Press `Alt+Space`, say what you want done, dismiss. Nexio finds files, opens apps,
-and organizes things for you. Risky actions pause for your approval, every action is
-shown exactly before it runs, every run is written to a log, and deletes go to the
-Recycle Bin so they can be undone. Bring your own keys, keep history in a local SQLite file.
+and organizes things for you. When you have not picked a mode, Nexio routes
+automatically (heuristic first, one cheap model call when uncertain) and shows
+`Doing` / `Answering` in the footer. An explicit mode pick always wins.
 
-## Features
-
-**Instant access**
-
-- Global `Alt+Space` (default, configurable) toggles a frameless `480x640` popup.
-- Popup hides on blur (launcher behavior). Tray has Show / Hide + Quit.
-- Single-instance app. Mode toggle with `Tab` in the composer or `Alt+M`.
-- Opens in Do mode by default. Do acts on your computer (find, open, organize, run);
-  Ask answers plain questions. When you have not picked a mode, Nexio routes
-  automatically (heuristic first, one cheap model call when uncertain) and shows
-  `Doing` / `Answering` in the footer. An explicit mode pick always wins.
-
-**Ask mode (BYOK answers)**
-
-- Providers: `openai` (default model `gpt-4o-mini`), `anthropic`, `gemini`, `compatible` (default `http://localhost:11434/v1`, e.g. Ollama).
-- Keys are entered in the settings panel and stored via `safeStorage` / DPAPI in the SQLite `secrets` table. Fallback XOR obfuscation warns only (dev).
-- `redact()` masks `sk-` / `Bearer` / `api_key` before logging. Dev-only env fallback: `OPENAI_API_KEY`, etc.
-- Answers stream with cancel. Provider usage may incur charges.
-- Attachments: paste (`Ctrl+V`/`Cmd+V`), drag-drop ("Drop to attach"), or the
-  paperclip button stages images/files in a tray under the composer.
-  `Enter` with attachments alone sends "Describe the attached file(s)."
-  Types are sniffed by magic bytes (max 5, 20MB/file, 50MB total); images are
-  EXIF-stripped and capped at 2048px via Electron `nativeImage` (outside
-  Electron the original bytes are kept, JPEG EXIF-stripped only), text is
-  BOM-decoded and truncated at 200KB. Temp files live under
-  `<data>/attachments/<conversation>` and are deleted on conversation
-  delete/Clear or swept after 7 days; files outside the working folder need
-  per-file Allow once. Non-vision models get a notice with a "Switch model"
-  button that confirms before replacing your provider/model and warns to
-  re-attach images (image bytes are never sent); logs keep name/type/size/SHA256
-  only. Details: `docs/providers.md` (vision), `docs/configuration.md`
-  (`compatibleImages`), `SECURITY.md`.
-
-**Slash commands and prompt templates**
-
-- Builtins: `/help` `/new` `/clear` `/model` (Ask-only) `/history` `/settings` `/log` `/extensions`.
-- Templates: `/translate` `/rewrite` `/summarize` `/explain` `/analyze` `/reply`.
-- Workflows: `/email-reply` `/requirement-review`.
-- Palette: type `/`, ranked exact > prefix > substring > fuzzy. Arrows + `Enter` + `Esc` + click. Unknown commands show top-3 suggestions.
-- Scopes (`Ask` / `Do` / `all`) follow the active mode.
-
-See [docs/agents/README.md](docs/agents/README.md).
-
-**Small multi-step workflows**
-
-- 5 step kinds: `prompt` / `transform` / `conditional` / `user-input` / `output`.
-- Transforms: `append` / `prepend` / `replace` / `uppercase` / `lowercase`.
-- Limits: max 20 steps, conditional depth <= 2, last step must be `output`.
-- Per-step history; cancel via cancel action (Esc closes popup, may strand run).
-
-See [docs/agents/workflows.md](docs/agents/workflows.md).
-
-**Local history**
-
-- Stored in `%APPDATA%\Nexio\nexio.db` (WAL mode). Override with `NEXIO_DATA_DIR`.
-- Note: message text is sent to the configured provider on each request.
-- History has two tabs: Run Log (prompt, one-line outcome, timestamp, status, Undo
-  where supported) and Ask (existing chat transcripts; nothing is discarded).
-
-**Undo journal**
-
-- Reversible operations (`fs_move`, `fs_copy`, new-file `fs_write`, `clipboard_write`)
-  are journaled per run; `fs_trash` notes manual Recycle Bin restore.
-- Undo reverses in reverse order, verifies preconditions, never overwrites changed
-  files, goes through the normal approval flow, and cannot run twice on the same
-  operations. `shell_run` and MCP tools are never presented as undoable.
-
-**First-run onboarding**
-
-- New installs get a skippable 3-step flow: AI provider + key, allowed folders
-  (Desktop, Documents, Downloads suggested), then example prompts. Existing
-  installations skip it automatically.
-
-**Do mode (built-in computer-use)**
-
-- Do mode runs a built-in tool-calling loop in the main process on top of your configured chat provider — no external agent CLI. The model plans, calls file/clipboard/app/shell tools, you approve risky actions, everything is logged and stoppable (`Ctrl+Alt+Esc`).
-- Approval policy: reads auto-run inside allowed folders, writes need approval, shell commands need approval every time. Trash-only deletes, secrets redacted, `/log` opens the latest run log.
-
-See [docs/architecture/local-agent.md](docs/architecture/local-agent.md).
-
-**Extensions (skills, MCP, hooks, workflows)**
-
-- Install and manage Agent-Skills-compatible skills, MCP servers (official SDK, stdio + Streamable HTTP/SSE), event hooks, and reusable workflows from `/extensions` or the 🧩 footer button. Everything installs OFF until reviewed; skills load progressively, MCP tools join the same registry as `mcp__server__tool`, hooks can only make permissions stricter, and workflows run through the same approval layer. Ships with 2 example skills + 2 example workflows (disabled).
-
-See [docs/architecture/extensions.md](docs/architecture/extensions.md).
-
-**Do mode (built-in only, no external runtimes)**
-
-- Do mode runs only the built-in tool-calling loop in the main process — no
-  external agent CLI, no runtime picker. Old `agentRuntime` / `agentBackend` /
-  `engine` settings fall back to built-in and are purged on read.
-
-## When to use it
-
-- Quick AI answers without leaving the current window (`Alt+Space`, ask, dismiss).
-- Repeated rewrites: summarize, translate, or explain with one slash command.
-- Repeatable two-path tasks via `/email-reply` or `/requirement-review`.
-- Local-first draft history with your own provider keys and models.
-
-## Quick Start
+## Install
 
 No releases exist. Run from source.
 
@@ -138,28 +44,97 @@ npm ci
 npm run dev
 ```
 
+## Quick start
+
 1. Press `Alt+Space`.
 2. Open settings, pick a provider, paste your key.
 3. Try: `/summarize paste text here`.
 
 If the hotkey is taken, change `hotkey` in settings. If the window disappears on focus loss, that is by design — reopen it from the tray. See [docs/development/troubleshooting.md](docs/development/troubleshooting.md).
 
-## Build / Dev
+## How it fits together
 
-Commands from `package.json`:
+- The popup is a frameless window (640px, grows to fit, max 560px) on a global
+  `Alt+Space` (default, configurable). It hides on blur like a launcher; the tray
+  has Show / Hide + Quit; the app is single-instance. `Tab` (or `Alt+M`) switches
+  Ask / Do in the composer; Nexio opens in Do mode by default.
+- Ask mode answers with your own keys: `openai` (default `gpt-4o-mini`),
+  `anthropic`, `gemini`, `compatible` (`http://localhost:11434/v1`, e.g. Ollama).
+  Answers stream with cancel; provider usage may incur charges. Paste
+  (`Ctrl+V`/`Cmd+V`), drag-drop ("Drop to attach"), or the paperclip button stages
+  images/files under the composer; `Enter` on attachments alone sends "Describe the
+  attached file(s)." Types are sniffed by magic bytes (max 5, 20MB/file, 50MB
+  total); images are EXIF-stripped and capped at 2048px, text is BOM-decoded and
+  truncated at 200KB. Temp files live under `<data>/attachments/<conversation>`
+  and are deleted on conversation delete/Clear or swept after 7 days; files
+  outside the working folder need per-file Allow once; non-vision models get a
+  notice with a confirming "Switch model" button; logs keep name/type/size/SHA256
+  only. Details: [docs/providers.md](docs/providers.md),
+  [docs/configuration.md](docs/configuration.md), [SECURITY.md](SECURITY.md).
+- Do mode runs a built-in tool-calling loop in the main process on top of your
+  configured chat provider — no external agent CLI, no runtime picker. The model
+  plans, calls file/clipboard/app/shell tools, you approve risky actions,
+  everything is logged and stoppable (`Ctrl+Alt+Esc`). Reads auto-run inside
+  allowed folders, writes need approval, shell commands need approval every time.
+  Old `agentRuntime` / `agentBackend` / `engine` settings fall back to built-in
+  and are purged on read. Details:
+  [docs/architecture/local-agent.md](docs/architecture/local-agent.md).
+- Slash commands and prompt templates: `/help` `/new` `/clear` `/model`
+  (Ask-only) `/history` `/settings` `/log` `/extensions`; `/translate` `/rewrite`
+  `/summarize` `/explain` `/analyze` `/reply`; workflows `/email-reply`
+  `/requirement-review`. Palette: type `/`, ranked exact > prefix > substring >
+  fuzzy, arrows + `Enter` + `Esc` + click; unknown commands show top-3
+  suggestions; scopes (`Ask` / `Do` / `all`) follow the active mode. Details:
+  [docs/agents/README.md](docs/agents/README.md),
+  [docs/agents/workflows.md](docs/agents/workflows.md).
+- Small multi-step workflows: `prompt` / `transform` / `conditional` /
+  `user-input` / `output` steps; `append` / `prepend` / `replace` / `uppercase` /
+  `lowercase` transforms; max 20 steps, conditional depth <= 2, last step must be
+  `output`; per-step history; cancel via cancel action (Esc closes popup, may
+  strand run).
+- Local history in `%APPDATA%\Nexio\nexio.db` (WAL mode, override with
+  `NEXIO_DATA_DIR`): Run Log tab (prompt, one-line outcome, timestamp, status,
+  Undo where supported) and Ask tab (chat transcripts; nothing discarded). Note:
+  message text is sent to the configured provider on each request. Reversible
+  operations (`fs_move`, `fs_copy`, new-file `fs_write`, `clipboard_write`) are
+  journaled per run and reversed in reverse order with precondition checks, never
+  overwriting changed files, through the normal approval flow, never twice;
+  `fs_trash` notes manual Recycle Bin restore; `shell_run` and MCP tools are never
+  undoable. New installs get a skippable 3-step onboarding (provider + key,
+  allowed folders, example prompts); existing installations skip it.
+- Extensions: Agent-Skills-compatible skills, MCP servers (official SDK, stdio +
+  Streamable HTTP/SSE), event hooks, and reusable workflows from `/extensions`.
+  Everything installs OFF until reviewed; skills load progressively, MCP tools
+  join the same registry as `mcp__server__tool`, hooks can only make permissions
+  stricter. Ships with 2 example skills + 2 example workflows (disabled).
+  Details: [docs/architecture/extensions.md](docs/architecture/extensions.md).
 
-```powershell
-npm run build:main      # compile Electron main (tsc)
-npm run build:renderer  # copy renderer assets
-npm run build             # build main + renderer
-npm run dev             # build + run Electron
-npx vitest run          # tests (npm test runs vitest run)
-npm test                # tests (vitest run)
-npm run typecheck       # typecheck main (tsc --noEmit)
-npm run dist            # build + electron-builder --win portable
-```
+In practice: quick answers without leaving the current window; repeated rewrites
+with one slash command; two-path tasks via `/email-reply` or
+`/requirement-review`; local-first draft history with your own keys and models.
 
-Setup details: [docs/development/setup.md](docs/development/setup.md). Testing details: [docs/development/testing.md](docs/development/testing.md). Architecture: [docs/architecture/overview.md](docs/architecture/overview.md).
+## Security
+
+Reads auto-run inside allowed folders; writes and every shell command need your
+approval — approval cannot be skipped or timed out. Keys live in `safeStorage` /
+DPAPI in the SQLite `secrets` table (XOR fallback warns, dev only);
+`redact()` masks `sk-` / `Bearer` / `api_key` before logging; dev-only env
+fallback (`OPENAI_API_KEY`, etc.). Treat attached and tool text as untrusted
+data. Read [SECURITY.md](SECURITY.md) before connecting providers or enabling
+extensions.
+
+## Documentation
+
+| Goal                          | Start here                                                                               |
+| ----------------------------- | ---------------------------------------------------------------------------------------- |
+| Install and set up dev        | [Setup](docs/development/setup.md) · [Testing](docs/development/testing.md)              |
+| Configure providers and keys  | [Providers](docs/providers.md) · [Configuration](docs/configuration.md)                 |
+| Slash commands and workflows  | [Agents](docs/agents/README.md) · [Workflows](docs/agents/workflows.md)                  |
+| Do loop, tools, approvals     | [Local agent](docs/architecture/local-agent.md)                                          |
+| Skills, MCP, hooks            | [Extensions](docs/architecture/extensions.md)                                            |
+| Popup, hotkey, platforms      | [Shortcuts](docs/shortcuts.md) · [Design](docs/design.md) · [Platforms](docs/platforms.md) |
+| Troubleshoot or check status  | [Troubleshooting](docs/development/troubleshooting.md) · [Status](docs/product/implementation-status.md) |
+| Architecture overview         | [Overview](docs/architecture/overview.md)                                                |
 
 ## Status
 
