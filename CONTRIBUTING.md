@@ -1,8 +1,10 @@
 # Contributing to Nexio
 
-Windows-first project. Small, focused PRs welcome.
+Windows + macOS project. Small, focused PRs welcome.
 
-## Setup (Windows x64)
+## Setup
+
+Windows x64 or macOS 13+ (Apple Silicon or Intel):
 
 ```powershell
 npm ci
@@ -12,15 +14,22 @@ npx vitest run
 
 Requires Node >= 22.5 for tests (`node:sqlite` via
 `process.getBuiltinModule`). The packaged app (Electron 37 / Node 22)
-opens SQLite fine.
+opens SQLite fine. macOS note: `npm run assets` needs Xcode command-line
+tools (`iconutil`) to build `icon.icns`; other platforms use the
+checked-in fallback and `assets:check` still passes.
 
 ## Building
 
 ```powershell
 npm run build:main
 npm run build:renderer
-npm run dist   # electron-builder --win portable
+npm run dist   # win: nsis + portable. macOS (on a Mac): dmg + zip universal
 ```
+
+`dmg`/`zip` must be built on macOS; CI builds + tests all three targets
+(`windows-latest`, `macos-latest`, `macos-13`), and `release.yml` ships
+installers on `v*` tags. Unsigned builds work; signing/notarization needs
+owner credentials (see `docs/release.md`).
 
 ## PR guidelines
 
