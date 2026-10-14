@@ -14,11 +14,9 @@ export const ATTACH_STRINGS = {
   dropHint: 'Drop to attach',
   defaultInstruction: 'Describe the attached file(s).',
   placeholderWithAttach: 'Add a note, Enter to send…',
-  firstUseNotice: 'Attachments stay on this computer until you send them. Stays on this computer — processing runs on localhost.',
   visionNotice: 'This model does not support images. Switch model to send images — image bytes were not sent.',
   visionSwitch: 'Switch model',
   deleteAttachments: 'Delete attachments',
-  secretsHint: 'Attachment text may contain secrets — confirm before sharing.',
   oversizeError: 'Attachment too large',
   countError: 'Too many attachments (max 5)',
 } as const;
@@ -113,4 +111,66 @@ export function classifyPaste(hasText: boolean, fileCount: number): 'text-only' 
 export function redactPaths(text: string): string {
   return String(text).replace(/[A-Za-z]:\\[^\s"']+/g, (m) => m.split('\\').pop() || m)
     .replace(/\/(?:[^\s"']*\/)+([^\s"'/]+)/g, '$1');
+}
+
+/** Evidence-based secret scan for attachment text (chip badge, send gate). */
+const SECRET_VALUE = `(?:['"][^'"]{2,}['"]|[A-Za-z0-9-_]{8,})`;
+const SECRET_RES: RegExp[] = [
+  /sk-[A-Za-z0-9-_]{20,}/,
+  /AKIA[0-9A-Z]{16}/,
+  /aws_secret_access_key\s*[:=]\s*\S{8,}/i,
+  /-----BEGIN (?:RSA |OPENSSH |EC |DSA |ENCRYPTED )?PRIVATE KEY-----/,
+  new RegExp(`\\bpassw(?:or)?d\\s*[:=]\\s*(?![A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*\\s*\\()${SECRET_VALUE}`, 'i'),
+  new RegExp(`\\b(?:api[_-]?key|auth[_-]?token)\\s*[:=]\\s*(?![A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*\\s*\\()${SECRET_VALUE}`, 'i'),
+  /\bbearer\s+['"]?\S{8,}/i,
+];
+
+/** True when text matches a known secret pattern. Empty/short text never matches. */
+export function scanSecretsText(text: string): boolean {
+  if (!text || text.length < 8) return false;
+  const sample = text.length > 65536 ? text.slice(0, 65536) : text;
+  return SECRET_RES.some((re) => re.test(sample));
+}
+
+/** "1 attachment added" / "3 attachments added" (no "(s)"). */
+export function formatAttachCount(n: number): string {
+  return n === 1 ? '1 attachment added' : `${n} attachments added`;
+}
+
+const PROVIDER_DISPLAY: Record<string, string> = {
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  gemini: 'Gemini',
+  compatible: 'Custom',
+};
+
+/** Local provider = compatible/custom endpoint on this machine or LAN. */
+export function isLocalProvider(provider: string, baseUrl?: string): boolean {
+  if (provider !== 'compatible') return false;
+  const host = (() => {
+    try {
+      // why: Node keeps IPv6 brackets in hostname, browsers strip them.
+      return new URL(String(baseUrl || '')).hostname.toLowerCase().replace(/^\[(.*)\]$/, '$1').replace(/\.$/, '');
+    } catch {
+      return '';
+    }
+  })();
+  if (!host) return false;
+  if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+  if (host.endsWith('.local') || host.endsWith('.localhost')) return true;
+  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const [, a, b] = v4.map(Number);
+    if (a === 10) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+  }
+  return false;
+}
+
+/** The single attachment notice sentence, decided by provider type only. */
+export function attachNoticeText(provider: string, baseUrl?: string): string {
+  if (isLocalProvider(provider, baseUrl)) return 'Stays on this computer.';
+  const name = PROVIDER_DISPLAY[provider] || provider || 'Custom';
+  return `Sent to ${name} when you press Enter.`;
 }

@@ -349,6 +349,8 @@ export class McpManager {
   private clients = new Map<string, McpClientLike>();
   private states = new Map<string, McpServerState>();
   private starting = new Map<string, Promise<void>>();
+  /** Names stopped while a start was in flight; the late success is closed at birth, never published. */
+  private stopRequested = new Set<string>();
 
   constructor(private opts: McpManagerOpts) {}
 
@@ -392,6 +394,7 @@ export class McpManager {
     if (pending) { await pending; return this.mustGet(name); }
     const st: McpServerState = { name, status: 'starting', tools: [], prompts: [] };
     this.states.set(name, st);
+    this.stopRequested.delete(name);
     const run = (async () => {
       const timeoutMs = this.opts.healthTimeoutMs || 10_000;
       const base = await this.opts.baseEnv;
@@ -401,6 +404,11 @@ export class McpManager {
         withTimeout(client.listTools(), timeoutMs, `MCP ${name} tools/list timed out`).catch(() => [] as McpToolDef[]),
         withTimeout(client.listPrompts(), timeoutMs, `MCP ${name} prompts/list timed out`).catch(() => [] as McpPromptDef[]),
       ]);
+      if (this.stopRequested.has(name)) {
+        try { await client.close(); } catch { /* noop */ }
+        this.states.set(name, { name, status: 'stopped', tools: [], prompts: [] });
+        return;
+      }
       this.clients.set(name, client);
       this.states.set(name, { name, status: 'ready', tools, prompts });
     })();
@@ -408,28 +416,33 @@ export class McpManager {
     try {
       await run;
     } catch (e) {
-      this.states.set(name, { name, status: 'error', error: (e as Error).message.slice(0, 300), tools: [], prompts: [] });
+      if (!this.stopRequested.has(name)) {
+        this.states.set(name, { name, status: 'error', error: (e as Error).message.slice(0, 300), tools: [], prompts: [] });
+      }
       throw e;
     } finally {
       this.starting.delete(name);
+      this.stopRequested.delete(name);
     }
     return this.mustGet(name);
   }
 
-  async callTool(server: string, tool: string, args: unknown): Promise<{ ok: boolean; output: string }> {
+  async callTool(server: string, tool: string, args: unknown, opts: { signal?: AbortSignal } = {}): Promise<{ ok: boolean; output: string }> {
     const client = await this.ensure(server);
-    return client.callTool(tool, args);
+    return rejectOnAbort(client.callTool(tool, args), opts.signal);
   }
 
   async stop(name: string): Promise<void> {
+    this.stopRequested.add(name);
     try { await this.clients.get(name)?.close(); } catch { /* noop */ }
     this.clients.delete(name);
     const st = this.states.get(name);
     if (st) this.states.set(name, { ...st, status: 'stopped' });
+    if (!this.starting.has(name)) this.stopRequested.delete(name);
   }
 
   async stopAll(): Promise<void> {
-    for (const name of [...this.clients.keys()]) await this.stop(name);
+    for (const name of new Set([...this.clients.keys(), ...this.starting.keys()])) await this.stop(name);
   }
 
   async restart(name: string): Promise<void> {
@@ -453,6 +466,20 @@ function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> 
   return Promise.race([p.finally(() => clearTimeout(timer!)), gate]);
 }
 
+/** Settle with p unless signal aborts first (the agent loop aborts hung tools this way). */
+function rejectOnAbort<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return p;
+  if (signal.aborted) return Promise.reject(new Error('aborted'));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new Error('aborted'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(
+      (v) => { signal.removeEventListener('abort', onAbort); resolve(v); },
+      (e) => { signal.removeEventListener('abort', onAbort); reject(e); },
+    );
+  });
+}
+
 /** Bridge one MCP tool into the SAME Tool shape as built-ins. */
 export function makeMcpTool(
   server: string,
@@ -469,9 +496,9 @@ export function makeMcpTool(
     inputSchema: { type: 'object', properties: (schema.properties || {}) as Tool['inputSchema']['properties'], required: schema.required },
     risk,
     describe: (input) => `MCP ${server} → ${def.name}\n${JSON.stringify(input)}`,
-    run: async (input) => {
+    run: async (input, ctx) => {
       try {
-        const r = await manager.callTool(server, def.name, input);
+        const r = await manager.callTool(server, def.name, input, { signal: ctx?.signal });
         return { ok: r.ok, output: r.output, source: `mcp:${server}`, untrusted: true };
       } catch (e) {
         return { ok: false, output: `MCP call failed: ${(e as Error).message}` };

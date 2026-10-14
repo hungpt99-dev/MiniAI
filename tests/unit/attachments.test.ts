@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   ATTACH_LIMITS, ATTACH_STRINGS, sniffMime, validateMagic, validateLimits,
-  fitSize, classifyPaste, safeName, redactPaths,
+  fitSize, classifyPaste, safeName, redactPaths, attachNoticeText,
 } from '../../src/shared/attachments';
 import {
   sha256, decodeText, stripJpegExif, processImage, resolveAttachMime, saveAttachment,
@@ -320,8 +320,12 @@ describe('UI strings exact + safe display', () => {
     expect(ATTACH_STRINGS.deleteAttachments).toBe('Delete attachments');
     expect(ATTACH_STRINGS.defaultInstruction).toBe('Describe the attached file(s).');
     expect(ATTACH_STRINGS.placeholderWithAttach).toBe('Add a note, Enter to send…');
-    expect(ATTACH_STRINGS.firstUseNotice).toContain('Stays on this computer');
-    expect(ATTACH_STRINGS.secretsHint).toMatch(/confirm/);
+    // why: the old two-paragraph notice and blanket secrets hint are gone;
+    // the notice is one sentence decided by provider type (shared helper).
+    expect('firstUseNotice' in ATTACH_STRINGS).toBe(false);
+    expect('secretsHint' in ATTACH_STRINGS).toBe(false);
+    expect(attachNoticeText('compatible', 'http://localhost:11434/v1')).toBe('Stays on this computer.');
+    expect(attachNoticeText('openai', '')).toBe('Sent to OpenAI when you press Enter.');
   });
   it('safe names strip traversal; paths redact to basenames', () => {
     expect(safeName('../../etc/passwd')).not.toContain('/');

@@ -124,7 +124,20 @@ export const darwinAdapter: PlatformAdapter = {
       '/usr',
       '/bin',
       '/sbin',
-      '/private',
+      // why: /private wholesale would also swallow the user temp dirs it
+      // contains (/private/var/folders, /private/tmp), so list the
+      // system-state subtrees explicitly instead.
+      '/private/etc',
+      '/private/tftpboot',
+      '/private/var/audit',
+      '/private/var/backups',
+      '/private/var/db',
+      '/private/var/log',
+      '/private/var/mail',
+      '/private/var/root',
+      '/private/var/run',
+      '/private/var/spool',
+      '/private/var/vm',
       '/etc',
       path.join(home, 'Library', 'Keychains'),
       path.join(home, 'Library', 'Mail'),

@@ -126,6 +126,17 @@ describe('sources: zip-slip, symlinks, caps', () => {
     const p = writeZip([{ name: 'big.bin', data: Buffer.alloc(101 * 1024 * 1024), method: 8 }]);
     expect(() => filesFromZip(p)).toThrow(/too large/);
   }, 30000);
+  it('rejects duplicate zip entries', () => {
+    const p = writeZip([
+      { name: 'a.txt', data: Buffer.from('one') },
+      { name: 'a.txt', data: Buffer.from('two') },
+    ]);
+    expect(() => filesFromZip(p)).toThrow(/duplicate entry/);
+  });
+  it('rejects a single file over the per-file cap', () => {
+    const p = writeZip([{ name: 'big.bin', data: Buffer.alloc(11 * 1024 * 1024) }]);
+    expect(() => filesFromZip(p)).toThrow(/file too large/);
+  }, 30000);
 });
 
 describe('mcp: config parsing + secret extraction', () => {
@@ -222,6 +233,48 @@ describe('mcp: lifecycle with a fake server', () => {
     await m.mgr.ensure('srv');
     await m.mgr.stopAll();
     expect(m.closed()).toBe(1);
+  });
+  it('stop during start closes the late client instead of publishing a zombie', async () => {
+    let release!: (c: { close: () => Promise<void> }) => void;
+    const gate = new Promise<{ close: () => Promise<void> }>((res) => { release = res; });
+    let closed = 0;
+    const mgr = new McpManager({
+      loadConfig: () => ({ srv: { command: 'slow' } }),
+      isTrusted: () => true,
+      connect: () => gate.then(() => ({
+        listTools: async () => [],
+        listPrompts: async () => [],
+        close: async () => { closed++; },
+      })),
+    });
+    const pending = mgr.ensure('srv');
+    await mgr.stop('srv');
+    release({ close: async () => { closed++; } });
+    await expect(pending).rejects.toThrow(/not running/);
+    expect(closed).toBe(1);
+    expect(mgr.getState('srv')?.status).toBe('stopped');
+    // A fresh ensure after the aborted start works normally.
+    await mgr.ensure('srv');
+    expect(mgr.getState('srv')?.status).toBe('ready');
+  });
+  it('callTool rejects on abort instead of hanging', async () => {
+    const mgr = new McpManager({
+      loadConfig: () => ({ srv: { command: 'hang' } }),
+      isTrusted: () => true,
+      connect: async () => ({
+        listTools: async () => [{ name: 't', inputSchema: { type: 'object', properties: {} } }],
+        listPrompts: async () => [],
+        callTool: () => new Promise(() => { /* never */ }),
+        close: async () => {},
+      }),
+    });
+    const ac = new AbortController();
+    const p = mgr.callTool('srv', 't', {}, { signal: ac.signal });
+    ac.abort();
+    await expect(p).rejects.toThrow(/aborted/);
+    const dead = new AbortController();
+    dead.abort();
+    await expect(mgr.callTool('srv', 't', {}, { signal: dead.signal })).rejects.toThrow(/aborted/);
   });
 });
 
@@ -468,6 +521,47 @@ describe('store: install/enable/hash/uninstall', () => {
     const b = new Map([['a', Buffer.from('1')], ['b', Buffer.from('2')]]);
     expect(hashFiles(a)).toBe(hashFiles(b));
     expect(hashFiles(new Map([['a', Buffer.from('1x')]]))).not.toBe(hashFiles(a));
+  });
+  it('updateRecord cannot whitewash tamper flag or hash', async () => {
+    const { db, store } = makeStore();
+    const r = await store.install({ type: 'paste', kind: 'skill', text: SKILL });
+    if (r.status !== 'installed') throw new Error('expected install');
+    store.enable(r.record.id);
+    const loc = store.location(store.get(r.record.id)!)!;
+    fs.writeFileSync(path.join(loc, 'SKILL.md'), SKILL + '\nEVIL=1\n');
+    const before = store.list().find((x) => x.id === r.record.id)!;
+    expect(before.tampered).toBe(true);
+    const patched = store.updateRecord(r.record.id, { tampered: false, hash: 'deadbeef' });
+    expect(patched.tampered).toBe(true);
+    expect(patched.hash).toBe(before.hash);
+    expect(patched.enabled).toBe(false);
+    db.close();
+  });
+  it('update drops secrets removed from the new config', async () => {
+    const { db, store } = makeStore();
+    const one = JSON.stringify({ mcpServers: { srv: { command: 'fake', env: { TOKEN: 'shh' } } } });
+    const r = await store.install({ type: 'paste', kind: 'mcp', text: one });
+    if (r.status !== 'installed') throw new Error('expected install');
+    expect(getSecret(db, `ext:${r.record.id}:mcp:srv:TOKEN`)).toBe('shh');
+    const none = JSON.stringify({ mcpServers: { srv: { command: 'fake' } } });
+    await store.update(r.record.id, { type: 'paste', kind: 'mcp', text: none });
+    expect(getSecret(db, `ext:${r.record.id}:mcp:srv:TOKEN`)).toBeUndefined();
+    db.close();
+  });
+  it('update with grown MCP permissions distrusts until re-approved', async () => {
+    const { db, store } = makeStore();
+    const one = JSON.stringify({ mcpServers: { srv: { command: 'fake' } } });
+    const r = await store.install({ type: 'paste', kind: 'mcp', text: one });
+    if (r.status !== 'installed') throw new Error('expected install');
+    store.trust(r.record.id);
+    store.enable(r.record.id);
+    const two = JSON.stringify({ mcpServers: { srv: { command: 'fake' }, srv2: { command: 'evil' } } });
+    const up = await store.update(r.record.id, { type: 'paste', kind: 'mcp', text: two });
+    expect(up.grew).toBe(true);
+    const rec = store.get(r.record.id)!;
+    expect(rec.enabled).toBe(false);
+    expect(rec.trusted).toBe(false);
+    db.close();
   });
 });
 

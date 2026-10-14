@@ -4,8 +4,15 @@
 const { execFile } = require('child_process');
 const fs = require('fs');
 const http = require('http');
+const os = require('os');
+const path = require('path');
 const ART = './artifacts-e2e';
 fs.mkdirSync(ART, { recursive: true });
+// why: the OS helpers differ per host (pywinauto/UIA on Windows,
+// Quartz/screencapture on macOS); CDP driving below is shared.
+const IS_MAC = process.platform === 'darwin';
+const PYBIN = IS_MAC ? 'python3' : 'python';
+const HELPERS = IS_MAC ? 'e2e/mac' : 'e2e';
 const results = [];
 function check(name, cond, extra = '') {
   results.push({ name, pass: !!cond });
@@ -13,26 +20,34 @@ function check(name, cond, extra = '') {
 }
 function py(code) {
   return new Promise((resolve) => {
-    execFile('python', ['-c', code], { timeout: 30000 }, (err, stdout, stderr) => resolve((stdout + stderr).trim().slice(0, 300)));
+    execFile(PYBIN, ['-c', code], { timeout: 30000 }, (err, stdout, stderr) => resolve((stdout + stderr).trim().slice(0, 300)));
   });
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let id = 0;
-const VIS_PY = "from pywinauto.findwindows import find_elements\nprint('N:'+str(len(find_elements(title='Nexio',top_level_only=True,backend='uia')+find_elements(title='MiniAI',top_level_only=True,backend='uia'))))";
-const HOTKEY_FOR = (hk) => (/alt\+x/i.test(hk || '') ? '%x' : '%{SPACE}');
-let HOTKEY_PY = "import sys; sys.argv=['x','show','%{SPACE}']; exec(open('e2e/hotkey_show.py').read())";
-let HIDE_PY = "import sys; sys.argv=['x','hide','%{SPACE}']; exec(open('e2e/hotkey_show.py').read())";
+const VIS_PY = IS_MAC
+  ? "exec(open('e2e/mac/vis.py').read())"
+  : "from pywinauto.findwindows import find_elements\nprint('N:'+str(len(find_elements(title='Nexio',top_level_only=True,backend='uia')+find_elements(title='MiniAI',top_level_only=True,backend='uia'))))";
+// Windows: pywinauto send-keys (%{SPACE}, %x). macOS: keyspec for e2e/mac/hotkey_show.py.
+const HOTKEY_FOR = IS_MAC
+  ? (hk) => String(hk || 'Alt+Space').toLowerCase().split('+').map((p) => p.trim()).filter(Boolean).join('+')
+  : (hk) => (/alt\+x/i.test(hk || '') ? '%x' : '%{SPACE}');
+let HOTKEY_PY = "import sys; sys.argv=['x','show','" + (IS_MAC ? 'alt+space' : '%{SPACE}') + "']; exec(open('" + HELPERS + "/hotkey_show.py').read())";
+let HIDE_PY = "import sys; sys.argv=['x','hide','" + (IS_MAC ? 'alt+space' : '%{SPACE}') + "']; exec(open('" + HELPERS + "/hotkey_show.py').read())";
 // Alt+Space is eaten by the OS on some hosts; main falls back to Alt+X and
 // reports the live key via getHotkeyStatus, so send the registered one.
 async function syncHotkey() {
   try {
-    const hs = JSON.parse(await ev(`JSON.stringify(await window.nexio.getHotkeyStatus())`));
+    // why: Runtime.evaluate has no top-level await even with awaitPromise,
+    // so wrap in an async IIFE (the bare await used to throw here and the
+    // suite silently fell back to the default hotkey).
+    const hs = JSON.parse(await ev(`(async () => JSON.stringify(await window.nexio.getHotkeyStatus()))()`));
     const k = HOTKEY_FOR(hs && hs.hotkey);
-    HOTKEY_PY = "import sys; sys.argv=['x','show','" + k + "']; exec(open('e2e/hotkey_show.py').read())";
-    HIDE_PY = "import sys; sys.argv=['x','hide','" + k + "']; exec(open('e2e/hotkey_show.py').read())";
+    HOTKEY_PY = "import sys; sys.argv=['x','show','" + k + "']; exec(open('" + HELPERS + "/hotkey_show.py').read())";
+    HIDE_PY = "import sys; sys.argv=['x','hide','" + k + "']; exec(open('" + HELPERS + "/hotkey_show.py').read())";
   } catch (e) { console.log('syncHotkey-fallback using default | ' + ((e && e.message) || e)); }
 }
-const SHOT_PY = "import sys; sys.argv=['x','NAME']; exec(open('e2e/shots.py').read())";
+const SHOT_PY = "import sys; sys.argv=['x','NAME']; exec(open('" + HELPERS + "/shots.py').read())";
 const ensureVisible = async () => {
   for (let i = 0; i < 3; i++) {
     if ((await py(VIS_PY)).includes('N:1')) return true;
@@ -90,6 +105,31 @@ const shot = async (n) => {
   if (!(await py(VIS_PY)).includes('N:1')) await py(HOTKEY_PY);
   const r = await py(SHOT_PY.replace('NAME', n));
   if (!r.includes('saved')) throw new Error('shot-failed ' + n + ': ' + r);
+};
+// why: fail-path tests must fail deterministically even when the host has a
+// real API key configured; point at a closed local port (fast refuse) and
+// restore the user's settings right after (trash-test precedent).
+const saveProvider = async () => {
+  await ev(`(async () => { window.__s0 = JSON.stringify(await window.nexio.getSettings()); })()`);
+};
+const restoreProvider = async () => {
+  await ev(`(async () => { const s0 = JSON.parse(window.__s0 || 'null'); if (s0) await window.nexio.setSettings({ provider: s0.provider, model: s0.model, baseUrl: (s0.baseUrl ?? '') }); window.__s0 = null; })()`);
+};
+const forceFailProvider = async () => {
+  await saveProvider();
+  await ev(`(async () => { await window.nexio.setSettings({ provider: 'compatible', model: 'e2e-no-key', baseUrl: 'http://127.0.0.1:9/v1' }); })()`);
+};
+// why: in agent (Do) mode an ambiguous send is clarified by the intent
+// router instead of reaching the provider, so fail-path tests must run in
+// chat (Ask) mode to exercise the send-error path deterministically.
+const ensureChatMode = async () => {
+  for (let i = 0; i < 3; i++) {
+    const m = String((await S()).mode || '').toLowerCase();
+    if (m.includes('ask')) return true;
+    await key('Tab');
+    await sleep(300);
+  }
+  return false;
 };
 const S = async () => JSON.parse(await ev(`JSON.stringify({active:(document.activeElement||{}).id||null,input:document.getElementById('input').value,ph:document.getElementById('input').placeholder,palHidden:document.getElementById('palette').classList.contains('hidden'),items:[...document.querySelectorAll('#palette .item')].map(e=>e.textContent.trim().slice(0,50)),pActive:[...document.querySelectorAll('#palette .item')].findIndex(e=>e.classList.contains('active')),msgs:[...document.querySelectorAll('#messages .msg')].map(e=>e.textContent.trim().slice(0,100)),mode:(document.querySelector('#modebar .tab.active')||{textContent:'NONE'}).textContent.trim(),vis:['palette','messages','settings','history'].filter(id=>!document.getElementById(id).classList.contains('hidden')),noSelect:!document.querySelector('select')})`));
 
@@ -198,6 +238,8 @@ async function main() {
   await sleep(400);
   s = await S();
   check('shift-enter-newline', shiftOk === false && mMid === mBefore && s.input.includes('\n') && s.msgs.length === mBefore, `prevented=${shiftOk} input=${JSON.stringify(s.input).slice(0, 80)}`);
+  await forceFailProvider();
+  check('fail-chat-mode', await ensureChatMode());
   await ev(`{const el=document.getElementById('input'); el.value='enter-send-probe-123'; el.dispatchEvent(new Event('input',{bubbles:true}));}`);
   await key('Enter');
   await sleep(2500);
@@ -209,6 +251,7 @@ async function main() {
   check('enter-sends', s.msgs.some((m) => m.includes('enter-send-probe-123')), s.msgs.join(' || ').slice(-200));
   check('answer-single-view', JSON.stringify(s.vis) === JSON.stringify(['messages']), s.vis.join(','));
   check('fail-keeps-full-text', s.input.includes('enter-send-probe-123'), s.input.slice(0, 80));
+  await restoreProvider();
   await ev(`{const el=document.getElementById('input'); el.value=''; el.dispatchEvent(new Event('input',{bubbles:true}));}`);
   await ensureInput();
   await type('/clear');
@@ -218,7 +261,7 @@ async function main() {
   if (s.input.trim() === '/clear') { await key('Enter'); await sleep(600); s = await S(); }
   const rc = JSON.parse(await ev(`JSON.stringify({v:document.getElementById('input').value,ch:document.getElementById('input').clientHeight,multi:document.querySelector('.bar').classList.contains('multiline')})`));
   check('composer-reset-1line', rc.v === '' && rc.ch <= 32 && !rc.multi, JSON.stringify(rc));
-  check('user-row-clamps', await ev(`typeof userLabel==='undefined' && /you-clamp/.test(addMsg.toString())`));
+  check('user-row-clamps', await ev(`typeof userLabel==='undefined' && (() => { const d = addMsg('user', '__clamp_probe__'); const ok = !!d.querySelector('.you-prompt.you-clamp'); d.remove(); return ok; })()`));
   await shot('05-reshown');
   // /help executes (palette may select first on fast typing -> Enter again)
   check('help-ready', await ensureInput());
@@ -286,6 +329,8 @@ async function main() {
   s = await S();
   if (s.mode.toLowerCase().includes('do')) await key('Tab');
   check('chat-ready', await ensureInput());
+  await forceFailProvider();
+  check('no-key-chat-mode', await ensureChatMode());
   await type('hello-no-key-test');
   await key('Enter');
   await sleep(2500);
@@ -294,6 +339,7 @@ async function main() {
   for (let i = 0; i < 6 && !s.input.includes('hello-no-key-test'); i++) { await sleep(500); s = await S(); }
   check('no-key-error-surfaced', s.msgs.some((m) => /key|api|error|fail|connect/i.test(m)), s.msgs.join(' || ').slice(0, 250));
   check('no-key-draft-kept', s.input.includes('hello-no-key-test'), s.input);
+  await restoreProvider();
   await shot('09-error-path');
   // palette mouse pick via DOM click
   await ev(`document.getElementById('input').value=''`);
@@ -319,11 +365,12 @@ async function main() {
   };
   s = await runCmd('/model');
   check('model-get', s.msgs.some((m) => /current model/i.test(m)), s.msgs.slice(-1).join('').slice(0, 120));
+  await saveProvider();
   s = await runCmd('/model e2e-model-1');
   check('model-set', s.msgs.some((m) => /model → e2e-model-1/i.test(m)));
   s = await runCmd('/model');
   check('model-persisted', s.msgs.some((m) => /current model: e2e-model-1/i.test(m)), s.msgs.slice(-1).join('').slice(0, 120));
-  await ev(`(window.nexio||window.miniAI).setSettings({model:'gpt-4o-mini'})`); // restore default
+  await ev(`(async () => { const s0 = JSON.parse(window.__s0 || 'null'); if (s0 && s0.model) await window.nexio.setSettings({ model: s0.model }); window.__s0 = null; })()`); // restore user's model
   // settings panel + test-conn graceful fail (no key)
   await ev(`document.getElementById('btn-settings').click()`);
   await sleep(300);
@@ -356,12 +403,14 @@ async function main() {
   s = await S();
   check('single-panel-proof', s.vis.length <= 1 && s.noSelect, s.vis.join(','));
   await shot('17-single-panel');
-  // workflow fail path (no key -> prompt step 401, must surface not strand)
+  // workflow fail path (forced failure via closed local port -> must surface not strand)
+  await forceFailProvider();
   s = await runCmd('/email-reply hello-this-is-a-test-email');
   await sleep(1500);
   s = await S();
   const lastMsg = s.msgs[s.msgs.length - 1] || '';
   check('workflow-fails-loudly', !/…$/.test(lastMsg) && /fail|error|output|status/i.test(lastMsg), lastMsg.slice(0, 200));
+  await restoreProvider();
   await shot('14-workflow-fail');
   // Do mode is built-in only: no runtime picker, Tab switches mode pills
   await key('Tab'); // to agent
@@ -380,8 +429,8 @@ async function main() {
   await shot('10-final');
 
   // trash (sandboxed agent + fake tool-turn provider, no keys) + 401 + pill labels
-  const SB = 'C:\\NexioTest';
-  const trashFile = SB + '\\trash-me-2.txt';
+  const SB = IS_MAC ? path.join(os.tmpdir(), 'NexioTest') : 'C:\\NexioTest';
+  const trashFile = path.join(SB, 'trash-me-2.txt');
   fs.mkdirSync(SB, { recursive: true });
   fs.writeFileSync(trashFile, 'trash-me');
   let turnN = 0;
@@ -416,7 +465,7 @@ async function main() {
     trashOut = await ev(`window.__trash||''`);
     trashDone = await ev(`window.__trashDone||''`);
   } finally {
-    try { await ev(`{const s0=JSON.parse(window.__s0||'null');if(s0)await window.nexio.setSettings({provider:s0.provider,model:s0.model,baseUrl:(s0.baseUrl??''),agentAllowedRoots:s0.roots,agentCwd:s0.cwd,agentAlwaysAllow:s0.rules});}`); } catch (e) { console.log('settings-restore-failed | ' + ((e && e.message) || e)); }
+    try { await ev(`(async () => { const s0 = JSON.parse(window.__s0 || 'null'); if (s0) await window.nexio.setSettings({ provider: s0.provider, model: s0.model, baseUrl: (s0.baseUrl ?? ''), agentAllowedRoots: s0.roots, agentCwd: s0.cwd, agentAlwaysAllow: s0.rules }); })()`); } catch (e) { console.log('settings-restore-failed | ' + ((e && e.message) || e)); }
     await Promise.race([new Promise((r) => toolFake.close(r)), sleep(2000).then(() => console.log('toolFake-close-timeout'))]);
   }
   check('trash-live-path', trashDone === 'done' && /true moved to trash/.test(trashOut) && !/staged at/.test(trashOut), `${trashDone} ${(trashOut || '').slice(0, 120)}`);

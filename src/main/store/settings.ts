@@ -52,6 +52,8 @@ export function validateSettings(s: Partial<Settings>): string[] {
   if (s.agentMaxCalls !== undefined && (typeof s.agentMaxCalls !== 'number' || s.agentMaxCalls < 1 || s.agentMaxCalls > 100)) errors.push('agentMaxCalls must be 1..100');
   if (s.requireApprovalForWrites !== undefined && typeof s.requireApprovalForWrites !== 'boolean') errors.push('requireApprovalForWrites must be boolean');
   if (s.onboarded !== undefined && typeof s.onboarded !== 'boolean') errors.push('onboarded must be boolean');
+  if (s.attachNoticeDismissed !== undefined && (typeof s.attachNoticeDismissed !== 'object' || Array.isArray(s.attachNoticeDismissed) ||
+    !Object.values(s.attachNoticeDismissed).every((v) => typeof v === 'boolean'))) errors.push('attachNoticeDismissed must be a map of booleans');
   if (s.suggestions !== undefined && (!Array.isArray(s.suggestions) || s.suggestions.length > 8 || !s.suggestions.every((x) => typeof x === 'string' && x.trim()))) errors.push('suggestions must be up to 8 non-empty strings');
   if (s.launchAtLogin !== undefined && typeof s.launchAtLogin !== 'boolean') errors.push('launchAtLogin must be boolean');
   return errors;

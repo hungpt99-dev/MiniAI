@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { resolveDbPath } from '../db/db';
-import { setSecret } from '../store/secrets';
+import { setSecret, listSecretsByPrefix, deleteSecret } from '../store/secrets';
 import { deleteSecretsByPrefix } from '../store/secrets';
 import type {
   ExtKind, ExtRecord, ExtSourceType, InstallPreview, InstallResult, RegistryFile, TrustInfo, UpdateResult,
@@ -148,13 +148,16 @@ export class ExtStore {
     return this.list().find((r) => r.id === id);
   }
 
-  /** Patch one record (tool policy, flags). Tampered records stay disabled. */
+  /** Patch one record (tool policy, flags). Integrity fields are store-managed:
+      tampered/hash can only change via install/update, which re-hash. */
   updateRecord(id: string, patch: Partial<ExtRecord>): ExtRecord {
     const reg = this.readRegistry();
     const rec = reg.extensions.find((r) => r.id === id);
     if (!rec) throw new Error(`unknown extension: ${id}`);
     if (patch.enabled && rec.tampered) throw new Error('extension was modified on disk — remove and reinstall to re-approve');
-    Object.assign(rec, patch);
+    const { tampered: _droppedTampered, hash: _droppedHash, ...safe } = patch;
+    void _droppedTampered; void _droppedHash;
+    Object.assign(rec, safe);
     this.writeRegistry(reg);
     return rec;
   }
@@ -324,6 +327,10 @@ export class ExtStore {
     this.persistBuilt(rec.kind, rec.name, built);
     if (built.hooks) this.applyHookEntries(rec.id, built.hooks);
     if (built.secretPlacements) {
+      const keep = new Set(built.secretPlacements.map((p) => p.service));
+      for (const s of listSecretsByPrefix(this.db, extSecretPrefix(rec.id))) {
+        if (!keep.has(s)) deleteSecret(this.db, s);
+      }
       for (const p of built.secretPlacements) setSecret(this.db, p.service, p.value);
     }
     rec.capabilities = built.capabilities;
@@ -334,7 +341,8 @@ export class ExtStore {
     if (grew) {
       // Permissions grew: disable until the user re-approves.
       rec.enabled = false;
-      if (rec.kind === 'hook') rec.trusted = false;
+      // Hooks and MCP servers execute code — distrust until re-approved.
+      if (rec.kind === 'hook' || rec.kind === 'mcp') rec.trusted = false;
     }
     this.writeRegistry(reg);
     return { record: rec, added, grew };

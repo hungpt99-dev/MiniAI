@@ -301,7 +301,12 @@ async function sendInner() {
       const id = await ensureConv();
       assistantDiv = addMsg('assistant', '…');
       try {
-        await window.nexio.send(id, text, { mode, sessionId: id, requestId: `r${Date.now()}-${++reqSeq}`, explicit: modeExplicitSession });
+        const claim = typeof window.attachClaimForSend === 'function' ? window.attachClaimForSend() : null;
+        const sendOpts = { mode, sessionId: id, requestId: `r${Date.now()}-${++reqSeq}`, explicit: modeExplicitSession };
+        if (claim && claim.attachments) sendOpts.attachments = claim.attachments;
+        const sendP = window.nexio.send(id, text, sendOpts);
+        try { if (claim && claim.had && typeof window.attachMarkSent === 'function') window.attachMarkSent(id); } catch { /* noop */ }
+        await sendP;
       } catch (e) {
         assistantDiv.innerHTML = mdLite(errText(e));
         inputEl.value = text; // keep unsent input after failures
@@ -320,7 +325,12 @@ async function sendInner() {
   assistantDiv = addMsg('assistant', '…');
   try {
     const requestId = `r${Date.now()}-${++reqSeq}`;
-    await window.nexio.send(id, text, { mode, sessionId: id, requestId, explicit: modeExplicitSession });
+    const claim = typeof window.attachClaimForSend === 'function' ? window.attachClaimForSend() : null;
+    const sendOpts = { mode, sessionId: id, requestId, explicit: modeExplicitSession };
+    if (claim && claim.attachments) sendOpts.attachments = claim.attachments;
+    const sendP = window.nexio.send(id, text, sendOpts);
+    try { if (claim && claim.had && typeof window.attachMarkSent === 'function') window.attachMarkSent(id); } catch { /* noop */ }
+    await sendP;
   } catch (e) {
     assistantDiv.innerHTML = mdLite(errText(e));
     inputEl.value = text; // keep unsent input after failures
@@ -388,7 +398,16 @@ inputEl.addEventListener('keydown', (e) => {
     if (e.shiftKey || e.isComposing) return; // Shift+Enter newline, no preventDefault
     e.preventDefault(); void send();
   }
-  else if (e.key === 'Escape') window.close?.();
+  else if (e.key === 'Escape') {
+    // why: Esc clears first (input, then last attachment) and only closes an empty composer.
+    if (inputEl.value) {
+      inputEl.value = ''; drafts[mode] = '';
+      try { grow(); } catch { /* noop */ }
+      try { inputEl.focus(); } catch { /* noop */ }
+      try { syncChrome(); } catch { /* noop */ }
+    } else if (attachPending() > 0 && typeof window.attachRemoveLast === 'function') window.attachRemoveLast();
+    else window.close?.();
+  }
 });
 function renderPalette() {
   paletteEl.innerHTML = '';
@@ -667,7 +686,15 @@ function syncChrome() {
   if ($('modebar')) $('modebar').classList.toggle('hidden', idle);
   const multi = !palOpen && !hasMsgs && !!inputEl.value && (inputEl.value.includes('\n') || inputEl.scrollHeight > 32);
   if ($('hint-nav')) $('hint-nav').classList.toggle('hidden', multi);
-  if ($('hint-esc')) $('hint-esc').classList.toggle('hidden', !hasMsgs);
+  // why: Esc hint always shows; the label tracks state. The textContent write
+  // is guarded: an unconditional write re-triggers the panel
+  // MutationObserver every pass (same class of loop as updateRunChip).
+  var hasInput = !!inputEl.value;
+  var hasAttach = attachPending() > 0;
+  if ($('hint-tab')) $('hint-tab').classList.toggle('hidden', !(inputEl && !inputEl.value && document.activeElement === inputEl && !inputEl.disabled));
+  var escLabel = (hasInput || hasAttach || hasMsgs) ? 'clear' : 'close';
+  var escLabelEl = $('hint-esc-label');
+  if (escLabelEl && escLabelEl.textContent !== escLabel) escLabelEl.textContent = escLabel;
   if ($('hint-multi')) $('hint-multi').classList.toggle('hidden', !multi);
   const hasAnswer = view === 'run' && !!messagesEl.querySelector('.msg.assistant');
   if ($('answer-meta')) $('answer-meta').classList.toggle('hidden', !hasAnswer);
@@ -1092,7 +1119,12 @@ function handleAgentEvent(runId, ev) {
 async function startAgentRun(text) {
   const id = await beginRun(text);
   try {
-    const r = await window.nexio.agentStart(id, text, { cwd: agentCwd || undefined });
+    const claim = typeof window.attachClaimForSend === 'function' ? window.attachClaimForSend() : null;
+    const startOpts = { cwd: agentCwd || undefined };
+    if (claim && claim.attachments) startOpts.attachments = claim.attachments;
+    const startP = window.nexio.agentStart(id, text, startOpts);
+    try { if (claim && claim.had && typeof window.attachMarkSent === 'function') window.attachMarkSent(id); } catch { /* noop */ }
+    const r = await startP;
     if (!agentState) return;
     agentState.runId = r && r.runId;
   } catch (e) {
@@ -1357,8 +1389,13 @@ function updateRunChip() {
   let label = null;
   if (!viewingRun && running) label = 'Running / View';
   else if (!viewingRun && recent) label = 'Done / View';
-  if (label) { btn.textContent = label; btn.classList.remove('hidden'); }
-  else btn.classList.add('hidden');
+  if (label) {
+    if (btn.textContent !== label) btn.textContent = label;
+    if (btn.classList.contains('hidden')) btn.classList.remove('hidden');
+  } else if (!btn.classList.contains('hidden')) btn.classList.add('hidden');
+  // why: classList.add/remove rewrite the class attribute (and textContent
+  // replaces children) even when nothing changed, which re-triggers the
+  // panel MutationObserver into an infinite loop. Only touch the DOM on change.
 }
 if ($('btn-runview')) $('btn-runview').onclick = () => { showView('run'); inputEl.focus(); };
 if ($('btn-log')) $('btn-log').onclick = () => void showAgentLog();
@@ -2413,8 +2450,6 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
   if (!trayEl || !inputEl2) return;
   var VISION_NOTICE = 'This model does not support images. Switch model to send images — image bytes were not sent.';
   var DEFAULT_INSTR = 'Describe the attached file(s).';
-  var FIRST_USE = 'Attachments stay on this computer until you send them. Stays on this computer — processing runs on localhost.';
-  var SECRETS_HINT = 'Attachment text may contain secrets — confirm before sharing.';
   var pending = [];
   var keySeq = 0;
   var sentStash = {};
@@ -2422,6 +2457,74 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
   var lastHadAttach = false;
   var previewOpen = false;
   var previewPrior = null;
+  // why: mirrors of scanSecretsText/isLocalProvider/attachNoticeText in
+  // shared/attachments.ts (renderer has no imports); keep the two in sync.
+  var SECRET_VALUE = "(?:['\"][^'\"]{2,}['\"]|[A-Za-z0-9-_]{8,})";
+  var SECRET_RES = [
+    /sk-[A-Za-z0-9-_]{20,}/,
+    /AKIA[0-9A-Z]{16}/,
+    /aws_secret_access_key\s*[:=]\s*\S{8,}/i,
+    /-----BEGIN (?:RSA |OPENSSH |EC |DSA |ENCRYPTED )?PRIVATE KEY-----/,
+    new RegExp('\\bpassw(?:or)?d\\s*[:=]\\s*(?![A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*\\s*\\()' + SECRET_VALUE, 'i'),
+    new RegExp('\\b(?:api[_-]?key|auth[_-]?token)\\s*[:=]\\s*(?![A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*\\s*\\()' + SECRET_VALUE, 'i'),
+    /\bbearer\s+['"]?\S{8,}/i,
+  ];
+  function scanSecretsText(text) {
+    try {
+      if (!text || text.length < 8) return false;
+      var sample = text.length > 65536 ? text.slice(0, 65536) : text;
+      return SECRET_RES.some(function (re) { return re.test(sample); });
+    } catch (e) { return false; }
+  }
+  var PROVIDER_DISPLAY = { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', compatible: 'Custom' };
+  function isLocalProvider(provider, baseUrl) {
+    try {
+      if (provider !== 'compatible') return false;
+      // why: Node keeps IPv6 brackets in hostname, browsers strip them.
+      var host = new URL(String(baseUrl || '')).hostname.toLowerCase().replace(/^\[(.*)\]$/, '$1').replace(/\.$/, '');
+      if (!host) return false;
+      if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+      if (host.slice(-6) === '.local' || host.slice(-10) === '.localhost') return true;
+      var m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+      if (m) {
+        var a = +m[1], b = +m[2];
+        if (a === 10) return true;
+        if (a === 172 && b >= 16 && b <= 31) return true;
+        if (a === 192 && b === 168) return true;
+      }
+      return false;
+    } catch (e) { return false; }
+  }
+  function attachNoticeText(provider, baseUrl) {
+    if (isLocalProvider(provider, baseUrl)) return 'Stays on this computer.';
+    return 'Sent to ' + (PROVIDER_DISPLAY[provider] || provider || 'Custom') + ' when you press Enter.';
+  }
+  // Secrets gate: one confirmation per attachment set before any send.
+  var secretsOk = false, secretsAsk = false;
+  function secretsMatched() {
+    try { return pending.filter(function (a) { return a.hasSecrets && (a.size || 0) > 0 && a.kind !== 'image'; }); } catch (e) { return []; }
+  }
+  function resetSecretsGate() { secretsOk = false; secretsAsk = false; }
+  // Provider notice cache (async settings); refreshed on focus and on tray change.
+  var noticeCache = { provider: 'openai', baseUrl: '', dismissed: {} };
+  function refreshNoticeSettings() {
+    try {
+      if (!window.nexio || !window.nexio.getSettings) return;
+      window.nexio.getSettings().then(function (s) {
+        try {
+          var next = {
+            provider: (s && s.provider) || 'openai',
+            baseUrl: (s && s.baseUrl) || '',
+            dismissed: (s && s.attachNoticeDismissed) || {},
+          };
+          var changed = next.provider !== noticeCache.provider || next.baseUrl !== noticeCache.baseUrl ||
+            JSON.stringify(next.dismissed) !== JSON.stringify(noticeCache.dismissed);
+          noticeCache = next;
+          if (changed && pending.length) renderTray();
+        } catch (e) {}
+      }).catch(function () {});
+    } catch (e) {}
+  }
   function base(n) { try { return String(n || 'file').split(/[\\/]/).pop() || 'file'; } catch (e) { return 'file'; } }
   function fmtSize(b) {
     b = Number(b) || 0;
@@ -2432,8 +2535,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
   function announce(m) {
     try {
       if (!liveEl) return;
-      liveEl.classList.remove('hidden');
-      liveEl.textContent = m;
+      liveEl.textContent = m; // sr-only live region: never in the layout flow
     } catch (e) { /* live region never breaks sends */ }
   }
   function chrome() {
@@ -2482,13 +2584,36 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
           item.appendChild(img);
         } else {
           item = document.createElement('div');
-          item.className = 'attach-chip';
+          item.className = 'attach-chip' + (a.hasSecrets && (a.size || 0) > 0 ? ' secrets' : '');
           item.setAttribute('role', 'listitem');
           item.tabIndex = 0;
           item.title = base(a.name) + ' (' + fmtSize(a.size) + ')';
-          item.innerHTML = fileSvg() + '<span></span><span class="asz"></span>';
-          item.querySelector('span').textContent = base(a.name);
+          item.innerHTML = fileSvg() + '<span class="aname"></span><span class="asz"></span>';
+          item.querySelector('.aname').textContent = base(a.name);
           item.querySelector('.asz').textContent = fmtSize(a.size);
+          if ((a.size || 0) === 0) {
+            var eb = document.createElement('button');
+            eb.type = 'button';
+            eb.className = 'abadge muted';
+            eb.textContent = a.emptyKept ? 'Empty file · kept' : 'Empty file';
+            eb.title = a.emptyKept ? 'Kept — click to exclude from sending' : 'Empty files are not sent — click to keep';
+            eb.setAttribute('aria-pressed', a.emptyKept ? 'true' : 'false');
+            eb.setAttribute('aria-label', (a.emptyKept ? 'Exclude empty file ' : 'Keep empty file ') + base(a.name));
+            (function (entry, btn) {
+              btn.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                entry.emptyKept = !entry.emptyKept;
+                renderTray();
+              });
+            })(a, eb);
+            item.appendChild(eb);
+          } else if (a.hasSecrets) {
+            var wb = document.createElement('span');
+            wb.className = 'abadge warn';
+            wb.title = 'May contain secrets';
+            wb.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v5"/><circle cx="12" cy="18" r="0.5"/></svg>Review';
+            item.appendChild(wb);
+          }
           if (a.verdict === 'approval') {
             var b = document.createElement('span');
             b.className = 'aonce';
@@ -2498,7 +2623,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
         }
         item.dataset.akey = a.key;
         item.addEventListener('click', function (ev) {
-          if (ev.target && ev.target.classList && ev.target.classList.contains('attach-rm')) return;
+          if (ev.target && ev.target.classList && (ev.target.classList.contains('attach-rm') || ev.target.classList.contains('abadge'))) return;
           openPreview(a);
         });
         item.addEventListener('keydown', function (ev) {
@@ -2512,47 +2637,111 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
         rm.title = 'Remove ' + base(a.name);
         rm.textContent = '×';
         rm.addEventListener('click', function (ev) { ev.stopPropagation(); removeEntry(a.key); });
-        if (item.classList.contains('attach-thumb')) item.appendChild(rm);
-        else item.appendChild(rm);
+        item.appendChild(rm);
         trayEl.appendChild(item);
       });
-      var needSecrets = pending.some(function (a) { return a.kind !== 'image'; });
-      if (needSecrets) {
-        var n = document.createElement('div');
-        n.className = 'attach-note';
-        n.textContent = SECRETS_HINT;
-        trayEl.appendChild(n);
-      }
-      try {
-        if (!window.localStorage.getItem('nexio-attach-notice')) {
-          var f = document.createElement('div');
-          f.className = 'attach-note';
-          f.textContent = FIRST_USE;
-          trayEl.appendChild(f);
-          window.localStorage.setItem('nexio-attach-notice', '1');
-        }
-      } catch (e) {}
+      maybeNotice();
+      maybeSecretsConfirm();
       if (note) announce(note);
       chrome();
     } catch (e) { /* tray never breaks the composer */ }
   }
-  function removeEntry(key) {
+  function shouldShowNotice() {
+    if (!pending.length) return false;
+    try {
+      if (!window.localStorage.getItem('nexio-attach-notice')) return true;
+    } catch (e) { return true; }
+    return !noticeCache.dismissed[noticeCache.provider];
+  }
+  function maybeNotice() {
+    if (!shouldShowNotice()) return;
+    try { window.localStorage.setItem('nexio-attach-notice', '1'); } catch (e) {}
+    var n = document.createElement('div');
+    n.className = 'attach-note';
+    var t = document.createElement('span');
+    t.textContent = attachNoticeText(noticeCache.provider, noticeCache.baseUrl);
+    n.appendChild(t);
+    var d = document.createElement('button');
+    d.type = 'button';
+    d.className = 'dismiss';
+    d.textContent = 'Dismiss';
+    d.setAttribute('aria-label', 'Dismiss attachment notice');
+    d.addEventListener('click', function (ev) { ev.stopPropagation(); dismissNotice(); });
+    n.appendChild(d);
+    trayEl.appendChild(n);
+  }
+  function dismissNotice() {
+    try {
+      var map = {};
+      try { map = Object.assign({}, noticeCache.dismissed); } catch (e) {}
+      map[noticeCache.provider] = true;
+      noticeCache.dismissed = map;
+      if (window.nexio && window.nexio.getSettings && window.nexio.setSettings) {
+        window.nexio.getSettings().then(function (s) {
+          try {
+            var prev = (s && s.attachNoticeDismissed) || {};
+            window.nexio.setSettings({ attachNoticeDismissed: Object.assign({}, prev, map) }).catch(function () {});
+          } catch (e) {}
+        }).catch(function () {});
+      }
+      renderTray();
+    } catch (e) {}
+  }
+  function maybeSecretsConfirm() {
+    var m = secretsAsk ? secretsMatched() : [];
+    if (!m.length) return;
+    var bar = document.createElement('div');
+    bar.className = 'attach-confirm';
+    var t = document.createElement('span');
+    t.textContent = (m.length === 1 ? '1 file' : m.length + ' files') + ' may contain secrets.';
+    bar.appendChild(t);
+    var go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'btn-mini';
+    go.textContent = 'Send anyway';
+    go.addEventListener('click', function (ev) { ev.stopPropagation(); confirmSecretsSend(); });
+    bar.appendChild(go);
+    var rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'btn-mini';
+    rm.textContent = 'Remove';
+    rm.addEventListener('click', function (ev) { ev.stopPropagation(); removeSecretsMatched(); });
+    bar.appendChild(rm);
+    trayEl.appendChild(bar);
+  }
+  function confirmSecretsSend() {
+    secretsOk = true;
+    secretsAsk = false;
+    renderTray();
+    try { if (typeof send === 'function') void send(); } catch (e) {}
+  }
+  function removeSecretsMatched() {
+    try {
+      secretsMatched().slice().forEach(function (a) { removeEntry(a.key, true); });
+      secretsAsk = false;
+      renderTray();
+    } catch (e) {}
+  }
+  function removeEntry(key, quiet) {
     try {
       var ix = -1, nm = '';
       for (var i = 0; i < pending.length; i++) if (pending[i].key === key) { ix = i; nm = base(pending[i].name); break; }
       if (ix >= 0) pending.splice(ix, 1);
-      renderTray('Removed ' + nm);
+      resetSecretsGate();
+      renderTray(quiet ? undefined : 'Attachment removed');
       try { inputEl2.focus(); } catch (e) {}
     } catch (e) {}
   }
-  function clearTray() { try { pending = []; renderTray(); } catch (e) {} }
+  function clearTray() { try { pending = []; resetSecretsGate(); renderTray(); } catch (e) {} }
   function toSendEntry(a) {
     var o = { name: base(a.name), mime: a.mime, size: a.size };
     if (a.path) o.path = a.path;
     else if (a.dataBase64) o.dataBase64 = a.dataBase64;
     return o;
   }
-  function drainToSend() { return pending.map(toSendEntry); }
+  function drainToSend() {
+    return pending.filter(function (a) { return (a.size || 0) > 0 || a.emptyKept; }).map(toSendEntry);
+  }
   function addEntries(list) {
     try {
       for (var i = 0; i < list.length; i++) {
@@ -2564,7 +2753,9 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
         if (!a.kind) a.kind = (a.mime || '').indexOf('image/') === 0 ? 'image' : 'file';
         pending.push(a);
       }
-      renderTray(pending.length ? pending.length + ' attachment(s) added' : undefined);
+      resetSecretsGate();
+      renderTray(pending.length ? (pending.length === 1 ? '1 attachment added' : pending.length + ' attachments added') : undefined);
+      refreshNoticeSettings();
       try { if (typeof hideSuggest === 'function') hideSuggest(); } catch (e) {} // attached: never an empty composer
       try { inputEl2.focus(); } catch (e) {}
     } catch (e) {}
@@ -2589,7 +2780,11 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
               var url = String(r.result || '');
               var b64 = url.indexOf(',') >= 0 ? url.slice(url.indexOf(',') + 1) : '';
               var isImg = mime.indexOf('image/') === 0;
-              addEntries([{ name: name, mime: mime, size: f.size || b64.length, dataBase64: b64, previewUrl: isImg ? url : undefined, kind: isImg ? 'image' : 'file' }]);
+              var hasSecrets = false;
+              try {
+                if (!isImg && (f.size || b64.length)) hasSecrets = scanSecretsText(atob(b64.slice(0, 65536)));
+              } catch (e2) { /* no badge without evidence */ }
+              addEntries([{ name: name, mime: mime, size: f.size || b64.length, dataBase64: b64, previewUrl: isImg ? url : undefined, kind: isImg ? 'image' : 'file', hasSecrets: hasSecrets }]);
             } catch (e) {}
           };
           r.onerror = function () { showError('Attachment unreadable: ' + name); };
@@ -2675,6 +2870,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
               path: r.path, previewUrl: r.previewDataUrl,
               kind: (r.mime || '').indexOf('image/') === 0 ? 'image' : 'file',
               verdict: r.verdict === 'approval' ? 'approval' : undefined,
+              hasSecrets: r.hasSecrets === true,
             });
           });
           if (ok.length) addEntries(ok);
@@ -2784,7 +2980,27 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
       } catch (e2) {}
     });
   } catch (e) {}
-  // Bridge: merge pending into every send/agentStart; stash for history; clear after.
+  // Secrets gate: every UI send funnels through core send(); block once per
+  // attachment set until the user confirms, instead of failing at the bridge.
+  try {
+    if (typeof send === 'function') {
+      var _sendCore = send;
+      send = async function () {
+        try {
+          if (!secretsOk && secretsMatched().length) {
+            secretsAsk = true;
+            renderTray();
+            announce('Review attachments that may contain secrets');
+            try { inputEl2.focus(); } catch (e2) {}
+            return;
+          }
+        } catch (e2) {}
+        return _sendCore.apply(this, arguments);
+      };
+    }
+  } catch (e) {}
+  // Bridge (frozen by contextBridge, so wrappers cannot patch it): the send
+  // sites below claim + settle attachments explicitly instead.
   function stashFor(cid) {
     try {
       if (!cid) return;
@@ -2794,48 +3010,20 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
       lastHadAttach = pending.length > 0;
     } catch (e) {}
   }
-  try {
-    if (window.nexio) {
-      if (window.nexio.send) {
-        var _send = window.nexio.send.bind(window.nexio);
-        window.nexio.send = function (cid, text, opts) {
-          opts = opts || {};
-          if (pending.length && !opts.attachments) {
-            var merged = [];
-            try { merged = drainToSend(); } catch (e) {}
-            if (merged.length) opts = Object.assign({}, opts, { attachments: merged });
-          }
-          var had = pending.length;
-          lastHadAttach = false;
-          var p = _send(cid, text, opts);
-          if (had) {
-            try { stashFor(cid); } catch (e) {}
-            clearTray();
-          }
-          return p;
-        };
-      }
-      if (window.nexio.agentStart) {
-        var _astart = window.nexio.agentStart.bind(window.nexio);
-        window.nexio.agentStart = function (cid, text, opts) {
-          opts = opts || {};
-          if (pending.length && !opts.attachments) {
-            var merged2 = [];
-            try { merged2 = drainToSend(); } catch (e) {}
-            if (merged2.length) opts = Object.assign({}, opts, { attachments: merged2 });
-          }
-          var had2 = pending.length;
-          lastHadAttach = false;
-          var p2 = _astart(cid, text, opts);
-          if (had2) {
-            try { stashFor(cid); } catch (e) {}
-            clearTray();
-          }
-          return p2;
-        };
-      }
-    }
-  } catch (e) {}
+  window.attachClaimForSend = function () {
+    try {
+      var merged = [];
+      try { merged = drainToSend(); } catch (e) {}
+      return { attachments: merged.length ? merged : undefined, had: pending.length };
+    } catch (e) { return { attachments: undefined, had: 0 }; }
+  };
+  window.attachMarkSent = function (cid) {
+    try {
+      if (!pending.length) return;
+      try { stashFor(cid); } catch (e) {}
+      clearTray();
+    } catch (e) {}
+  };
   // Ask history: 160px thumbs + chips + Delete attachments menu.
   function paintHistAttach() {
     try {
@@ -2995,5 +3183,8 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
   try {
     window.attachPendingCount = function () { try { return pending.length; } catch (e) { return 0; } };
     window.clearAttachTray = function () { try { clearTray(); } catch (e) {} };
+    window.attachRemoveLast = function () { try { if (pending.length) removeEntry(pending[pending.length - 1].key); } catch (e) {} };
+    try { refreshNoticeSettings(); } catch (e) {}
+    try { window.addEventListener('focus', function () { refreshNoticeSettings(); }); } catch (e) {}
   } catch (e) {}
 })();

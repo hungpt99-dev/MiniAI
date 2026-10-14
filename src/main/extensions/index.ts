@@ -188,6 +188,17 @@ export class ExtService {
   async shutdown(): Promise<void> {
     await this.mcp.stopAll();
   }
+
+  /** Uninstall: stop owned MCP servers first so no child outlives its extension. */
+  async remove(id: string): Promise<void> {
+    try {
+      const rec = this.store.get(id);
+      if (rec?.kind === 'mcp') {
+        for (const srv of rec.servers || []) await this.mcp.stop(srv);
+      }
+    } catch { /* best-effort; removal proceeds regardless */ }
+    this.store.remove(id);
+  }
 }
 
 let singleton: ExtService | null = null;

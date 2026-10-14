@@ -3,8 +3,11 @@
 // Needs the app running with --remote-debugging-port=9222. Run: npm run e2e:trash
 const http = require('http');
 const fs = require('fs');
-const SB = 'C:\\NexioTest';
-const FILE = SB + '\\trash-me-1.txt';
+const os = require('os');
+const path = require('path');
+// why: the trash sandbox must be a host-native temp dir (was C:\-only).
+const SB = process.platform === 'darwin' ? path.join(os.tmpdir(), 'NexioTest') : 'C:\\NexioTest';
+const FILE = path.join(SB, 'trash-me-1.txt');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let id = 0;
 async function main() {

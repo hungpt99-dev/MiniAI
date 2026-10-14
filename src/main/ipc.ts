@@ -34,7 +34,7 @@ import type { SourceInput } from './extensions/sources';
 import { setPopupHeight, togglePopup, getPopup } from './popup';
 import { openExternalUrl, pickAttachFiles, pickFile, pickFolder, revealPath, withDialogLock } from './app/dialogs';
 import { resolveDbPath } from './db/db';
-import { ATTACH_LIMITS, ATTACH_STRINGS, sniffMime, validateLimits } from '../shared/attachments';
+import { ATTACH_LIMITS, ATTACH_STRINGS, sniffMime, validateLimits, scanSecretsText } from '../shared/attachments';
 import { attachmentLogRecord, classifyAttachPath, decodeText, deleteRunAttachments, processImage, resolveAttachMime, saveAttachment, sha256, sweepOldAttachments } from './attachments';
 import { clearRunAttachments, registerRunAttachments } from './agent/tools/attachment_tools';
 import { VisionNotSupportedError } from './ai/providers/vision';
@@ -1304,13 +1304,7 @@ function registerExtIpc(): void {
         case 'update':
           return ext.store.update(a.id, toSourceInput(a.source));
         case 'remove':
-          try {
-            const rec = ext.store.get(a.id);
-            if (rec?.kind === 'mcp') {
-              for (const srv of rec.servers || []) await ext.mcp.stop(srv);
-            }
-          } catch { /* best-effort */ }
-          ext.store.remove(a.id);
+          await ext.remove(a.id);
           return { removed: true };
         case 'source':
           return ext.store.readSource(a.id);
@@ -1423,6 +1417,7 @@ function registerAttachIpc(): void {
         let size = 0;
         let mime = 'application/octet-stream';
         let previewDataUrl: string | undefined;
+        let hasSecrets = false;
         try {
           const st = fs.statSync(p);
           size = st.size;
@@ -1434,6 +1429,11 @@ function registerAttachIpc(): void {
               const sniffed = sniffMime(new Uint8Array(head.buffer, head.byteOffset, n), name);
               if (sniffed && sniffed !== 'exe') {
                 mime = sniffed;
+                // why: evidence for the chip badge comes from bytes already
+                // read here — never shown without a real pattern match.
+                if (size > 0 && !mime.startsWith('image/')) {
+                  try { hasSecrets = scanSecretsText(head.subarray(0, n).toString('utf8')); } catch { /* no badge */ }
+                }
                 if (mime.startsWith('image/')) {
                   try {
                     const full = fs.readFileSync(p);
@@ -1451,7 +1451,7 @@ function registerAttachIpc(): void {
           verdict = v.verdict;
           reason = v.reason;
         } catch (e) { verdict = 'deny'; reason = (e as Error).message; }
-        return { path: p, name, size, mime, previewDataUrl, verdict, reason };
+        return { path: p, name, size, mime, previewDataUrl, verdict, reason, hasSecrets };
       });
     } catch { return []; }
   });

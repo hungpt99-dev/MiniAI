@@ -46,6 +46,16 @@ export function setSecret(db: DatabaseSync, service: string, value: string): voi
   db.prepare('INSERT INTO secrets (service, value, updatedAt) VALUES (?, ?, ?) ON CONFLICT(service) DO UPDATE SET value=excluded.value, updatedAt=excluded.updatedAt').run(service, enc, Date.now());
 }
 
+/** Remove one secret by exact service name. Returns rows deleted. */
+export function deleteSecret(db: DatabaseSync, service: string): number {
+  try {
+    const r = db.prepare('DELETE FROM secrets WHERE service = ?').run(service) as unknown as { changes?: unknown };
+    return typeof r?.changes === 'number' ? r.changes : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export function getSecret(db: DatabaseSync, service: string): string | undefined {
   const row = db.prepare('SELECT value FROM secrets WHERE service = ?').get(service) as { value: Buffer | Uint8Array } | undefined;
   if (!row) return undefined;
@@ -57,6 +67,18 @@ export function getSecret(db: DatabaseSync, service: string): string | undefined
   const ss = loadSafeStorage();
   if (!ss) throw new Error('No decryption backend available for this secret');
   return ss.decryptString(buf);
+}
+
+/** Services owned by one extension (stale-secret cleanup on update). */
+export function listSecretsByPrefix(db: DatabaseSync, prefix: string): string[] {
+  try {
+    const rows = db.prepare('SELECT service FROM secrets WHERE service LIKE ? ESCAPE \'\\\'').all(
+      `${prefix.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')}%`,
+    ) as Array<{ service: string }>;
+    return rows.map((r) => r.service);
+  } catch {
+    return [];
+  }
 }
 
 /** Remove every secret owned by one extension (uninstall cleanup). */

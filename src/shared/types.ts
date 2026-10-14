@@ -76,6 +76,8 @@ export interface Settings {
   requireApprovalForWrites?: boolean;
   onboarded?: boolean;
   suggestions?: string[];
+  /** Attachment notice dismissed, keyed by provider id. Absent = show. */
+  attachNoticeDismissed?: Record<string, boolean>;
   /** Launch at login via app.setLoginItemSettings. Off by default. */
   launchAtLogin?: boolean;
 }

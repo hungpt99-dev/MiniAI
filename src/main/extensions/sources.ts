@@ -16,6 +16,7 @@ export type SourceInput =
 export const ZIP_MAX_BYTES = 20 * 1024 * 1024;
 export const UNPACKED_MAX_BYTES = 100 * 1024 * 1024;
 export const MAX_FILES = 2000;
+export const FILE_MAX_BYTES = 10 * 1024 * 1024;
 
 export type GitRunner = (url: string, dest: string, timeoutMs: number) => Promise<void>;
 
@@ -92,6 +93,7 @@ export function filesFromZip(zipPath: string): FileMap {
     if (name.endsWith('/')) continue; // directory entry
     checkRel(name);
     if ((mode & 0o170000) === 0o120000) throw new Error(`symlink rejected: ${name}`);
+    if (files.has(name)) throw new Error(`duplicate entry: ${name}`);
     if (files.size >= MAX_FILES) throw new Error(`too many files (cap ${MAX_FILES})`);
     if (buf.readUInt32LE(localOff) !== 0x04034b50) throw new Error('corrupt zip (local header)');
     const lhNameLen = buf.readUInt16LE(localOff + 26);
@@ -102,6 +104,7 @@ export function filesFromZip(zipPath: string): FileMap {
     if (method === 0) out = Buffer.from(comp);
     else if (method === 8) out = zlib.inflateRawSync(comp);
     else throw new Error(`unsupported zip method ${method} for ${name}`);
+    if (out.length > FILE_MAX_BYTES) throw new Error(`file too large (cap 10MB): ${name}`);
     total += out.length;
     if (total > UNPACKED_MAX_BYTES) throw new Error('zip unpacks too large (cap 100MB)');
     files.set(name, out);

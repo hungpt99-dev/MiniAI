@@ -220,12 +220,14 @@ describe('pickAttachFiles', () => {
     expect(getDialogLockCount()).toBe(0);
   });
   it('remembers metadata (lastUsedDir) and seeds the next open', async () => {
-    showOpenDialog.mockResolvedValue({ canceled: false, filePaths: ['C:\\pics\\a.png'] });
+    // why: forward slashes round-trip through path.dirname on every host
+    // (a win32-shaped fixture would only pass on Windows).
+    showOpenDialog.mockResolvedValue({ canceled: false, filePaths: ['/pics/a.png'] });
     await pickAttachFiles(mockWin());
-    expect(getLastUsedDir()).toBe('C:\\pics');
+    expect(getLastUsedDir()).toBe('/pics');
     showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
     await pickAttachFiles(mockWin());
-    expect(dialogOpts().defaultPath).toBe('C:\\pics');
+    expect(dialogOpts().defaultPath).toBe('/pics');
     await flush();
   });
 });

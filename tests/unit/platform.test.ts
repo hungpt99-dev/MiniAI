@@ -104,7 +104,8 @@ describe('protected paths per adapter', () => {
   it('darwin blocks system dirs, keychains, mail, cloud secrets and browser profiles', () => {
     if (process.platform === 'win32') return; // posix protected paths need a POSIX host
     const ctx = ctxFor(['/Users/a']);
-    for (const p of ['/System/x', '/Library/x', '/usr/bin/x', '/private/x', '/etc/hosts',
+    for (const p of ['/System/x', '/Library/x', '/usr/bin/x', '/private/etc/hosts', '/private/tftpboot/x',
+      '/private/var/db/x', '/private/var/log/x', '/etc/hosts',
       '/Users/a/Library/Keychains/x', '/Users/a/Library/Mail/x', '/Users/a/Library/Messages/x',
       '/Users/a/.ssh/id', '/Users/a/.aws/x', '/Users/a/.gnupg/x',
       '/Users/a/Library/Application Support/Google/Chrome/x', '/Users/a/Library/Safari/x']) {
