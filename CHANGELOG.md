@@ -2,8 +2,12 @@
 
 ## Unreleased
 
+- README banner redesign (1280x360): new `design/banner.svg` promoted C2PA-free
+  to `assets/banner.svg`; `banner.png` regenerated at 2560x720. PNG text uses
+  system fonts (bundled woff2 subsets don't match resvg); SVG is canonical.
+
 - Brand assets (full spec): `design/*.svg` promoted to `assets/` C2PA-free
-  (icon 512 `r112`/`stroke42`/`dot26`, banner 1280x320, social 1280x640);
+  (icon 512 `r112`/`stroke42`/`dot26`, social 1280x640);
   `npm run assets` renders icon.png 1024, `assets/icons/` 16–1024, `icon.ico`
   16–256, `icon.icns` (macOS `iconutil`, PNG fallback + note elsewhere),
   banner 2560x640, social 1280x640 (<1MB), docs `icon-128.png`, tray

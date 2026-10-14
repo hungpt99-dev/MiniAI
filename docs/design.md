@@ -23,16 +23,17 @@ macOS differences (conventions only, no redesign):
 Dark-background brand only — there is no light variant.
 
 - Source vectors: `assets/icon.svg` (512, `viewBox 0 0 512 512`),
-  `assets/banner.svg` (1280x320), `assets/social-preview.svg` (1280x640).
+  `assets/banner.svg` (1280x360), `assets/social-preview.svg` (1280x640).
   C2PA metadata is stripped from the committed copies. Source of truth is
   `design/*.svg`: edit those first, then run `npm run assets` to regenerate.
 - Construction: rounded square `rx 112`, N path `stroke-width 42`,
   dot `r 26`, accent `#B8F26B` on `#15161B`.
-- Generated files (`npm run assets`, verified by `npm run assets:check`):
-  `assets/icon.png` (1024), `assets/icons/icon-{16,24,32,48,64,128,256,512,1024}.png`,
+- Generated files (`npm run assets`, verified by `npm run assets:check`):  `assets/icon.png` (1024), `assets/icons/icon-{16,24,32,48,64,128,256,512,1024}.png`,
   `assets/icon.ico` (16–256), `assets/icon.icns` (macOS `iconutil` only),
-  `assets/banner.png` (2560x640), `assets/social-preview.png` (1280x640, <1MB),
+  `assets/banner.png` (2560x720), `assets/social-preview.png` (1280x640, <1MB),
   `assets/tray/tray-{16,20,24,32}.png`, `docs/images/icon-128.png`.
+  PNG text renders with system fonts (bundled woff2 subsets don't match
+  resvg's fontdb); the SVG is canonical, PNG text may differ subtly per OS.
 - Template tray icons (`assets/Nexio-Template*.png`, 18/36px): black-only N + dot,
   no rounded square; filenames must end in `Template` or macOS will not treat
   them as templates (`setTemplateImage`). Stroke stays readable at 18px.

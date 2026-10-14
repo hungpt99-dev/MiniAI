@@ -30,7 +30,10 @@ for (const f of fontFiles) {
 function render(svgText, width) {
   const r = new Resvg(svgText, {
     fitTo: { mode: 'width', value: width },
-    font: { fontFiles, loadSystemFonts: false },
+    // why: bundled woff2 subsets never match resvg's fontdb, so system fonts
+    // do the text (SVG fallback stack: Geist -> Segoe UI -> Helvetica...).
+    // PNG text may differ subtly per OS; SVG stays the canonical banner.
+    font: { fontFiles, loadSystemFonts: true },
   });
   return r.render();
 }
@@ -133,7 +136,7 @@ for (const s of [16, 20, 24, 32]) {
 // 4. Banner 2x + social preview (<1MB).
 {
   const b = render(fs.readFileSync(inBanner, 'utf8'), 2560);
-  if (b.height !== 640) throw new Error(`banner aspect wrong: ${b.width}x${b.height}, want 2560x640`);
+  if (b.height !== 720) throw new Error(`banner aspect wrong: ${b.width}x${b.height}, want 2560x720`);
   writePng(b, path.join(assets, 'banner.png'));
 }
 {

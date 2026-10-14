@@ -23,7 +23,7 @@ describe('brand asset refs', () => {
   it('ships C2PA-free SVG sources with the right viewBox', () => {
     for (const [f, vb] of [
       ['assets/icon.svg', '0 0 512 512'],
-      ['assets/banner.svg', '0 0 1280 320'],
+      ['assets/banner.svg', '0 0 1280 360'],
       ['assets/social-preview.svg', '0 0 1280 640'],
     ] as const) {
       const p = path.join(root, f);
@@ -39,7 +39,7 @@ describe('brand asset refs', () => {
     for (const s of [16, 20, 24, 32]) expectPng(`assets/tray/tray-${s}.png`, s, s);
     expectPng('assets/Nexio-Template.png', 18, 18);
     expectPng('assets/Nexio-Template@2x.png', 36, 36);
-    expectPng('assets/banner.png', 2560, 640);
+    expectPng('assets/banner.png', 2560, 720);
     expectPng('assets/social-preview.png', 1280, 640);
     expectPng('docs/images/icon-128.png', 128, 128);
     const ico = path.join(root, 'assets/icon.ico');
