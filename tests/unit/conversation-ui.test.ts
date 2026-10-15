@@ -68,7 +68,7 @@ describe('scroll: padding, follow-bottom, jump button', () => {
     expect(src).toContain('function onViewScroll()');
     const c = css();
     expect(c).toContain('#jump-latest { position: absolute;');
-    expect(c).toContain('inset-inline-end: 16px; bottom: 56px;');
+    expect(c).toContain('inset-inline-end: 16px; bottom: calc(var(--control-h) + 2 * var(--popup-inset) + 12px);');
     expect(c).toContain('height: 32px;');
   });
   it('streaming respects a scrolled-up reader; user turns always show', () => {

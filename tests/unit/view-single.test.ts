@@ -394,11 +394,11 @@ describe('footer: always-visible panel shell, once, send disabled when empty', (
     expect(body).toContain('sendBtn.disabled = sendEmpty');
     expect(body).toContain('aria-disabled');
   });
-  it('footer metrics: 40px fixed, 6/14/6/22 padding, divider top, groups, caps, buttons, never scrolled away', () => {
+  it('footer metrics: control-h + 2*inset, divider top, groups, caps, buttons, never scrolled away', () => {
     const css = read('src/renderer/styles.css');
     const block = css.slice(css.indexOf('#hints {'), css.indexOf('#hints {') + 400);
-    expect(block).toContain('height: 40px');
-    expect(block).toContain('6px 14px 6px 22px');
+    expect(block).toContain('min-height: calc(var(--control-h) + 2 * var(--popup-inset))');
+    expect(block).toContain('padding: var(--popup-inset)');
     expect(block).toContain('1px solid var(--divider)');
     expect(block).toContain('flex: none');
     expect(block).toContain('white-space: nowrap');

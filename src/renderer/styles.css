@@ -117,8 +117,8 @@ body.show-tabkey #modebar:not(.hidden) + #mode-hint { display: inline !important
 .mode-div .mode-text { font-size: 12px; font-weight: 400; color: var(--muted); white-space: nowrap; }
 .switch-do-row { margin-top: calc(8px * var(--space-scale)); }
 /* why: sibling of the scroller (never inside scrolling content), pinned above
- * the 44px footer + 12px gap — no layout space, above content, below dialogs */
-#jump-latest { position: absolute; inset-inline-end: 16px; bottom: 56px; z-index: 6;
+ * the 64px footer + 12px gap — no layout space, above content, below dialogs */
+#jump-latest { position: absolute; inset-inline-end: 16px; bottom: calc(var(--control-h) + 2 * var(--popup-inset) + 12px); z-index: 6;
   height: 32px; padding: 0 12px; border-radius: 999px;
   background: var(--surface); border: 1px solid var(--border); color: var(--text-soft);
   font-size: 12px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;

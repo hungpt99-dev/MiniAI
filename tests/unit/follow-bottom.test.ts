@@ -78,7 +78,7 @@ describe('jump button: pinned sibling, never in the scroll flow', () => {
   });
   it('floats at the visible corner: no layout space, above content, below dialogs', () => {
     const c = css();
-    expect(c).toContain('#jump-latest { position: absolute; inset-inline-end: 16px; bottom: 56px; z-index: 6;');
+    expect(c).toContain('#jump-latest { position: absolute; inset-inline-end: 16px; bottom: calc(var(--control-h) + 2 * var(--popup-inset) + 12px); z-index: 6;');
     expect(c).toContain('height: 32px; padding: 0 12px; border-radius: 999px;');
     expect(c).toContain('background: var(--surface); border: 1px solid var(--border);');
     expect(c).toContain('#jump-latest:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }');

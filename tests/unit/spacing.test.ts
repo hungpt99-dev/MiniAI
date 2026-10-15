@@ -11,7 +11,7 @@ describe('spacing: one owner per gap on the 4px scale', () => {
     const c = css();
     expect(c).toContain('--space-scale: 1;');
     expect(c).toContain('.view {');
-    expect(c).toContain('padding: calc(12px * var(--space-scale)) calc(22px * var(--space-scale)) calc(12px * var(--space-scale));');
+    expect(c).toContain('padding: calc(var(--popup-pad-y) * var(--space-scale)) calc(22px * var(--space-scale)) calc(var(--popup-pad-y) * var(--space-scale));');
     expect(c).toContain('#messages { display: flex; flex-direction: column; gap: calc(16px * var(--space-scale)); padding: 0; }');
     expect(c).toContain('.turn { display: flex; flex-direction: column; gap: calc(6px * var(--space-scale));');
     expect(c).toContain('#run { order: 2; display: flex; flex-direction: column; gap: calc(6px * var(--space-scale)); }');
@@ -38,24 +38,24 @@ describe('spacing: one owner per gap on the 4px scale', () => {
     expect(c).toContain('.mode-div { display: flex; align-items: center;');
     expect(c).toContain('margin: 0; padding: calc(2px * var(--space-scale)) 0;');
     expect(c).toContain('#jump-latest { position: absolute;');
-    expect(c).toContain('inset-inline-end: 16px; bottom: 56px;');
+    expect(c).toContain('inset-inline-end: 16px; bottom: calc(var(--control-h) + 2 * var(--popup-inset) + 12px);');
   });
-  it('footer 40px fixed; action buttons 28px with 0 8px padding', () => {
+  it('footer control-h + 2*inset; action buttons 28px with 0 8px padding', () => {
     const c = css();
     expect(c).toContain('#hints { display: flex;');
-    expect(c).toContain('height: 40px;');
-    expect(c).toContain('padding: 6px 14px 6px 22px;');
+    expect(c).toContain('min-height: calc(var(--control-h) + 2 * var(--popup-inset));');
+    expect(c).toContain('padding: var(--popup-inset);');
     expect(c).toContain('#answer-meta #actions button { min-height: 28px; height: 28px;');
     expect(c).toContain('padding: 0 8px;');
   });
-  it('palette is compact and scrolls: 4px 6px wrapper, 29px rows, own scroller', () => {
+  it('palette owns inset/gap and scrolls: shared rhythm, 34px rows, own scroller', () => {
     const c = css();
-    expect(c).toContain('#palette { padding: 4px 6px;');
+    expect(c).toContain('#palette { display: flex; flex-direction: column; gap: 2px; padding: var(--popup-gap) var(--popup-inset);');
     expect(c).toContain('overflow-y: auto;');
     expect(c).toContain('#palette .item { display: flex; gap: 12px;');
-    expect(c).toContain('padding: 3px 10px; min-height: 29px;');
+    expect(c).toContain('margin-inline: -12px; padding-block: 4px; min-height: 34px;');
     expect(c).toContain('#palette .lb {');
-    expect(c).toContain('padding: 6px 10px 4px;');
+    expect(c).toContain('padding: 6px 12px 2px;');
   });
   it('footer run chip is one inline row: dot + label centered', () => {
     const c = css();

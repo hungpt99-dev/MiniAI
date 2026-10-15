@@ -55,7 +55,7 @@ describe('answer meta: one row, never wraps', () => {
   });
   it('result rhythm: view-owned padding, 16px turns, 15px/1.5 answer, markdown sibling rule', () => {
     const c = css();
-    expect(c).toContain('padding: calc(12px * var(--space-scale)) calc(22px * var(--space-scale)) calc(12px * var(--space-scale));');
+    expect(c).toContain('padding: calc(var(--popup-pad-y) * var(--space-scale)) calc(22px * var(--space-scale)) calc(var(--popup-pad-y) * var(--space-scale));');
     expect(c).toContain('#messages { display: flex; flex-direction: column; gap: calc(16px * var(--space-scale)); padding: 0; }');
     expect(c).toContain('.msg.assistant { color: var(--text-body); font-size: 15px; line-height: 1.5; font-weight: 400; margin-top: 2px; }');
     expect(c).toContain('.msg.assistant.answer > * + * { margin-top: calc(8px * var(--space-scale)); }');

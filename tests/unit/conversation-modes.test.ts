@@ -114,7 +114,7 @@ describe('steps: only real tool calls earn the toggle', () => {
 describe('scroll area and typography', () => {
   it('first row clears the header line; .view is the only scroller; jump floats', () => {
     const c = css();
-    expect(c).toContain('padding: calc(12px * var(--space-scale)) calc(22px * var(--space-scale)) calc(12px * var(--space-scale));');
+    expect(c).toContain('padding: calc(var(--popup-pad-y) * var(--space-scale)) calc(22px * var(--space-scale)) calc(var(--popup-pad-y) * var(--space-scale));');
     expect(c).toContain('.view { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; border-top: 1px solid var(--divider);');
     expect(c).toContain('#jump-latest { position: absolute;');
   });
