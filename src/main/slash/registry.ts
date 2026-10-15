@@ -22,6 +22,7 @@ const BUILTINS: SlashEntry[] = [
   { trigger: '/spawn', label: 'Spawn task', description: 'Run as a separate parallel task (usage: /spawn <text>)', source: 'builtin', action: 'spawn', scope: 'agent' },
   { trigger: '/queue', label: 'Queue task', description: 'Add to the task queue (usage: /queue <text>)', source: 'builtin', action: 'queue', scope: 'agent' },
   { trigger: '/tasks', label: 'Tasks', description: 'Open the Tasks view', source: 'builtin', action: 'tasks', scope: 'all' },
+  { trigger: '/pin', label: 'Pin', description: 'Keep the window open (Alt+P)', source: 'builtin', action: 'pin', scope: 'all' },
   { trigger: '/cancel', label: 'Cancel task', description: 'Cancel a task (usage: /cancel <n>)', source: 'builtin', action: 'cancel', scope: 'all' },
   { trigger: '/clear-queue', label: 'Clear queue', description: 'Clear the waiting queue (asks first)', source: 'builtin', action: 'clear-queue', scope: 'all' },
 ];
@@ -58,7 +59,7 @@ export function buildRegistry(sources: RegistrySources = {}): SlashEntry[] {
   return out;
 }
 
-export function rankMatches(entries: SlashEntry[], query: string, limit = 8): SlashEntry[] {
+export function rankMatches(entries: SlashEntry[], query: string, limit = 50): SlashEntry[] {
   const q = query.toLowerCase().replace(/^\//, '');
   if (!q) return entries.slice(0, limit);
   const scored: Array<{ e: SlashEntry; s: number }> = [];
@@ -73,7 +74,7 @@ export function rankMatches(entries: SlashEntry[], query: string, limit = 8): Sl
   return scored.slice(0, limit).map((x) => x.e);
 }
 
-export function querySlash(entries: SlashEntry[], text: string, limit = 8, mode?: Mode): SlashEntry[] {
+export function querySlash(entries: SlashEntry[], text: string, limit = 50, mode?: Mode): SlashEntry[] {
   const m = text.match(/\/([A-Za-z0-9_-]*)$/);
   if (!m) return [];
   const scoped = mode ? filterScope(entries, mode) : entries;

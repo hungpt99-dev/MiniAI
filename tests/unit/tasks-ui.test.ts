@@ -49,7 +49,7 @@ describe('tasks view: mounted once, single active view, footer in shell', () => 
     expect(h.split('<footer').length - 1).toBe(1);
   });
   it('rows: 56px+, status icons, 14px title, 12px muted second line, elapsed, menu', () => {
-    expect(css).toContain('.task-row { position: relative; display: flex; gap: 10px;');
+    expect(css).toContain('.task-row { position: relative; display: flex; gap: calc(8px * var(--space-scale));');
     expect(css).toContain('min-height: 56px;');
     expect(css).toContain('.task-row .task-title { font-size: 14px;');
     expect(css).toContain('.task-row .task-meta { font-size: 12px; color: var(--muted);');

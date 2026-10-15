@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Popup visibility is owned by one module with reasons and grace periods:
+  blur hides only with the pointer truly outside (150ms recheck, halo,
+  show/resize/dialog/task graces); new pin (Alt+P, /pin, tray, footer badge)
+  and "Hide when I click away" setting; silent notifications whose click
+  opens Tasks; Esc hides through the module; first click works on macOS.
+- Tighter conversation rhythm on the 4px scale with one owner per gap
+  (view padding, 16px turns, 28px action row, 44px footer) plus a Compact
+  spacing setting (0.75x).
+- Prompt commands (/translate, /summarize, /rewrite, /explain, …) render
+  their template with the command text before sending; the target language
+  is parsed by the model from the text.
+
 - Multi-turn conversations build one correct provider request per turn
   (`buildAgentMessages`: system + full thread in order + the new user message
   once, last; oldest turns drop first). Follow-ups continue the same thread;

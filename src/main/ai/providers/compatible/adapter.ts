@@ -3,6 +3,7 @@ import { stripTrailingSlash } from '../base';
 import { capabilitiesFor } from './capabilities';
 import { parseError } from './errors';
 import { VisionNotSupportedError, assertVision, toOpenAIContent } from '../vision';
+import { assertAttachments, getAttachmentCapabilities } from '../attachments';
 
 const BASE = 'http://localhost:11434/v1';
 
@@ -32,6 +33,7 @@ export const compatibleAdapter: ProviderAdapter = {
       for (const m of req.messages) if (Array.isArray((m as { content?: unknown }).content)) n += ((m as { content: Array<{ type?: string }> }).content).filter((p) => p?.type === 'image').length;
       if (n > 0) throw new VisionNotSupportedError(n);
     } else assertVision(req, caps);
+    assertAttachments(req, getAttachmentCapabilities('compatible', model, caps));
     const messages: Array<Record<string, unknown>> = [];
     for (const m of req.messages) {
       if (m.role === 'assistant' && m.toolCalls?.length) {

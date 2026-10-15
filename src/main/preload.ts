@@ -16,6 +16,8 @@ export interface SendOpts {
   taskAction?: 'spawn' | 'queue' | 'replace';
   /** Queue priority (Shift+click sends high). */
   priority?: 'normal' | 'high';
+  /** Slash template split: trigger without slash + raw args (stored/displayed separately). */
+  slash?: { command: string; args: string };
 }
 
 // why: raw chat + upsertTemplate stay main-only — the renderer sends via
@@ -107,8 +109,8 @@ const api = {
   getHotkeyStatus: () => invoke(IpcChannels.hotkeyStatus),
   setHotkey: (hotkey: string) => invoke(IpcChannels.setHotkey, hotkey),
   openPrivacySettings: () => invoke(IpcChannels.openPrivacySettings) as Promise<boolean>,
-  onUi: (cb: (ev: { open: 'settings' | 'log' }) => void) => {
-    const fn = (_e: unknown, data: { open: 'settings' | 'log' }) => cb(data);
+  onUi: (cb: (ev: { open: 'settings' | 'log' | 'tasks' }) => void) => {
+    const fn = (_e: unknown, data: { open: 'settings' | 'log' | 'tasks' }) => cb(data);
     ipcRenderer.on(IpcChannels.ui, fn);
     return () => ipcRenderer.removeListener(IpcChannels.ui, fn);
   },
@@ -142,6 +144,9 @@ const api = {
     ipcRenderer.on(IpcChannels.popupShown, fn);
     return () => ipcRenderer.removeListener(IpcChannels.popupShown, fn);
   },
+  hidePopup: () => ipcRenderer.send(IpcChannels.popupHide),
+  pinGet: () => invoke(IpcChannels.pinGet) as Promise<{ pinned: boolean }>,
+  pinToggle: () => invoke(IpcChannels.pinToggle) as Promise<{ pinned: boolean }>,
   onStream: (cb: (ev: { token: string; done: boolean; conversationId?: string; requestId?: string }) => void) => {
     const fn = (_e: unknown, data: { token: string; done: boolean; conversationId?: string; requestId?: string }) => cb(data);
     ipcRenderer.on(IpcChannels.chatStream, fn);

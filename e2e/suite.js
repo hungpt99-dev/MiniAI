@@ -155,6 +155,8 @@ async function main() {
   check('palette-opens', !s.palHidden && s.items.length >= 5, `items=${s.items.length}`);
   check('palette-single-view', JSON.stringify(s.vis) === JSON.stringify(['palette']), s.vis.join(','));
   check('palette-has-help', s.items.some((i) => i.includes('/help')));
+  check('palette-rows-compact', await ev(`(() => { const it = document.querySelector('#palette .item'); return it ? it.offsetHeight <= 32 : false; })()`), 'row height<=32px');
+  check('footer-40-single-row', await ev(`(() => { const f = document.getElementById('hints'); const b = document.getElementById('btn-runview'); return f && f.offsetHeight === 40 && (!b || b.classList.contains('hidden') || b.offsetHeight <= 28); })()`), 'footer 40px');
   await shot('03-palette');
   await type('trans');
   s = await S();
@@ -320,6 +322,7 @@ async function main() {
   await type('/');
   s = await S();
   check('agent-palette-opens', !s.palHidden && s.items.length > 0, s.items.join('|').slice(0, 250));
+  check('agent-palette-has-queue', s.items.some((i) => i.includes('/queue')), s.items.join('|').slice(0, 250));
   await shot('08-agent-palette');
   await key('Escape');
   await key('Tab'); // back to chat

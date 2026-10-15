@@ -18,17 +18,24 @@ export function listConversations(db: DatabaseSync, limit = 50): Conversation[] 
   return db.prepare('SELECT * FROM conversations ORDER BY updatedAt DESC LIMIT ?').all(limit) as unknown as Conversation[];
 }
 
-export function addMessage(db: DatabaseSync, conversationId: string, role: ChatMessage['role'], content: string): ChatMessage {
-  const m: ChatMessage = { id: uid('m-'), role, content, createdAt: Date.now() };
-  db.prepare('INSERT INTO messages (id, conversationId, role, content, createdAt) VALUES (?, ?, ?, ?, ?)').run(
+export function addMessage(
+  db: DatabaseSync,
+  conversationId: string,
+  role: ChatMessage['role'],
+  content: string,
+  extra?: { mode?: ChatMessage['mode']; command?: string; args?: string },
+): ChatMessage {
+  const m: ChatMessage = { id: uid('m-'), role, content, createdAt: Date.now(), ...extra };
+  db.prepare('INSERT INTO messages (id, conversationId, role, content, createdAt, mode, command, args) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
     m.id, conversationId, m.role, m.content, m.createdAt,
+    m.mode ?? null, m.command ?? null, m.args ?? null,
   );
   db.prepare('UPDATE conversations SET updatedAt = ? WHERE id = ?').run(Date.now(), conversationId);
   return m;
 }
 
 export function getMessages(db: DatabaseSync, conversationId: string): ChatMessage[] {
-  return db.prepare('SELECT id, role, content, createdAt FROM messages WHERE conversationId = ? ORDER BY createdAt ASC').all(conversationId) as unknown as ChatMessage[];
+  return db.prepare('SELECT id, role, content, createdAt, mode, command, args FROM messages WHERE conversationId = ? ORDER BY createdAt ASC').all(conversationId) as unknown as ChatMessage[];
 }
 
 export function deleteConversation(db: DatabaseSync, id: string): void {

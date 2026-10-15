@@ -7,7 +7,7 @@ import { IpcChannels, IpcErrorEnvelope, IpcInvokeChannels, IpcPushChannels, IpcS
 import { getSettings, updateSettings, isKnownProvider } from './store/settings';
 import { getSecret, apiKeyService, isEncryptionAvailable } from './store/secrets';
 import { createConversation, listConversations, addMessage, getMessages, deleteConversation } from './db/conversations';
-import { listTemplates, upsertTemplate, listWorkflows, render } from './db/templates';
+import { listTemplates, upsertTemplate, listWorkflows, render, getTemplate } from './db/templates';
 import { streamChat } from './ai/stream';
 import { testConnectivity, resetParamCache } from './ai/providers';
 import { resolveBase } from './ai/providers/base';
@@ -63,16 +63,19 @@ import { setPopupHeight, togglePopup, getPopup } from './popup';
 import { getLocaleTag, isRtl, loadDict, resolveAppLocale, setLocale } from './i18n/index';
 import { availableLocales } from './i18n/index';
 import { rebuildTray } from './tray';
+import { hide as visHide, isPinned as visIsPinned, setPinned as visSetPinned } from './app/window-visibility';
 import { t } from './i18n/index';
 import { openExternalUrl, pickAttachFiles, pickFile, pickFolder, revealPath, withDialogLock } from './app/dialogs';
 import { resolveDbPath } from './db/db';
-import { ATTACH_LIMITS, ATTACH_STRINGS, isLocalProvider, validateLimits, scanSecretsText } from '../shared/attachments';
-import { attachmentLogRecord, attachmentRejected, classifyAttachPath, classifyAttachment, decodeText, deleteRunAttachments, processImage, saveAttachment, sha256, sweepOldAttachments } from './attachments';
+import { ATTACH_LIMITS, ATTACH_STRINGS, isLocalProvider, validateLimits, scanSecretsText, maskSecretsText, looksLikeCredentialsFile } from '../shared/attachments';
+import { attachmentLogRecord, attachmentRejected, attachExt, classifyAttachPath, classifyAttachment, decodeText, deleteRunAttachments, processImage, saveAttachment, sha256, sweepOldAttachments } from './attachments';
+import { attachmentProviderLabel } from './ai/providers/attachments';
 import { detectAttachment } from './attachments/detect';
+import { decodeAttachmentText } from './attachments/decode';
 import { clearRunAttachments, registerRunAttachments } from './agent/tools/attachment_tools';
 import { VisionNotSupportedError } from './ai/providers/vision';
 import type { ContentPart } from './ai/providers/types';
-import type { ChatMessage, Mode, Settings, TaskAction, TaskRow } from '../shared/types';
+import type { ChatMessage, Mode, ProviderId, Settings, TaskAction, TaskRow } from '../shared/types';
 import {
   initScheduler, initTaskWatchdog, pushTasksChanged, createUserTask, createSubtaskRecord, removeTask, clearQueue,
   resumeAll, discardWaiting, undoTaskFamily, lockHooksFor, pendingApprovalsFor,
@@ -496,6 +499,8 @@ export interface SendOpts {
   taskAction?: 'spawn' | 'queue' | 'replace';
   /** Queue priority (Shift+click sends high). */
   priority?: 'normal' | 'high';
+  /** Slash template split: trigger without slash + raw args (stored/displayed separately). */
+  slash?: { command: string; args: string };
 }
 
 /** One cheap model call for uncertain intents (heuristic runs first). */
@@ -529,24 +534,39 @@ export interface PreparedAttachment {
 /**
  * Validate + process staged attachments (magic bytes, limits, EXIF strip,
  * 2048 resize when Electron nativeImage is present, BOM, 200KB truncation).
- * Temp files live under the given scope id (conversation id, so Clear /
- * conversation delete removes agent temps too). Rejections throw inline
- * errors — never silent. Returns provider parts + log-safe records (never bytes).
+ * Images and PDFs go to the provider NATIVELY as its own image/document
+ * input (original bytes, never OCR or local extraction); plain text stays
+ * inline text; provider-unsupported types refuse with a notice unless the
+ * opt-in localTextFallback re-enables local extraction for those types only.
+ * A temp file deleted before sending becomes an "no longer available" note —
+ * the rest of the message still sends. Temp files live under the given scope
+ * id (conversation id, so Clear / conversation delete removes agent temps
+ * too). Rejections throw inline errors — never silent. Returns provider parts
+ * + log-safe records (never bytes). Multi-turn: staged attachments send on
+ * the first turn only (the claim is consumed); later turns carry no files.
  */
 export function prepareAttachments(
   scopeId: string,
   staged: NonNullable<SendOpts['attachments']>,
   cwd: string,
   ctx: PolicyContext,
+  prepareOpts: { provider?: ProviderId; localTextFallback?: boolean } = {},
 ): PreparedAttachment[] {
   const lim = validateLimits(staged.map((a) => ({ size: a.size || (a.dataBase64 ? Buffer.byteLength(a.dataBase64, 'base64') : 0) })));
   if (!lim.ok) {
     if (lim.code === 'count') throw new Error(t('attach.count'));
-    throw new Error(t('attach.oversize'));
+    // why: the message names the hit limit — per-file names the file, total names the cap.
+    if (lim.code === 'file') {
+      const bad = staged.find((x) => (x.size || (x.dataBase64 ? Buffer.byteLength(x.dataBase64, 'base64') : 0)) > ATTACH_LIMITS.maxFileBytes);
+      throw new Error(t('attach.oversizeFile', { name: (bad && bad.name) || 'file' }));
+    }
+    throw new Error(t('attach.oversizeTotal', { name: 'attachments' }));
   }
   const out: PreparedAttachment[] = [];
+  const providerLabel = attachmentProviderLabel(prepareOpts.provider || '');
+  const classifyOpts = { localTextFallback: prepareOpts.localTextFallback === true, providerLabel };
   for (const a of staged) {
-    let bytes: Buffer;
+    let bytes: Buffer | null = null;
     let origName = a.name || 'file';
     if (a.path) {
       // Per-file path policy: outside roots = Allow once (this send grants it once);
@@ -554,17 +574,30 @@ export function prepareAttachments(
       const verdict = classifyAttachPath(a.path, cwd, ctx);
       if (verdict.verdict === 'deny') throw new Error(t('attach.refused', { reason: verdict.reason || 'blocked path' }));
       try { bytes = fs.readFileSync(verdict.real); }
-      catch { throw new Error(t('attach.unreadable', { name: origName })); }
+      catch { bytes = null; }
       origName = path.basename(verdict.real);
     } else if (a.dataBase64) {
       // Pre-cap the base64 payload before decoding so oversize input never allocates.
       if (a.dataBase64.length > Math.ceil(ATTACH_LIMITS.maxFileBytes * 4 / 3) + 64) throw new Error(t('attach.oversizeFile', { name: origName }));
       bytes = Buffer.from(a.dataBase64, 'base64');
     } else throw new Error(t('attach.noData', { name: origName }));
+    if (!bytes) {
+      // why: the temp file vanished before sending (Clear, delete, 7-day
+      // sweep) — note it and send the rest normally, never fail the message.
+      const note = t('attach.unavailable', { name: origName });
+      const stored = saveAttachment(appBaseDir(), scopeId, origName, 'text/plain', Buffer.from(`[${note}]`, 'utf8'));
+      out.push({
+        part: { type: 'file_ref', name: stored.name, mimeType: stored.mime, size: stored.size, sha256: stored.sha256, text: `[${note}]` },
+        log: attachmentLogRecord(stored),
+        ref: { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, sha256: stored.sha256, path: stored.path, kind: 'text' },
+      });
+      continue;
+    }
     if (bytes.length > ATTACH_LIMITS.maxFileBytes) throw new Error(t('attach.oversizeFile', { name: origName }));
     // Detect by content (never the extension), then apply the policy table.
-    const cls = classifyAttachment(bytes, origName);
+    const cls = classifyAttachment(bytes, origName, classifyOpts);
     if (cls.decision.action === 'reject') throw attachmentRejected(origName, cls);
+    if (cls.unsupportedType) throw new Error(cls.docNote || t('attach.unsupported', { provider: providerLabel, ext: attachExt(origName) }));
     // Trust detected bytes over the claimed extension (markdown names keep text/markdown).
     const mime = cls.mime;
     if (mime.startsWith('image/')) {
@@ -575,18 +608,47 @@ export function prepareAttachments(
         log: attachmentLogRecord(stored),
         ref: { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, sha256: stored.sha256, path: stored.path, kind: 'image' },
       });
+    } else if (cls.det.kind === 'pdf' && cls.docState === 'native') {
+      // why: unencrypted PDFs ride the provider's native document input as the
+      // original bytes — no text-layer extraction, no OCR, no page rendering.
+      const stored = saveAttachment(appBaseDir(), scopeId, origName, mime, bytes);
+      out.push({
+        part: { type: 'document', name: stored.displayName, mimeType: stored.mime, size: stored.size, sha256: stored.sha256, dataBase64: bytes.toString('base64') },
+        log: attachmentLogRecord(stored),
+        ref: { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, sha256: stored.sha256, path: stored.path, kind: 'file' },
+      });
     } else if (mime.startsWith('text/') || mime.includes('markdown')) {
-      const { text, truncated } = decodeText(bytes);
+      // Decodable text is always sent inline as UTF-8 — never reference_only.
+      const { text, truncated, encoding } = decodeText(bytes);
+      if (!decodeAttachmentText(bytes) || !text.trim()) {
+        const stored = saveAttachment(appBaseDir(), scopeId, origName, mime, bytes);
+        const note = `[${origName} attached — binary content, not decodable text (BINARY_CONTENT)]`;
+        out.push({
+          part: { type: 'file_ref', name: stored.name, mimeType: stored.mime, size: stored.size, sha256: stored.sha256, text: note },
+          log: attachmentLogRecord(stored),
+          ref: { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, sha256: stored.sha256, path: stored.path, kind: 'file' },
+        });
+        continue;
+      }
+      const { masked, matches, hiddenRatio } = maskSecretsText(text);
+      const secretsNote = matches > 0 ? t('attach.maskedNote', { count: matches }) + '\n' : '';
+      // why: a hollow file helps nobody — mostly-credentials files send a head
+      // excerpt plus a note; the rest stays behind attachment_read chunks.
+      const body = hiddenRatio > 0.5
+        ? t('attach.mostlySecrets') + '\n' + masked.slice(0, 4000)
+        : masked;
+      const block = `<untrusted-attachment name="${origName}" encoding="${encoding}">${truncated ? '\n[first 200KB of ' + bytes.length + ' bytes — rest via attachment_read]\n' : '\n'}${secretsNote}${body}</untrusted-attachment>`;
       const stored = saveAttachment(appBaseDir(), scopeId, origName, mime, Buffer.from(text, 'utf8'), { truncated });
       out.push({
-        part: { type: 'file_ref', name: stored.name, mimeType: stored.mime, size: stored.size, sha256: stored.sha256, text },
+        part: { type: 'file_ref', name: stored.name, mimeType: stored.mime, size: stored.size, sha256: stored.sha256, text: block },
         log: attachmentLogRecord(stored),
         ref: { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, sha256: stored.sha256, path: stored.path, kind: 'text' },
       });
     } else if (cls.decision.action === 'document_extract' && cls.extractedText !== undefined) {
       // Extracted document text is untrusted data like any other tool result.
+      // (Opt-in localTextFallback only — the header says so on the chip and here.)
       const body = (cls.secretsInExtracted ? t('attach.secretsNote') + '\n' : '')
-        + t('attach.extractedFrom', { name: origName, kind: cls.det.kind }) + '\n' + cls.extractedText;
+        + t('attach.extractedFrom', { name: origName, kind: cls.det.kind }) + ` [${t('attach.localExtracted')}]` + '\n' + cls.extractedText;
       const { text, truncated } = decodeText(Buffer.from(body, 'utf8'));
       const stored = saveAttachment(appBaseDir(), scopeId, origName, 'text/plain', Buffer.from(text, 'utf8'), { truncated });
       out.push({
@@ -597,7 +659,12 @@ export function prepareAttachments(
     } else {
       // Reference-only (and anything else): original bytes, metadata note.
       const stored = saveAttachment(appBaseDir(), scopeId, origName, mime, bytes);
-      const note = cls.docNote ? `[${origName} attached — ${cls.docNote}]` : `[binary ${mime} attached — metadata only]`;
+      // why: only truly unrecognized bytes get the binary note — known
+      // containers (zip, office, media) keep their policy note instead.
+      const binary = cls.det.kind === 'unknown' && !decodeAttachmentText(bytes);
+      const note = binary
+        ? `[${origName} attached — binary content, not decodable text (BINARY_CONTENT). Ask the user what to do; use attachment_read only for text.]`
+        : cls.docNote ? `[${origName} attached — ${cls.docNote}]` : `[binary ${mime} attached — metadata only]`;
       out.push({
         part: { type: 'file_ref', name: stored.name, mimeType: stored.mime, size: stored.size, sha256: stored.sha256, text: note },
         log: attachmentLogRecord(stored),
@@ -860,7 +927,11 @@ async function runSend(
   const text = content.trim() || (staged.length ? ATTACH_STRINGS.defaultInstruction : '');
   if (!text && !staged.length) return '';
   const incognito = s.incognito === true;
-  if (!incognito) addMessage(d, conversationId, 'user', text);
+  // why: dividers derive from the stored per-message mode (ask/do), never
+  // from toggle events — toggling without sending stores nothing.
+  const storeMode = mode === 'chat' ? 'ask' : 'do';
+  const slashExtra = opts.slash ? { command: opts.slash.command.replace(/^\//, ''), args: opts.slash.args } : {};
+  if (!incognito) addMessage(d, conversationId, 'user', text, { mode: storeMode, ...slashExtra });
   const history = getMessages(d, conversationId);
   // why: unreadable/missing keys fail fast with one friendly error, never a
   // raw decrypt string after minutes of silence (env keys still win for dev).
@@ -879,7 +950,8 @@ async function runSend(
   if (staged.length) {
     // Ask temp files live under the conversation id so Clear / run delete
     // removes them; agent runs re-key under their run id below.
-    prepared = prepareAttachments(conversationId, staged, cwd0, policyFor(s, cwd0));
+    prepared = prepareAttachments(conversationId, staged, cwd0, policyFor(s, cwd0),
+      { provider: s.provider, localTextFallback: s.localTextFallback === true });
     try {
       const wlog = createRunLog(undefined, requestId);
       for (const p of prepared) appendLog(wlog.path, { runId: requestId, attachment: p.log });
@@ -898,7 +970,7 @@ async function runSend(
     if (intent === 'clarify') {
       const q = clarifyQuestion(text);
       routeStatus(sender, requestId, 'answering');
-      if (!incognito) addMessage(d, conversationId, 'assistant', q);
+      if (!incognito) addMessage(d, conversationId, 'assistant', q, { mode: storeMode });
       sender.send(IpcChannels.chatStream, { token: q, done: false, conversationId, requestId });
       sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
       aborters.delete(requestId);
@@ -956,13 +1028,13 @@ async function runSend(
             },
           },
         );
-        addMessage(d, conversationId, 'assistant', full);
+        addMessage(d, conversationId, 'assistant', full, { mode: storeMode });
         sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
         return full;
       } catch (e) {
         if (e instanceof VisionNotSupportedError || /vision-not-supported/.test(asError(e).message)) {
           const notice = t('attach.visionNotice');
-          if (!incognito) addMessage(d, conversationId, 'assistant', notice);
+          if (!incognito) addMessage(d, conversationId, 'assistant', notice, { mode: storeMode });
           sender.send(IpcChannels.chatStream, { token: notice, done: false, conversationId, requestId });
           sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
           return notice;
@@ -1031,14 +1103,14 @@ async function runSend(
         ...(prepared.length ? { attachMeta: `Attached files: ${prepared.map((p) => p.ref.path).join('; ')}` } : {}),
         ...(s.compatibleImages ? { imageMode: s.compatibleImages } : {}),
       });
-      if (full && !incognito) addMessage(d, conversationId, 'assistant', full);
+      if (full && !incognito) addMessage(d, conversationId, 'assistant', full, { mode: storeMode });
       try { clearRunAttachments(runId); } catch { /* refs are run-scoped memory only */ }
       void maybeSuggestMemories(sender, d, s, key, { history, conversationId, requestId });
       return full;
     } catch (e) {
       if (e instanceof VisionNotSupportedError || /vision-not-supported/.test(asError(e).message)) {
         const notice = t('attach.visionNotice');
-        if (!incognito) addMessage(d, conversationId, 'assistant', notice);
+        if (!incognito) addMessage(d, conversationId, 'assistant', notice, { mode: storeMode });
         sender.send(IpcChannels.chatStream, { token: notice, done: false, conversationId, requestId });
         sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
         return notice;
@@ -1056,7 +1128,7 @@ async function runSend(
     const sch = initScheduler(api);
     const routed = routeTaskSubmit(api, sender, { conversationId, text, cwd: cwd0, staged, opts });
     if ('notice' in routed) {
-      if (!incognito) addMessage(d, conversationId, 'user', text);
+      if (!incognito) addMessage(d, conversationId, 'user', text, { mode: 'do' });
       sender.send(IpcChannels.chatStream, { token: routed.notice, done: false, conversationId, requestId });
       sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
       aborters.delete(requestId);
@@ -1101,7 +1173,7 @@ async function runSend(
           }
         },
       });
-      if (full && !incognito) addMessage(d, conversationId, 'assistant', full);
+      if (full && !incognito) addMessage(d, conversationId, 'assistant', full, { mode: 'do' });
       terminalSummary = full;
       finishRun(d, sender, runId, 'agent', text, full, aborter.signal.aborted ? 'stopped' : 'done', cwd, !incognito);
       sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
@@ -1121,7 +1193,7 @@ async function runSend(
           }
         } catch { /* record best-effort */ }
         const notice = t('tasks.parkedNotice', { reason: e.reason });
-        if (!incognito) addMessage(d, conversationId, 'assistant', notice);
+        if (!incognito) addMessage(d, conversationId, 'assistant', notice, { mode: 'do' });
         sender.send(IpcChannels.chatStream, { token: notice, done: false, conversationId, requestId });
         sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
         aborters.delete(requestId);
@@ -1129,7 +1201,7 @@ async function runSend(
       }
       if (e instanceof VisionNotSupportedError) {
         const notice = t('attach.visionNotice');
-        if (!incognito) addMessage(d, conversationId, 'assistant', notice);
+        if (!incognito) addMessage(d, conversationId, 'assistant', notice, { mode: 'do' });
         sender.send(IpcChannels.chatStream, { token: notice, done: false, conversationId, requestId });
         sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
         finishRun(d, sender, runId, 'agent', text, notice, 'done', cwd, !incognito);
@@ -1449,7 +1521,7 @@ function registerSettingsIpc(): void {
   typedHandle(IpcChannels.setSettings, vObj0, (_e, patch: Partial<Settings>) => {
     const out = updateSettings(db(), patch);
     if (patch.agentStopHotkey !== undefined) refreshStopHotkey();
-    if (patch.hotkey !== undefined) refreshToggleHotkey(() => togglePopup());
+    if (patch.hotkey !== undefined) refreshToggleHotkey(() => togglePopup('hotkey'));
     if (patch.launchAtLogin !== undefined) applyLaunchAtLogin();
     if (patch.locale !== undefined) applyLocaleSetting(out.locale);
     return out;
@@ -1541,7 +1613,7 @@ const SLASH_DESC_KEYS: Record<string, string> = {
   extensions: 'slash.extensions', memory: 'slash.memory', remember: 'slash.remember',
   forget: 'slash.forget', incognito: 'slash.incognito',
   spawn: 'slash.spawn', queue: 'slash.queue', tasks: 'slash.tasks',
-  cancel: 'slash.cancel', clearQueue: 'slash.clearQueue',
+  cancel: 'slash.cancel', clearQueue: 'slash.clearQueue', pin: 'slash.pin',
 };
 
 /** Builtin slash descriptions in the current locale (user content untouched). */
@@ -1561,14 +1633,24 @@ function registerSlashIpc(): void {
     const templates = listTemplates(db()).map((t) => ({ trigger: t.trigger, label: t.title, description: t.body.slice(0, 80), source: 'prompt' as const }));
     const workflows = listWorkflows(db()).map((w) => ({ trigger: w.trigger, label: w.title, description: `${w.steps.length} steps`, source: 'workflow' as const }));
     const extra = extSlashEntries();
-    return localizeSlash(querySlash(buildRegistry({ prompts: templates, workflows: [...workflows, ...extra.workflows], skills: extra.skills, mcp: extra.mcp }), text, 8, mode));
+    return localizeSlash(querySlash(buildRegistry({ prompts: templates, workflows: [...workflows, ...extra.workflows], skills: extra.skills, mcp: extra.mcp }), text, 50, mode));
   });
   typedHandle(IpcChannels.slashResolve, vHead1, (_e, trigger: string, mode?: Mode) => {
     const templates = listTemplates(db()).map((t) => ({ trigger: t.trigger, label: t.title, description: t.body.slice(0, 80), source: 'prompt' as const }));
     const workflows = listWorkflows(db()).map((w) => ({ trigger: w.trigger, label: w.title, description: `${w.steps.length} steps`, source: 'workflow' as const }));
     const extra = extSlashEntries();
     const r = resolveSlash(buildRegistry({ prompts: templates, workflows: [...workflows, ...extra.workflows], skills: extra.skills, mcp: extra.mcp }), trigger, mode);
-    if (r.found) return { found: localizeSlash([r.found])[0], suggestions: r.suggestions };
+    if (r.found) {
+      let found = localizeSlash([r.found])[0];
+      // why: prompt templates render client-side — ship the body, not just the trigger.
+      if (found.source === 'prompt') {
+        try {
+          const tpl = getTemplate(db(), trigger);
+          if (tpl) found = { ...found, body: tpl.body, vars: tpl.vars } as typeof found;
+        } catch { /* resolve without body; renderer reports it */ }
+      }
+      return { found, suggestions: r.suggestions };
+    }
     return r;
   });
 }
@@ -1661,7 +1743,7 @@ function registerChatIpc(): void {
         messages, signal: aborter.signal,
         onToken: (t) => { full += t; sender.send(IpcChannels.chatStream, { token: t, done: false, conversationId, requestId }); },
       });
-      addMessage(d, conversationId, 'assistant', full);
+      addMessage(d, conversationId, 'assistant', full, { mode: 'ask' });
       sender.send(IpcChannels.chatStream, { token: '', done: true, conversationId, requestId });
       return full;
     } catch (e) {
@@ -1693,7 +1775,7 @@ function registerAgentIpc(): void {
     const staged = opts.attachments || [];
     const text = content.trim() || (staged.length ? ATTACH_STRINGS.defaultInstruction : content);
     const incognito = s.incognito === true;
-    if (!incognito) addMessage(d, conversationId, 'user', text);
+    if (!incognito) addMessage(d, conversationId, 'user', text, { mode: 'do' });
     const history = getMessages(d, conversationId);
     const controller = new AbortController();
     const runId = `agent-${Date.now()}-${++seq}`;
@@ -1773,7 +1855,8 @@ function registerAgentIpc(): void {
         if (staged.length) {
           // Temps live under the conversation id so Clear / conversation delete
           // removes agent temps too; tools re-key refs under the run id.
-          const prepared = prepareAttachments(conversationId, staged, cwd, policyFor(s, cwd));
+          const prepared = prepareAttachments(conversationId, staged, cwd, policyFor(s, cwd),
+            { provider: s.provider, localTextFallback: s.localTextFallback === true });
           registerRunAttachments(runId, prepared.map((p) => p.ref));
           try {
             const wlog = createRunLog(undefined, runId);
@@ -1898,7 +1981,7 @@ function registerPlatformIpc(): void {
   typedHandle(IpcChannels.hotkeyStatus, vNone, () => getHotkeyStatus());
   typedHandle(IpcChannels.setHotkey, vStr1, (_e, hotkey: string) => {
     const out = updateSettings(db(), { hotkey });
-    refreshToggleHotkey(() => togglePopup());
+    refreshToggleHotkey(() => togglePopup('hotkey'));
     return { ...getHotkeyStatus(), hotkey: out.hotkey };
   });
   typedHandle(IpcChannels.openPrivacySettings, vNone, async () => {
@@ -2146,10 +2229,12 @@ function registerAttachIpc(): void {
         let mime = 'application/octet-stream';
         let previewDataUrl: string | undefined;
         let hasSecrets = false;
-        let docState: 'extracted' | 'reference' | 'macros' | 'encrypted' | undefined;
+        let docState: 'extracted' | 'reference' | 'macros' | 'encrypted' | 'native' | undefined;
         let docNote: string | undefined;
         let details: string | undefined;
         let preview: string | undefined;
+        let unsupportedType = false;
+        const classifyOpts = { localTextFallback: s.localTextFallback === true, providerLabel: attachmentProviderLabel(s.provider) };
         try {
           const st = fs.statSync(p);
           size = st.size;
@@ -2158,15 +2243,26 @@ function registerAttachIpc(): void {
               // Small files: full classify up front (chip badges + preview).
               try {
                 const full = fs.readFileSync(p);
-                const cls = classifyAttachment(full, name);
+                const cls = classifyAttachment(full, name, classifyOpts);
                 if (cls.decision.action !== 'reject') {
                   mime = cls.mime;
                   docState = cls.docState;
                   docNote = cls.docNote;
-                  details = cls.details;
+                  unsupportedType = cls.unsupportedType === true;
+                  details = cls.det.encoding ? `${cls.details} [${cls.det.encoding}]` : cls.details;
                   if (cls.extractedText !== undefined) {
                     preview = cls.extractedText.slice(0, 200);
                     hasSecrets = cls.secretsInExtracted === true;
+                  } else if (mime.startsWith('text/') || mime.includes('markdown')) {
+                    try {
+                      const dec = decodeAttachmentText(full.subarray(0, 65536));
+                      const head = dec ? dec.text.slice(0, 2000) : '';
+                      hasSecrets = scanSecretsText(head) || looksLikeCredentialsFile(name, head);
+                      if (looksLikeCredentialsFile(name, head)) docNote = (docNote ? docNote + ' ' : '') + t('attach.credentialsHint');
+                      if (dec) details += ` [${dec.encoding}]`;
+                    } catch { /* badge best-effort */ }
+                  } else {
+                    try { hasSecrets = hasSecrets || looksLikeCredentialsFile(name, ''); } catch { /* no badge */ }
                   }
                 }
               } catch { /* fall through to head sniff */ }
@@ -2182,11 +2278,15 @@ function registerAttachIpc(): void {
                   // why: evidence for the chip badge comes from bytes already
                   // read here — never shown without a real pattern match.
                   if (size > 0 && !mime.startsWith('image/')) {
-                    try { hasSecrets = hasSecrets || scanSecretsText(head.subarray(0, n).toString('utf8')); } catch { /* no badge */ }
+                    try {
+                      hasSecrets = hasSecrets || scanSecretsText(head.subarray(0, n).toString('utf8'))
+                        || looksLikeCredentialsFile(name, head.subarray(0, n).toString('utf8'));
+                    } catch { /* no badge */ }
                   }
                   if (det.flags.includes('macros')) { docState = 'macros'; docNote = 'Contains macros. Nexio will not run it.'; }
                   else if (det.flags.includes('encrypted')) { docState = 'encrypted'; docNote = 'Encrypted. Contents not readable.'; }
-                  details = `${det.kind} (${det.evidence})`;
+                  else if (looksLikeCredentialsFile(name, head.subarray(0, n).toString('utf8'))) { docNote = t('attach.credentialsHint'); }
+                  details = det.encoding ? `${det.kind} (${det.evidence}) [${det.encoding}]` : `${det.kind} (${det.evidence})`;
                 }
                 if (mime.startsWith('image/')) {
                   try {
@@ -2210,7 +2310,7 @@ function registerAttachIpc(): void {
           verdict = v.verdict;
           reason = v.reason;
         } catch (e) { verdict = 'deny'; reason = (e as Error).message; }
-        return { path: p, name, size, mime, previewDataUrl, verdict, reason, hasSecrets, docState, docNote, details, preview };
+        return { path: p, name, size, mime, previewDataUrl, verdict, reason, hasSecrets, docState, docNote, details, preview, ...(unsupportedType ? { unsupportedType: true } : {}) };
       });
     } catch { return []; }
   });
@@ -2222,10 +2322,13 @@ function registerAttachIpc(): void {
       const bytes = Buffer.from(input.dataBase64 || '', 'base64');
       if (!bytes.length) throw new Error(t('attach.reject.prefix', { name: input.name, what: t('attach.reject.empty') }));
       if (bytes.length > ATTACH_LIMITS.maxFileBytes) throw new Error(t('attach.oversizeFile', { name: input.name }));
-      const cls = classifyAttachment(bytes, input.name);
+      // why: staging previews obey the same fallback gate as the send path —
+      // provider-unsupported types preview as unsupported, never as extracted.
+      const s = getSettings(db());
+      const cls = classifyAttachment(bytes, input.name, { localTextFallback: s.localTextFallback === true, providerLabel: attachmentProviderLabel(s.provider) });
       if (cls.decision.action === 'reject') throw attachmentRejected(input.name, cls);
       const mime = cls.mime;
-      const meta = { docState: cls.docState, docNote: cls.docNote, details: cls.details };
+      const meta = { docState: cls.docState, docNote: cls.docNote, details: cls.details, ...(cls.unsupportedType ? { unsupportedType: true as const } : {}) };
       if (mime.startsWith('image/')) {
         const proc = processImage(bytes, mime);
         const stored = saveAttachment(appBaseDir(), runId, input.name, proc.mime, proc.bytes, { width: proc.width, height: proc.height, dataUrl: proc.dataUrl });
@@ -2242,9 +2345,18 @@ function registerAttachIpc(): void {
         };
       }
       if (mime.startsWith('text/') || mime.includes('markdown')) {
-        const { text, truncated } = decodeText(bytes);
+        const { text, truncated, encoding } = decodeText(bytes);
+        const head = text.slice(0, 2000);
+        const cred = looksLikeCredentialsFile(input.name, head);
+        const sec = scanSecretsText(head) || cred;
         const stored = saveAttachment(appBaseDir(), runId, input.name, mime, Buffer.from(text, 'utf8'), { truncated });
-        return { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, kind: 'text', sha256: stored.sha256, ...meta };
+        const details = cls.det.encoding ? `${cls.details} [${cls.det.encoding}]` : cls.details;
+        const docNote = cred && !cls.docNote ? t('attach.credentialsHint') : cls.docNote;
+        return {
+          id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, kind: 'text', sha256: stored.sha256,
+          preview: text.slice(0, 200), hasSecrets: sec === true,
+          docState: cls.docState, docNote, details, encoding,
+        };
       }
       const stored = saveAttachment(appBaseDir(), runId, input.name, mime, bytes);
       return { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size, kind: 'file', sha256: stored.sha256, ...meta };
@@ -2281,7 +2393,14 @@ function taskHostApi(): TaskHostApi {
     uiLocaleTag: () => uiLocaleTag(getSettings(db())),
     homeDir: () => os.homedir(),
     policyContext: (cwd: string) => policyFor(getSettings(db()), cwd),
-    prepareAttachments: (scopeId, staged, cwd, ctx) => prepareAttachments(scopeId, staged, cwd, ctx),
+    prepareAttachments: (scopeId, staged, cwd, ctx) => {
+      try {
+        const s = getSettings(db());
+        return prepareAttachments(scopeId, staged, cwd, ctx, { provider: s.provider, localTextFallback: s.localTextFallback === true });
+      } catch {
+        return prepareAttachments(scopeId, staged, cwd, ctx);
+      }
+    },
     registerAttachments: (runId, refs) => {
       try { registerRunAttachments(runId, refs); } catch { /* best-effort */ }
     },
@@ -2624,6 +2743,20 @@ export function registerIpc(): void {
   registerHistoryIpc();
   registerExtIpc();
   registerAttachIpc();
+  registerPopupIpc();
   assertIpcComplete();
   refreshStopHotkey();
+}
+
+/** Popup visibility: Esc-hide requests, session pin state. */
+function registerPopupIpc(): void {
+  typedOn(IpcChannels.popupHide, () => {
+    try { visHide('esc', { force: true }); } catch { /* window gone */ }
+  });
+  typedHandle(IpcChannels.pinGet, vNone, () => ({ pinned: visIsPinned() }));
+  typedHandle(IpcChannels.pinToggle, vNone, () => {
+    visSetPinned(!visIsPinned());
+    try { rebuildTray(); } catch { /* headless tests */ }
+    return { pinned: visIsPinned() };
+  });
 }

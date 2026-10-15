@@ -54,14 +54,18 @@ export function assertVision(req: NormalizedRequest, caps: ProviderCapabilities)
   }
 }
 
-/** OpenAI-shape content: string stays a string; parts become text/image_url blocks. file_ref is text only. */
+/** OpenAI-shape content: string stays a string; parts become text/image_url/file blocks. file_ref is text only. */
 export function toOpenAIContent(content: unknown): string | Array<Record<string, unknown>> {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
   const blocks: Array<Record<string, unknown>> = [];
-  for (const p of content as Array<{ type?: string; text?: string; dataUrl?: string; name?: string; mimeType?: string; size?: number; sha256?: string }>) {
+  for (const p of content as Array<{ type?: string; text?: string; dataUrl?: string; dataBase64?: string; name?: string; mimeType?: string; size?: number; sha256?: string }>) {
     if (p?.type === 'text') blocks.push({ type: 'text', text: p.text || '' });
     else if (p?.type === 'image' && p.dataUrl) blocks.push({ type: 'image_url', image_url: { url: p.dataUrl } });
+    // why: PDFs ride the Chat Completions file part natively — never extracted text.
+    else if (p?.type === 'document' && p.dataBase64 && (p.mimeType || '') === 'application/pdf') {
+      blocks.push({ type: 'file', file: { filename: p.name || 'file.pdf', file_data: `data:application/pdf;base64,${p.dataBase64}` } });
+    }
     else if (p?.type === 'file_ref') blocks.push({ type: 'text', text: fileRefText(p.name || 'file', p.mimeType || 'text/plain', p.size || 0, p.sha256 || '', p.text || '') });
   }
   if (!blocks.length) return '';
@@ -69,17 +73,20 @@ export function toOpenAIContent(content: unknown): string | Array<Record<string,
   return blocks;
 }
 
-/** Anthropic-shape content: string stays a string; parts become text/image blocks. file_ref is text only. */
+/** Anthropic-shape content: string stays a string; parts become text/image/document blocks. file_ref is text only. */
 export function toAnthropicContent(content: unknown): string | Array<Record<string, unknown>> {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
   const blocks: Array<Record<string, unknown>> = [];
-  for (const p of content as Array<{ type?: string; text?: string; dataUrl?: string; mimeType?: string; name?: string; size?: number; sha256?: string }>) {
+  for (const p of content as Array<{ type?: string; text?: string; dataUrl?: string; dataBase64?: string; mimeType?: string; name?: string; size?: number; sha256?: string }>) {
     if (p?.type === 'text') blocks.push({ type: 'text', text: p.text || '' });
     else if (p?.type === 'image' && p.dataUrl) {
       const comma = p.dataUrl.indexOf(',');
       const data = comma >= 0 ? p.dataUrl.slice(comma + 1) : p.dataUrl;
       blocks.push({ type: 'image', source: { type: 'base64', media_type: p.mimeType || 'image/png', data } });
+    // why: PDFs ride Messages document blocks natively — never extracted text.
+    } else if (p?.type === 'document' && p.dataBase64 && (p.mimeType || '') === 'application/pdf') {
+      blocks.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: p.dataBase64 } });
     } else if (p?.type === 'file_ref') blocks.push({ type: 'text', text: fileRefText(p.name || 'file', p.mimeType || 'text/plain', p.size || 0, p.sha256 || '', p.text || '') });
   }
   if (!blocks.length) return '';

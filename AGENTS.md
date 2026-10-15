@@ -39,6 +39,11 @@ differences live in `src/main/platform/` — nowhere else checks the OS.
 Typecheck + vitest before PR. Update `docs/` on behavior change.
 Additive README edits only.
 
+## Schema
+
+CREATE TABLE in `src/main/db/migrations.ts` is the source of truth; bump
+SCHEMA_VERSION on any change — stale dev DBs reset (renamed aside), never migrated.
+
 ## Agent principles
 
 1. Scope first: list callers, tests, fixtures, config, exports.

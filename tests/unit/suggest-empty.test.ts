@@ -129,7 +129,7 @@ describe('run: Ask renders no steps, Do runs the plan -> tools -> done lifecycle
     expect(stream).not.toContain('plan-row');
     const send = slice(appJs(), 'async function sendInner(', 'window.nexio.onStream');
     expect(send).toContain("showView('run')");
-    const add = slice(appJs(), 'function addMsg(role, content)', 'function copySvg');
+    const add = slice(appJs(), 'function addMsg(role, content, opts)', 'function copySvg');
     expect(add).not.toContain('showView'); // no Ask yank
     const appr = slice(appJs(), "ev.type === 'approval_request'", "ev.type === 'tool_result'");
     expect(appr).toContain("showView('run')"); // approval yank kept

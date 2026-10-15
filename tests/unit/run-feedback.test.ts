@@ -17,7 +17,7 @@ describe('run feedback: never silent, never stuck', () => {
   it('beginRun shows You + Planning immediately (Do submit feedback)', () => {
     const src = appJs();
     const begin = src.slice(src.indexOf('async function beginRun('), src.indexOf('async function startWorkflowRun('));
-    expect(begin).toContain("addMsg('user', userText)");
+    expect(begin).toContain("addMsg('user', userText, { mode: turnMode })");
     expect(begin).toContain('plan-row');
     expect(begin).toContain('Planning…');
     expect(begin).toContain("iconFor('run')");

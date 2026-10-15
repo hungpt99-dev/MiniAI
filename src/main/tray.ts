@@ -2,6 +2,7 @@ import { Tray, Menu, nativeImage, app } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { togglePopup, getPopup } from './popup';
+import { isPinned, setPinned } from './app/window-visibility';
 import { platform } from './platform/index';
 import { IpcChannels } from '../shared/ipc-channels';
 import { t } from './i18n/index';
@@ -9,7 +10,7 @@ import { t } from './i18n/index';
 let tray: Tray | null = null;
 
 function showAndOpen(view: 'settings' | 'log'): void {
-  togglePopup();
+  togglePopup('tray');
   const w = getPopup();
   try { w?.webContents.send(IpcChannels.ui, { open: view }); } catch { /* not ready */ }
 }
@@ -50,21 +51,38 @@ export function createTray(): Tray {
   tray.setToolTip('Nexio');
   if (p.key === 'darwin') {
     tray.setContextMenu(Menu.buildFromTemplate([
-      { label: t('tray.show'), click: () => togglePopup() },
+      { label: t('tray.show'), click: () => togglePopup('tray') },
       { label: t('tray.settings'), accelerator: 'Cmd+,', click: () => showAndOpen('settings') },
       { label: t('tray.runlog'), click: () => showAndOpen('log') },
+      { label: pinLabel(), type: 'checkbox', checked: isPinned(), click: () => { togglePin(); } },
       { type: 'separator' },
       { label: t('tray.quit'), accelerator: 'Cmd+Q', click: () => app.quit() },
     ]));
   } else {
     tray.setContextMenu(Menu.buildFromTemplate([
-      { label: `${t('tray.showHide')} (${hotkey})`, click: () => togglePopup() },
+      { label: `${t('tray.showHide')} (${hotkey})`, click: () => togglePopup('tray') },
+      { label: pinLabel(), type: 'checkbox', checked: isPinned(), click: () => { togglePin(); } },
       { type: 'separator' },
       { label: t('tray.quitShort'), click: () => app.quit() },
     ]));
   }
-  tray.on('click', () => togglePopup());
+  tray.on('click', () => togglePopup('tray'));
   return tray;
+}
+
+function pinLabel(): string {
+  try {
+    return isPinned() ? t('tray.unpin') : t('tray.pin');
+  } catch {
+    return 'Pin';
+  }
+}
+
+function togglePin(): void {
+  try {
+    setPinned(!isPinned());
+    rebuildTray();
+  } catch { /* headless tests */ }
 }
 
 /** Rebuild the tray menu in the current locale (language switch, no restart). */

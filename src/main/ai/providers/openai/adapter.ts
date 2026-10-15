@@ -3,6 +3,7 @@ import { stripTrailingSlash } from '../base';
 import { capabilitiesFor } from './capabilities';
 import { parseError } from './errors';
 import { assertVision, toOpenAIContent } from '../vision';
+import { assertAttachments, getAttachmentCapabilities } from '../attachments';
 
 const BASE = 'https://api.openai.com/v1';
 
@@ -28,6 +29,7 @@ export const openaiAdapter: ProviderAdapter = {
   buildRequest(model, req: NormalizedRequest, baseUrl?: string) {
     const caps = capabilitiesFor(model);
     assertVision(req, caps);
+    assertAttachments(req, getAttachmentCapabilities('openai', model, caps));
     const messages: Array<Record<string, unknown>> = [];
     for (const m of req.messages) {
       if (m.role === 'assistant' && m.toolCalls?.length) {

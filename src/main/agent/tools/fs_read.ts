@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import type { Tool } from '../types';
 import { platform } from '../../platform/index';
+import { decodeAttachmentText } from '../../attachments/decode';
 
 const HARD_CAP_BYTES = 200_000;
 
 export const fsReadTool: Tool = {
   name: 'fs_read',
-  description: 'Read a text file (size-capped). Binary files are rejected.',
+  description: 'Read a text file (size-capped, encodings auto-detected). Truly binary files are rejected with BINARY_CONTENT. Report the exact failure reason given.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -25,10 +26,10 @@ export const fsReadTool: Tool = {
     try {
       st = fs.statSync(p);
     } catch (e) {
-      return { ok: false, output: platform().fsErrorHint('read', e) || `cannot stat: ${p}` };
+      return { ok: false, output: `[NOT_FOUND] ${platform().fsErrorHint('read', e) || `cannot stat: ${p}`}` };
     }
-    if (!st.isFile()) return { ok: false, output: `not a file: ${p}` };
-    if (st.size > HARD_CAP_BYTES * 5) return { ok: false, output: `file too large (${st.size} bytes)` };
+    if (!st.isFile()) return { ok: false, output: `[NOT_FOUND] not a file: ${p}` };
+    if (st.size > HARD_CAP_BYTES * 5) return { ok: false, output: `[TOO_LARGE] file too large (${st.size} bytes, max ${HARD_CAP_BYTES * 5})` };
     let buf: Buffer;
     try {
       const fd = fs.openSync(p, 'r');
@@ -40,11 +41,15 @@ export const fsReadTool: Tool = {
         fs.closeSync(fd);
       }
     } catch (e) {
-      return { ok: false, output: platform().fsErrorHint('read', e) || `read failed: ${(e as Error).message}` };
+      const code = (e as NodeJS.ErrnoException)?.code;
+      if (code === 'EACCES' || code === 'EPERM') return { ok: false, output: `[PERMISSION_DENIED] ${platform().fsErrorHint('read', e) || `read failed: ${(e as Error).message}`}` };
+      if (code === 'EBUSY') return { ok: false, output: `[FILE_LOCKED] file locked: ${p}` };
+      return { ok: false, output: `[NOT_FOUND] ${platform().fsErrorHint('read', e) || `read failed: ${(e as Error).message}`}` };
     }
-    if (buf.includes(0)) return { ok: false, output: 'binary file, refusing to read as text' };
-    const text = buf.toString('utf8');
-    const truncated = st.size > max ? `\n…[truncated ${st.size - max} of ${st.size} bytes]` : '';
+    const dec = decodeAttachmentText(buf);
+    if (!dec || !dec.text.trim()) return { ok: false, output: '[BINARY_CONTENT] binary file, refusing to read as text' };
+    const text = dec.text;
+    const truncated = st.size > max ? `\n…[truncated ${st.size - max} of ${st.size} bytes — ${dec.encoding}]` : '';
     return { ok: true, output: text.slice(0, max) + truncated, source: p, untrusted: true };
   },
 };

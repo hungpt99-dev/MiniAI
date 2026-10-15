@@ -5,7 +5,9 @@ import type { ProviderError } from '../errors/provider-error';
 export type ContentPart =
   | { type: 'text'; text: string }
   | { type: 'image'; dataUrl: string; mimeType: string; width?: number; height?: number; bytes?: number }
-  | { type: 'file_ref'; name: string; mimeType: string; size: number; sha256: string; text: string };
+  | { type: 'file_ref'; name: string; mimeType: string; size: number; sha256: string; text: string }
+  /** Native file bytes for the provider's own document/image input (base64, never logged). */
+  | { type: 'document'; name: string; mimeType: string; size: number; sha256: string; dataBase64: string };
 
 export type NormalizedContent = string | ContentPart[];
 

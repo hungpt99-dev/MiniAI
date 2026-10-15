@@ -56,6 +56,9 @@ export const IpcChannels = {
   routeStatus: 'nexio:route-status',
   runSummary: 'nexio:run-summary',
   popupShown: 'nexio:popup-shown',
+  popupHide: 'nexio:popup-hide',
+  pinGet: 'nexio:pin-get',
+  pinToggle: 'nexio:pin-toggle',
   undo: 'nexio:undo',
   reveal: 'nexio:reveal',
   runs: 'nexio:runs',
@@ -75,7 +78,7 @@ export type IpcChannel = IpcChannelKey;
 export type IpcChannelValue = (typeof IpcChannels)[IpcChannelKey];
 
 /** Fire-and-forget renderer→main (ipcMain.on). Everything else invoke is request/response. */
-export const IpcSendKeys = ['chatCancel', 'resize', 'agentStop'] as const satisfies readonly IpcChannelKey[];
+export const IpcSendKeys = ['chatCancel', 'resize', 'agentStop', 'popupHide'] as const satisfies readonly IpcChannelKey[];
 /** Main→renderer pushes (sender.send); never handle/on registered. */
 export const IpcPushKeys = ['chatStream', 'agentEvent', 'ui', 'routeStatus', 'runSummary', 'popupShown', 'memoryEvent', 'tasksChanged'] as const satisfies readonly IpcChannelKey[];
 export const IpcSendChannels = IpcSendKeys.map((k) => IpcChannels[k]);
@@ -120,6 +123,9 @@ export interface SendOptions {
 
 export interface SlashEntryLike extends SlashMatch {
   scope?: SlashScope;
+  /** Present for prompt-template entries: body + vars to render the command text. */
+  body?: string;
+  vars?: string[];
 }
 
 /** Per-channel invoke args + result. Send/push entries carry args with result void. */
@@ -160,10 +166,13 @@ export interface IpcChannelMap {
   hotkeyStatus: { args: []; result: { registered: boolean; hotkey: string } };
   setHotkey: { args: [hotkey: string]; result: { registered: boolean; hotkey: string } };
   openPrivacySettings: { args: []; result: boolean };
-  ui: { args: [{ open: 'settings' | 'log' }]; result: void };
+  ui: { args: [{ open: 'settings' | 'log' | 'tasks' }]; result: void };
   routeStatus: { args: [{ id: string; status: 'doing' | 'answering' }]; result: void };
   runSummary: { args: [{ runId: string; undoable: boolean; folder?: string }]; result: void };
   popupShown: { args: []; result: void };
+  popupHide: { args: []; result: void };
+  pinGet: { args: []; result: { pinned: boolean } };
+  pinToggle: { args: []; result: { pinned: boolean } };
   undo: { args: [runId: string]; result: { runId: string } };
   reveal: { args: [dir: string]; result: boolean };
   runs: { args: []; result: Array<{ runId: string; kind: 'agent' | 'workflow'; prompt: string; outcome: string; ts: number; status: 'done' | 'error' | 'stopped'; undoable: boolean }> };

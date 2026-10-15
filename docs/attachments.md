@@ -2,7 +2,9 @@
 
 Drop, paste, or pick files to give Nexio context. Every file goes through
 one pipeline in the main process: **detect** (what is it, by content) →
-**policy** (what may Nexio do with it) → optional **text extraction**.
+**policy** (what may Nexio do with it) → **native send** (the provider's own
+file/document/image input, original bytes — no OCR, no local text
+extraction) or a refusal notice for types the provider cannot read.
 
 ## Detection (`src/main/attachments/detect.ts`)
 
@@ -31,49 +33,58 @@ allocation), traversal entries (`../`, absolute paths) skipped, no nested
 extraction, central directory only. Inspection failure → `unknown`, never
 a crash and never a rejection by itself.
 
-## Policy (`src/main/attachments/policy.ts`)
+## Policy (`src/main/attachments/policy.ts`) + native send
 
 | Detection | Action |
 |---|---|
-| text / source / csv / json / md | `inline_text` (existing 200KB cap) |
-| png jpeg webp gif | `image` (existing EXIF/resize pipeline) |
-| docx xlsx pptx odt ods odp rtf | `document_extract` (built-in extractor) |
-| pdf epub zip 7z rar tar gz mp3 mp4 doc xls ppt bmp tiff heic dmg pkg ole | `reference_only` (name, size, type, path; no content sent) |
-| macro-enabled / macros flag | `reference_only` + "Contains macros. Nexio will not run it." |
-| encrypted flag | `reference_only` + "Encrypted. Contents not readable." |
+| text / source / csv / json / md | inline UTF-8 text (existing 200KB cap, secrets-masked) |
+| png jpeg gif webp | native `image` part (EXIF stripped, 2048px cap — sanitizing, not OCR) |
+| pdf (unencrypted) | native `document` part (original bytes; Anthropic document block, OpenAI/Gemini-compat file part) |
+| docx xlsx pptx odt ods odp rtf | **refused** (`<provider> can't read .docx directly`) unless `localTextFallback` is on |
+| macro-enabled / macros flag | `reference_only` + "Contains macros. Nexio will not run it." (never opened) |
+| encrypted flag | `reference_only` + "Encrypted. Contents not readable." (never opened) |
+| other known / unknown | **refused** with the same unsupported notice (remove it or switch model) |
 | exe elf macho msi lnk url scf appx jar apk | **reject** with a specific message |
-| unknown / corrupt / empty-inspection-failure | `reference_only` ("Unknown type" never rejects) |
+
+Per-provider native map: `getAttachmentCapabilities(provider, model)` in
+`src/main/ai/providers/attachments.ts` (images + PDF on OpenAI/Anthropic/
+Gemini; images-only on Compatible; nothing without vision). Shared limits
+(5 files, 20MB/file, 50MB total) still apply, plus each provider's own
+request-size cap (base64 adds ~33%, checked before sending) and page caps
+where documented (Anthropic: 100 pages under 1M context, 600 above —
+enforced by the provider). A limit failure names the hit limit inline.
 
 Rejections read `Not attached: <name> is an executable (Windows
 program).` plus a `Details:` line (`detected exe (MZ header), rule
 executable-deny`) behind a toggle — never "executable or unknown
-content". Rejections are inline messages (not chips), dismissible, and
+content". Unsupported-type refusals show on the chip ("Unsupported" badge)
+and as an assistant message with a confirming "Switch model" button.
+Rejections are inline messages (not chips), dismissible, and
 announced through the sr-only live region.
 
-## Text extraction (`src/main/attachments/extract.ts`)
+## Text extraction (`src/main/attachments/extract.ts`, opt-in only)
 
-Built-in OOXML/ODF/RTF reader (ZIP index + tag stripping, `zlib` only —
-no new dependencies): docx text + headings outline, xlsx sheets + values
-+ sheet names, pptx slides + titles, odt headings/paragraphs, RTF.
-Limits: 5 MB extracted text, 8 MB per ZIP part, 500 slides / 200 sheets /
-200k paragraphs (whichever first). Embedded images are counted, never
-read. Macro payloads are never executed (binary parts are never even
-inflated for text purposes).
+The built-in OOXML/ODF/RTF reader (ZIP index + tag stripping, `zlib` only)
+runs **only** when `localTextFallback` is on (Settings, default off) and
+only for types the active provider cannot read. Extracted text is marked
+`[text extracted locally]` on the chip ("Extracted" badge) and in the
+sent block. Limits: 5 MB extracted text, 8 MB per ZIP part, 500 slides /
+200 sheets / 200k paragraphs (whichever first). Embedded images are
+counted, never read. Macro payloads are never executed.
 
 Extracted text is **untrusted data** (delimited-block + prompt-injection
 rules), secrets-scanned (chip warn + context note), truncated with a
-marker past the budget. The chip shows "Extracted" with a hover preview of
-the first lines; `attachment_read` serves the stored text in chunks.
+marker past the budget. `attachment_read` serves the stored text in chunks.
 
-PDF text extraction is **Planned** (would need pdf.js; kept
-`reference_only` with "Added as reference only, contents not read").
-Scanned PDFs report "No readable text found (scanned?)". Extraction runs
-inline under strict input caps — no worker needed (bounded, ms-scale).
+The old PDF worker (`pdf.ts`/`pdf-worker.ts`, pdf.js + tesseract OCR) is
+gone: PDFs go natively, so nothing parses or OCRs them locally anymore
+(dependencies removed).
 
 ## Chips
 
-Normal, "Extracted" (accent), "Reference only" (muted, tooltip: "Nexio can
-see the file name and path but not its contents."), "Macros" (warn),
-"Encrypted" (muted), "Empty file", "May contain secrets" (existing).
-Rejected files are never chips. Same pipeline on Windows and macOS, for
-drop, paste and picker.
+Normal, "Native" (accent — sent as the provider's own file input),
+"Extracted" (accent, fallback only), "Unsupported" (warn — remove or
+switch model), "Reference only" (muted, macros/encrypted only),
+"Macros" (warn), "Encrypted" (muted), "Empty file", "May contain
+secrets" (existing). Rejected files are never chips. Same pipeline on
+Windows and macOS, for drop, paste and picker.

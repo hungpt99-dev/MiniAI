@@ -19,13 +19,12 @@ const slice = (src: string, from: string, to: string) => {
 };
 
 describe('answer meta: one row, never wraps', () => {
-  it('meta CSS: flex, 8px gap, 32px min-height, 12px top margin, nowrap children', () => {
+  it('meta CSS: flex, 8px gap, exactly 28px, no extra margin, nowrap children', () => {
     const c = css();
     const block = slice(c, '#answer-meta {', '#answer-meta #model-name');
     expect(block).toContain('display: flex');
-    expect(block).toContain('gap: 8px');
-    expect(block).toContain('min-height: 32px');
-    expect(block).toContain('margin-top: 12px');
+    expect(block).toContain('gap: calc(8px * var(--space-scale))');
+    expect(block).toContain('height: 28px; margin: 0; padding: 0;');
     expect(block).toContain('line-height: 1');
     expect(c).toContain('#answer-meta > * { white-space: nowrap;');
     expect(c).toContain('#answer-meta #model-name { min-width: 0;');
@@ -54,11 +53,12 @@ describe('answer meta: one row, never wraps', () => {
     expect(c).toContain('#answer-meta #actions button:focus-visible');
     expect(c).toContain('outline: 2px solid var(--accent); outline-offset: 2px;');
   });
-  it('result rhythm: 16px message gaps, 12px before meta, 15px/1.6 answer, 18/22/16 view', () => {
+  it('result rhythm: view-owned padding, 16px turns, 15px/1.5 answer, markdown sibling rule', () => {
     const c = css();
-    expect(c).toContain('#messages { display: flex; flex-direction: column; gap: 20px; padding: 18px 22px 0; }');
-    expect(c).toContain('.msg.assistant { color: var(--text-body); font-size: 15px; line-height: 1.6; font-weight: 400; }');
-    expect(c).toContain('padding: 0 22px 16px;');
+    expect(c).toContain('padding: calc(12px * var(--space-scale)) calc(22px * var(--space-scale)) calc(12px * var(--space-scale));');
+    expect(c).toContain('#messages { display: flex; flex-direction: column; gap: calc(16px * var(--space-scale)); padding: 0; }');
+    expect(c).toContain('.msg.assistant { color: var(--text-body); font-size: 15px; line-height: 1.5; font-weight: 400; margin-top: 2px; }');
+    expect(c).toContain('.msg.assistant.answer > * + * { margin-top: calc(8px * var(--space-scale)); }');
   });
 });
 

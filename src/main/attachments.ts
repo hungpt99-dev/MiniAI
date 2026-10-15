@@ -1,18 +1,22 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ATTACH_LIMITS, safeName, scanSecretsText } from '../shared/attachments';
+import { ATTACH_LIMITS, scanSecretsText, displayName as displayNameOf, storageExt } from '../shared/attachments';
 import { isInsideRoots, isPathAllowed, normalizeAndResolve } from './agent/permissions';
 import type { PolicyContext } from './agent/types';
 import { platform } from './platform/index';
 import { detectAttachment, type Detection } from './attachments/detect';
 import { decideAttachPolicy, formatRejection, type AttachDecision } from './attachments/policy';
 import { extractDocumentText } from './attachments/extract';
+import { t } from './i18n/index';
 
 export interface StoredAttachment {
   id: string;
   runId: string;
+  /** On-disk storage name (id-based, never shown anywhere). */
   name: string;
+  /** What the user attached (NFC, verbatim) — chips, rows, requests, tools, logs. */
+  displayName: string;
   mime: string;
   size: number;
   sha256: string;
@@ -33,23 +37,24 @@ export function attachmentDir(baseDir: string, runId: string): string {
   return path.join(baseDir, 'attachments', String(runId).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || 'run');
 }
 
-/** Decode text with UTF-8/UTF-16 BOM handling, truncate to 200KB with a marker. */
-export function decodeText(buf: Buffer): { text: string; truncated: boolean } {
+import { decodeAttachmentText } from './attachments/decode';
+
+/** Decode text with BOM/UTF-16/legacy-encoding handling, truncate to 200KB with a marker. */
+export function decodeText(buf: Buffer): { text: string; truncated: boolean; encoding: string } {
   let text: string;
-  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) text = buf.toString('utf16le');
-  else if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
-    const swapped = Buffer.from(buf);
-    for (let i = 0; i + 1 < swapped.length; i += 2) { const t = swapped[i]; swapped[i] = swapped[i + 1]; swapped[i + 1] = t; }
-    text = swapped.toString('utf16le');
-  } else if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) text = buf.slice(3).toString('utf8');
-  else text = buf.toString('utf8');
+  let encoding = 'UTF-8';
+  try {
+    const dec = decodeAttachmentText(buf);
+    if (dec) { text = dec.text; encoding = dec.encoding; }
+    else text = buf.toString('utf8');
+  } catch { text = buf.toString('utf8'); }
   const cap = ATTACH_LIMITS.maxTextBytes;
   if (Buffer.byteLength(text, 'utf8') > cap) {
     let cut = text.slice(0, Math.floor(cap / 3));
     while (Buffer.byteLength(cut, 'utf8') > cap) cut = cut.slice(0, Math.floor(cut.length * 0.9));
-    return { text: cut + `\n…[truncated to 200KB]`, truncated: true };
+    return { text: cut + `\n…[truncated to 200KB]`, truncated: true, encoding };
   }
-  return { text, truncated: false };
+  return { text, truncated: false, encoding };
 }
 
 /** Trust sniffed bytes over the claimed extension, except text stays text; .md names keep their markdown type. */
@@ -113,12 +118,15 @@ export function processImage(buf: Buffer, mime: string): { bytes: Buffer; mime: 
 export function saveAttachment(baseDir: string, runId: string, name: string, mime: string, bytes: Buffer, opts: { width?: number; height?: number; truncated?: boolean; dataUrl?: string } = {}): StoredAttachment {
   const dir = attachmentDir(baseDir, runId);
   fs.mkdirSync(dir, { recursive: true });
-  const safe = safeName(name);
+  // why: the disk name is id-based (traversal-proof, unicode-proof); the
+  // user-visible name stays verbatim (NFC) and is never derived from it.
+  const display = displayNameOf(name);
   const id = `a-${crypto.randomUUID()}`;
-  const filePath = path.join(dir, `${id}-${safe}`);
+  const storage = `${id}.${storageExt(name)}`;
+  const filePath = path.join(dir, storage);
   fs.writeFileSync(filePath, bytes);
   const kind = mime.startsWith('image/') ? 'image' : mime.startsWith('text/') || mime.includes('markdown') ? 'text' : 'file';
-  return { id, runId, name: safe, mime, size: bytes.length, sha256: sha256(bytes), path: filePath, kind, width: opts.width, height: opts.height, truncated: opts.truncated, previewDataUrl: opts.dataUrl };
+  return { id, runId, name: storage, displayName: display, mime, size: bytes.length, sha256: sha256(bytes), path: filePath, kind, width: opts.width, height: opts.height, truncated: opts.truncated, previewDataUrl: opts.dataUrl };
 }
 
 /** Delete a run's temp files (run delete / Clear / new chat). Never throws. */
@@ -171,13 +179,13 @@ export function classifyAttachPath(raw: string, cwd: string, ctx: PolicyContext)
   return { verdict: 'allow', resolved, real };
 }
 
-/** Log-safe attachment record: name/type/size/SHA256 only — never bytes. */
-export function attachmentLogRecord(a: Pick<StoredAttachment, 'name' | 'mime' | 'size' | 'sha256'>): { name: string; type: string; size: number; sha256: string } {
-  return { name: a.name, type: a.mime, size: a.size, sha256: a.sha256 };
+/** Log-safe attachment record: display name/type/size/SHA256 only — never bytes, paths, or storage names. */
+export function attachmentLogRecord(a: Pick<StoredAttachment, 'displayName' | 'mime' | 'size' | 'sha256'>): { name: string; type: string; size: number; sha256: string } {
+  return { name: a.displayName, type: a.mime, size: a.size, sha256: a.sha256 };
 }
 
 /** Chip state for document/reference files (renderer badges + tooltips). */
-export type DocState = 'extracted' | 'reference' | 'macros' | 'encrypted';
+export type DocState = 'extracted' | 'reference' | 'macros' | 'encrypted' | 'native';
 
 export interface ClassifiedAttachment {
   det: Detection;
@@ -192,14 +200,34 @@ export interface ClassifiedAttachment {
   secretsInExtracted?: boolean;
   /** 'kind (evidence), rule X' for the Details toggle. */
   details: string;
+  /** True when the active provider cannot read this type natively (send refuses; remove or switch model). */
+  unsupportedType?: boolean;
+}
+
+export interface ClassifyOpts {
+  /** Opt-in local text extraction for provider-unsupported types (default off). */
+  localTextFallback?: boolean;
+  /** Provider display label for the unsupported notice (e.g. 'Anthropic'). */
+  providerLabel?: string;
+}
+
+/** Extension for the unsupported notice (never the full path). */
+export function attachExt(name: string): string {
+  const base = String(name || 'file').split(/[\\/]/).pop() || 'file';
+  const m = /\.([A-Za-z0-9]{1,10})$/.exec(base);
+  return m ? `.${m[1].toLowerCase()}` : 'this file type';
 }
 
 /**
  * Single classify pipeline shared by picker preview, paste/drop processing
  * and the send path: detect (bytes, never extension) -> policy -> optional
- * extraction. Never throws (worst case: unknown -> reference_only).
+ * extraction. PDFs classify as native (the provider reads the original bytes;
+ * no local parsing on the send path). Office types extract locally only with
+ * the opt-in fallback, otherwise they are flagged unsupported (the send path
+ * refuses with the same notice). Never throws (worst case: unknown ->
+ * reference_only).
  */
-export function classifyAttachment(bytes: Buffer, name: string): ClassifiedAttachment {
+export function classifyAttachment(bytes: Buffer, name: string, opts: ClassifyOpts = {}): ClassifiedAttachment {
   let det: Detection;
   try {
     det = detectAttachment(bytes);
@@ -214,6 +242,26 @@ export function classifyAttachment(bytes: Buffer, name: string): ClassifiedAttac
   let docNote: string | undefined;
   let extractedText: string | undefined;
   let secretsInExtracted = false;
+  let unsupportedType = false;
+  // why: unencrypted PDFs go to the provider as native documents — classifying
+  // them native here keeps every staging badge honest (no extraction anywhere).
+  if (det.kind === 'pdf' && !det.flags.includes('encrypted')) {
+    return {
+      det, decision, mime,
+      docState: 'native', docNote: t('attach.nativeNote'),
+      details, unsupportedType: false,
+    };
+  }
+  // why: Office text extraction is opt-in (localTextFallback); otherwise the
+  // file is provider-unsupported — flagged here, refused on the send path.
+  if (decision.action === 'document_extract' && !opts.localTextFallback) {
+    const note = t('attach.unsupported', { provider: opts.providerLabel || 'This provider', ext: attachExt(name) });
+    return {
+      det,
+      decision: { action: 'reference_only', rule: 'doc-reference', note },
+      mime, docState: 'reference', docNote: note, details, unsupportedType: true,
+    };
+  }
   if (decision.action === 'reference_only') {
     if (decision.rule === 'macro-warn') { docState = 'macros'; docNote = decision.note; }
     else if (decision.rule === 'encrypted-note') { docState = 'encrypted'; docNote = decision.note; }
@@ -237,7 +285,7 @@ export function classifyAttachment(bytes: Buffer, name: string): ClassifiedAttac
       docNote = decision.note;
     }
   }
-  return { det, decision, mime, docState, docNote, extractedText, secretsInExtracted, details };
+  return { det, decision, mime, docState, docNote, extractedText, secretsInExtracted, details, ...(unsupportedType ? { unsupportedType: true } : {}) };
 }
 
 /** Rejection error for an attachment, with a Details line for the UI toggle. */

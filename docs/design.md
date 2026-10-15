@@ -61,13 +61,14 @@ Dark-background brand only — there is no light variant.
 
 ## Answer actions
 
-- One row, never wraps: `#answer-meta` (flex, 8px gap, 32px min-height,
-  12px top margin, 12px muted, `line-height: 1`). Everything inside is
-  `nowrap`/`flex:none` except the model label (ellipsis, `max-width 160px`).
+- One row, never wraps: `#answer-meta` (flex, 8px gap, exactly 28px tall,
+  no margins, 12px muted, `line-height: 1`; sits 6px under the answer via
+  `#run` gaps). Everything inside is `nowrap`/`flex:none` except the model
+  label (ellipsis, `max-width 160px`).
   Model label: 6px accent dot + 12px muted name with full-name tooltip.
   Steps/memory toggles stay in their own row above, in `#agent-steps`.
 - Right group (`margin-inline-start: auto`, 2px gap): Copy and Follow up are
-  visible ghost buttons (28px, `0 10px`, `r8`, 12px muted, 14px icon, 6px
+  visible ghost buttons (28px, `0 8px`, `r8`, 12px muted, 14px icon, 6px
   gap; hover surface + text; 2px accent focus ring). Copy confirms inline
   ("Copied", 1.5 s). A "More" dots button (28x28, `aria-haspopup="menu"`)
   opens a custom menu: New chat, Run as separate task, Add to queue (with
@@ -83,8 +84,23 @@ Dark-background brand only — there is no light variant.
   dot-only model. Footer hints hide from the right under pressure
   (queue, clear, run, switch mode) via a separate `crowd-hide` class and
   never wrap.
-- Rhythm: You row, 16px, answer (15px/1.6 regular), 12px, meta; view padding
-  `18px 22px 16px`, dividers and footer untouched.
+- Rhythm (4px scale, one owner per gap): `.view` owns outer padding
+  (`12px 22px 12px`); `#messages` gap 16, `.turn` gap 6, You rows gap 8;
+  answer 15px/1.5 regular with 2px top; markdown blocks use one sibling
+  rule (8px); mode dividers are marginless separators; footer 74px (16px + 40px content + 18px).
+  `--space-scale` (1, or 0.75 via Settings > Compact spacing) scales them.
+
+## Window visibility
+
+- One module owns show/hide/focus (`src/main/app/window-visibility.ts`):
+  every transition carries a reason and is debug-logged. Blur never hides
+  directly — a 150ms recheck hides only with the pointer outside, outside
+  the grace windows (600ms show, 300ms resize, 400ms dialog, 1s task),
+  and with no dialog lock, approval, pin, or `hideOnBlur: false`.
+- Pin (Alt+P, `/pin`, tray, footer badge): only Esc, hotkey and toggle hide.
+- Notifications are silent; clicking one opens Tasks through the module.
+- Prompt commands (`/translate` etc.) render their template with the command
+  text before sending; the model parses target language/tone from the text.
 
 ## Footer icons
 

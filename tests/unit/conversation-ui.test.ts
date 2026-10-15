@@ -41,35 +41,47 @@ describe('turns: one block per { You, answer }, windowed at 100', () => {
   });
   it('turn rhythm in CSS, quiet separator, regular weights only', () => {
     const c = css();
-    expect(c).toContain('#run { padding-top: 12px; }');
-    expect(c).toContain('.turn { display: flex; flex-direction: column; gap: 8px;');
-    expect(c).toContain('.mode-div { display: flex; align-items: center; gap: 12px; margin: 16px 0; }');
+    expect(c).toContain('.turn { display: flex; flex-direction: column; gap: calc(6px * var(--space-scale));');
+    expect(c).toContain('.mode-div { display: flex; align-items: center;');
+    expect(c).toContain('margin: 0; padding: calc(2px * var(--space-scale)) 0;');
     expect(c).toContain('.mode-div .mode-line { flex: 1; height: 1px; background: var(--divider); }');
     expect(c).toContain('.mode-div .mode-text { font-size: 12px; font-weight: 400; color: var(--muted);');
-    expect(c).toContain('.you-prompt { font-size: 14px; color: var(--text-soft);');
-    expect(c).toContain('.msg.assistant { color: var(--text-body); font-size: 15px; line-height: 1.6; font-weight: 400; }');
+    expect(c).toContain('.you-prompt { font-size: 14px; line-height: 20px;');
+    expect(c).toContain('.msg.assistant { color: var(--text-body); font-size: 15px; line-height: 1.5; font-weight: 400; margin-top: 2px; }');
   });
 });
 
-describe('scroll: padding, autoscroll-unless-up, jump button', () => {
+describe('scroll: padding, follow-bottom, jump button', () => {
   it('jump control exists, wired, and gated to the run view', () => {
     expect(html()).toContain('id="jump-latest"');
-    expect(html()).toContain('aria-label="Jump to latest"');
+    expect(html()).toContain('aria-label="Jump to latest message"');
+    // sibling of the scroller (never inside scrolling content), pinned above the footer
+    const h = html();
+    expect(h.indexOf('id="jump-latest"')).toBeGreaterThan(h.indexOf('id="view"'));
+    expect(h).toContain('data-i18n="action.jumpLatest"');
     const src = appJs();
-    expect(src).toContain('var userScrolledUp = false;');
+    expect(src).toContain('var followBottom = true;');
     expect(src).toContain('function syncJump()');
     expect(src).toContain("view !== 'run'");
-    expect(src).toContain('scrollHeight - el.scrollTop - el.clientHeight > 120');
+    expect(src).toContain('distToBottom(el) <= 48');
     expect(src).toContain('function scrollToLatest(force)');
+    expect(src).toContain('function onViewScroll()');
     const c = css();
     expect(c).toContain('#jump-latest { position: absolute;');
-    expect(c).toContain('bottom: 60px;');
+    expect(c).toContain('inset-inline-end: 16px; bottom: 56px;');
+    expect(c).toContain('height: 32px;');
   });
   it('streaming respects a scrolled-up reader; user turns always show', () => {
     const src = appJs();
-    expect(src).toContain('if (userScrolledUp) { syncJump(); return; }');
-    expect(src).toContain('if (role === \'user\') userScrolledUp = false;');
+    expect(src).toContain('if (!followBottom) { syncJump(); return; }');
+    expect(src).toContain('if (role === \'user\') followBottom = true;');
     expect(src).toContain('scrollToLatest(role === \'user\')');
+    // programmatic sets are echo-guarded; only user input writes followBottom
+    expect(src).toContain('var progScroll = false;');
+    expect(src).toContain('var lastSetTop = -1;');
+    // growth follows after layout, instantly (never smooth)
+    expect(src).toContain('new ResizeObserver(');
+    expect(src).toContain('requestAnimationFrame(() => { if (followBottom) scrollBottomNow(); });');
   });
 });
 
@@ -91,17 +103,20 @@ describe('switch-to-Do chip: Ask action-plausible answers only', () => {
     const setMode = slice(src, 'function setMode(m, persist)', 'function updateModeUI()');
     expect(setMode).toContain('.switch-do-row');
     const c = css();
-    expect(c).toContain('.switch-do-row { margin-top: 8px; }');
+    expect(c).toContain('.switch-do-row { margin-top: calc(8px * var(--space-scale)); }');
   });
 });
 
 describe('mode consistency: pill, footer, placeholder, divider', () => {
-  it('setMode marks the seam and keeps chrome in sync', () => {
+  it('setMode toggles nothing into the conversation; dividers are lazy and derived', () => {
     const src = appJs();
-    const setMode = slice(src, 'function setMode(m, persist)', 'function updateModeUI()');
-    expect(setMode).toContain('className = \'msg mode-div\'');
-    expect(setMode).toContain('hasRun()');
-    expect(setMode).toContain("t('mode.switchedDo')");
+    const setMode = slice(src, 'function setMode(m, persist)', '// --- lazy mode dividers');
+    expect(setMode).not.toContain('msg mode-div');
+    expect(setMode).not.toContain('hasRun()');
+    expect(setMode).toContain('maybeModeDivider');
+    expect(src).toContain('function maybeModeDivider(newMode)');
+    expect(src).toContain('function normalizeDividers()');
+    expect(src).toContain('function modeDividerEl(st)');
     const ui = slice(src, 'function updateModeUI()', '// why: autosize composer');
     expect(ui).toContain('tab-chat');
     expect(ui).toContain('hint-readonly');
@@ -117,13 +132,20 @@ describe('mode consistency: pill, footer, placeholder, divider', () => {
 describe('mode divider: quiet separator, both directions', () => {
   it('renders lines + muted label with separator role, never a heading', () => {
     const src = appJs();
-    const setMode = slice(src, 'function setMode(m, persist)', 'function updateModeUI()');
-    expect(setMode).toContain("role', 'separator'");
-    expect(setMode).toContain('mode-line');
-    expect(setMode).toContain('mode-text');
-    expect(setMode).toContain('hasRun()');
+    expect(src).toContain('function modeDividerEl(st)');
+    expect(src).toContain("role', 'separator'");
+    expect(src).toContain('mode-line');
+    expect(src).toContain('mode-text');
+    // lazy: one divider before a differently-moded message, never two in a row
+    expect(src).toContain('lastMsgMode()');
+    expect(src).toContain('prev === newMode');
+    expect(src).toContain('normalizeDividers()');
+    // rows carry their turn mode; history derives dividers from stored modes
+    expect(src).toContain('dataset.mode');
+    expect(src).toContain('maybeModeDivider(m.mode)');
     const c = css();
-    expect(c).toContain('.mode-div { display: flex; align-items: center; gap: 12px; margin: 16px 0; }');
+    expect(c).toContain('.mode-div { display: flex; align-items: center;');
+    expect(c).toContain('margin: 0; padding: calc(2px * var(--space-scale)) 0;');
     expect(c).toContain('.mode-div .mode-line { flex: 1; height: 1px; background: var(--divider); }');
     expect(c).toContain('.mode-div .mode-text { font-size: 12px; font-weight: 400; color: var(--muted);');
     expect(c).not.toContain('.mode-div { text-align: center;');
@@ -182,5 +204,40 @@ describe('threading made explicit: follow-ups continue, spawns isolate', () => {
     expect(src).toContain('history: []');
     const sch = read('src/main/ipc.ts');
     expect(sch).toContain('routeTaskSubmit');
+  });
+});
+describe('failed message write: one error state, retry sends once', () => {
+  const src = appJs();
+  it('detects sqlite schema errors without matching normal text', () => {
+    expect(src).toContain('function isDbWriteError(e)');
+    expect(src).toContain('/no such column|has no column|');
+    expect(src).toContain("t('send.saveError')");
+  });
+  it('drops the optimistic bubble and shows short error + Retry + Copy details', () => {
+    expect(src).toContain('function dropLastUserBubble()');
+    expect(src).toContain("querySelectorAll('.msg.user')");
+    expect(src).toContain('function showSaveError(box, text, e)');
+    expect(src).toContain("span.textContent = t('send.saveError')");
+    expect(src).toContain("retry.textContent = 'Retry'");
+    expect(src).toContain("copy.textContent = 'Copy details'");
+    // retry removes the error box and sends exactly once (no second bubble)
+    const start = src.indexOf('function showSaveError');
+    const retry = src.slice(start, start + 1400);
+    expect(retry).toContain('box.remove()');
+    expect(retry.match(/void send\(\)/g)?.length).toBe(1);
+    // prompt stays in the composer on every send failure
+    expect(src).toContain('inputEl.value = text; // keep unsent input after failures');
+  });
+  it('wires every send catch through the save-error path (Ask plain/template/queued, Do direct)', () => {
+    const hits = src.split('if (isDbWriteError(e)) { dropLastUserBubble(); showSaveError(assistantDiv, text, e); }').length - 1;
+    expect(hits).toBe(3);
+    expect(src).toContain('const dbWrite = isDbWriteError(e);');
+    expect(src).toContain("message: dbWrite ? t('send.saveError')");
+  });
+  it('send.saveError is a translated key (en + vi)', () => {
+    const en = JSON.parse(read('src/main/i18n/locales/en.json'));
+    const vi = JSON.parse(read('src/main/i18n/locales/vi.json'));
+    expect(en['send.saveError']).toBe("Couldn't save message");
+    expect(vi['send.saveError']).toBeTruthy();
   });
 });

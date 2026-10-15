@@ -3,6 +3,7 @@ import { stripTrailingSlash } from '../base';
 import { capabilitiesFor } from './capabilities';
 import { parseError } from './errors';
 import { assertVision, toOpenAIContent } from '../vision';
+import { assertAttachments, getAttachmentCapabilities } from '../attachments';
 
 const BASE = 'https://generativelanguage.googleapis.com';
 
@@ -26,6 +27,7 @@ export const geminiAdapter: ProviderAdapter = {
   buildRequest(model, req: NormalizedRequest, baseUrl?: string) {
     const caps = capabilitiesFor(model);
     assertVision(req, caps);
+    assertAttachments(req, getAttachmentCapabilities('gemini', model, caps));
     const messages: Array<Record<string, unknown>> = [];
     for (const m of req.messages) {
       if (m.role === 'assistant' && m.toolCalls?.length) {

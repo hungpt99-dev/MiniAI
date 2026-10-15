@@ -37,6 +37,9 @@ owner credentials (see `docs/release.md`).
 - Do not touch `src/`, `tests/`, `scripts/`, `package.json`,
   `electron-builder.yml` unless the issue asks for it.
 - Run `npm run typecheck`, `npm run lint`, `npm run i18n:check` and `npx vitest run` before pushing.
+- Schema: `src/main/db/migrations.ts` CREATE TABLEs are the source of
+  truth — bump SCHEMA_VERSION on any change (stale dev DBs reset, never
+  migrated).
 - No lint/format tooling beyond `npm run lint` (typecheck + i18n check) — match surrounding 2-space style, CRLF.
 - No secrets in code, logs, fixtures, or screenshots.
   API keys live in OS keychain / env only, never committed.

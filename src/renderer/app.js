@@ -92,39 +92,82 @@ if (!window.nexio) {
 }
 
 function setMode(m, persist) {
-  const changed = m !== mode;
   // why: a stale Do chip must never survive the switch it offers.
   try { document.querySelectorAll('.switch-do-row').forEach((r) => r.remove()); } catch {}
   drafts[mode] = inputEl.value;
   mode = m;
   inputEl.value = drafts[mode] || '';
   updateModeUI();
-  // why: earlier answers were produced under the other mode; mark the seam.
-  // Quiet separator row (not a message): lines + muted label, never a heading.
-  if (changed && hasRun()) {
-    try {
-      const div = document.createElement('div');
-      div.className = 'msg mode-div';
-      div.setAttribute('role', 'separator');
-      const label = m === 'agent' ? t('mode.switchedDo') : t('mode.switchedAsk');
-      div.setAttribute('aria-label', label);
-      const line = () => {
-        const s = document.createElement('span');
-        s.className = 'mode-line';
-        s.setAttribute('aria-hidden', 'true');
-        return s;
-      };
-      const tx = document.createElement('span');
-      tx.className = 'mode-text';
-      tx.textContent = label;
-      div.append(line(), tx, line());
-      messagesEl.appendChild(div);
-      agentScroll();
-      requestResize();
-    } catch { /* divider never breaks mode switch */ }
-  }
+  // why: dividers are lazy and derived — toggling without sending stores
+  // nothing and renders nothing (see maybeModeDivider).
   grow();
   if (persist !== false && window.nexio?.setSettings) void window.nexio.setSettings({ mode: m }).catch(() => {});
+}
+
+// --- lazy mode dividers: derived at render from per-message mode, never stored ---
+// Storage/render use Ask/Do names; the live pill uses chat/agent.
+function storeModeOf(m) { return m === 'agent' ? 'do' : 'ask'; }
+function modeLabel(st) { return st === 'do' ? t('mode.switchedDo') : t('mode.switchedAsk'); }
+function modeDividerEl(st) {
+  const div = document.createElement('div');
+  div.className = 'msg mode-div';
+  div.setAttribute('role', 'separator');
+  const label = modeLabel(st);
+  div.setAttribute('aria-label', label);
+  div.dataset.modeDiv = st;
+  const line = () => {
+    const s = document.createElement('span');
+    s.className = 'mode-line';
+    s.setAttribute('aria-hidden', 'true');
+    return s;
+  };
+  const tx = document.createElement('span');
+  tx.className = 'mode-text';
+  tx.textContent = label;
+  div.append(line(), tx, line());
+  return div;
+}
+function lastMsgMode() {
+  try {
+    const rows = messagesEl.querySelectorAll('[data-mode]');
+    if (!rows.length) return null;
+    return rows[rows.length - 1].dataset.mode || null;
+  } catch { return null; }
+}
+// Insert ONE divider before the next message when its mode differs from the
+// previous message. Toggling back and forth without sending adds nothing;
+// a pending divider is relabeled, never doubled.
+function maybeModeDivider(newMode) {
+  try {
+    if (!newMode) return;
+    const prev = lastMsgMode();
+    if (!prev || prev === newMode) return;
+    const last = messagesEl.lastElementChild;
+    if (last && last.classList && last.classList.contains('mode-div')) {
+      const tx = last.querySelector('.mode-text');
+      const label = modeLabel(newMode);
+      if (tx) tx.textContent = label;
+      last.setAttribute('aria-label', label);
+      last.dataset.modeDiv = newMode;
+      return;
+    }
+    messagesEl.appendChild(modeDividerEl(newMode));
+  } catch { /* divider never breaks sending */ }
+}
+// Collapse consecutive dividers (keep the last) and drop a trailing divider
+// left with no message after it.
+function normalizeDividers() {
+  try {
+    const kids = Array.from(messagesEl.children);
+    let prevDiv = null;
+    for (const k of kids) {
+      const isDiv = k.classList && k.classList.contains('mode-div');
+      if (isDiv && prevDiv) prevDiv.remove();
+      prevDiv = isDiv ? k : null;
+    }
+    const last = messagesEl.lastElementChild;
+    if (last && last.classList && last.classList.contains('mode-div')) last.remove();
+  } catch { /* normalization never breaks rendering */ }
 }
 function updateModeUI() {
   const isChat = mode === 'chat';
@@ -143,6 +186,7 @@ function updateModeUI() {
   const queue = $('hint-queue');
   if (queue && isChat) queue.classList.add('hidden'); // Ask never queues
   try { layoutAnswerActions(); } catch { /* actions best-effort */ }
+  try { syncAgentFooter(); } catch { /* footer best-effort */ }
   try { fitFooterHints(); } catch { /* fit best-effort */ }
 }
 
@@ -152,7 +196,22 @@ function grow() {
   inputEl.style.height = 'auto';
   inputEl.style.height = Math.min(inputEl.scrollHeight, 224) + 'px';
   if (bar) bar.classList.toggle('multiline', inputEl.scrollHeight > 32 || inputEl.value.includes('\n'));
+  try { fitPlaceholder(); } catch { /* placeholder best-effort */ }
   requestResize();
+}
+
+// why: below ~240px input width the full prompt wraps — short form keeps one line.
+function fitPlaceholder() {
+  try {
+    if (!inputEl || inputEl.value || (window.__nexioPending && window.__nexioPending.length)) return;
+    const w = inputEl.clientWidth || 0;
+    if (w && w < 240) {
+      if (inputEl.placeholder !== 'Ask or do…') inputEl.placeholder = 'Ask or do…';
+    } else {
+      const want = (typeof mode !== 'undefined' && mode === 'agent') ? 'What do you want to do?' : 'Ask anything…';
+      if (inputEl.placeholder === 'Ask or do…') inputEl.placeholder = want;
+    }
+  } catch { /* best-effort */ }
 }
 
 function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
@@ -165,10 +224,51 @@ function errText(e) {
     .replace(/^Error: /, '');
 }
 
+// why: a failed message write must never strand its optimistic user bubble
+// or print raw SQL — one short error state, prompt kept, retry sends once.
+function isDbWriteError(e) {
+  return /no such column|has no column|\bSQLITE\b/i.test(String((e && e.message) || e || ''));
+}
+function dropLastUserBubble() {
+  // why: submits are serialized, so the last You row is always this attempt's.
+  try {
+    const rows = messagesEl.querySelectorAll('.msg.user');
+    const last = rows[rows.length - 1];
+    if (last && last.parentNode) last.parentNode.removeChild(last);
+  } catch { /* a missing row is already the desired end state */ }
+}
+function showSaveError(box, text, e) {
+  const detail = errText(e);
+  box.innerHTML = '';
+  const span = document.createElement('span');
+  span.textContent = t('send.saveError');
+  box.appendChild(span);
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.className = 'btn-retry';
+  retry.textContent = 'Retry';
+  retry.onclick = () => { try { box.remove(); } catch {} inputEl.value = text; drafts[mode] = text; try { grow(); } catch {} void send(); };
+  box.appendChild(retry);
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'show-out';
+  copy.textContent = 'Copy details';
+  copy.onclick = async () => { try { await navigator.clipboard.writeText(detail); } catch { try { fallbackCopy(detail); } catch {} } };
+  box.appendChild(copy);
+  showView('run');
+  try { syncChrome(); requestResize(); } catch { /* error state never breaks chrome */ }
+}
+
 // markdown-lite: code blocks, headings, lists, tables, inline code, bold, italic, links, line breaks
 function mdLite(src) {
+  let raw = String(src == null ? '' : src);
+  // why: models wrap whole short answers in **...** — full-answer bold reads
+  // as heavier body text, not emphasis. Display-only unwrap; dataset.raw keeps
+  // the original. Inline **bold** elsewhere is untouched.
+  const whole = /^\s*\*\*([\s\S]+?)\*\*\s*$/.exec(raw);
+  if (whole && !/[*_~`|]/.test(whole[1])) raw = whole[1];
   const blocks = [];
-  let html = esc(src).replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+  let html = esc(raw).replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
     blocks.push(`<pre><code>${code}</code></pre>`);
     return `\u0000${blocks.length - 1}\u0000`;
   });
@@ -229,15 +329,32 @@ function mdBlocks(src) {
   return out.join('\n');
 }
 
-function addMsg(role, content) {
+function addMsg(role, content, opts) {
+  opts = opts || {};
   const div = document.createElement('div');
-  div.className = 'msg ' + role;
+  // why: .answer scopes the single markdown spacing rule (blocks never carry own margins)
+  div.className = 'msg ' + role + (role === 'assistant' ? ' answer' : '');
   div.dir = 'auto';
+  // why: dividers derive from the stored per-message mode; the turn freezes
+  // it at send time so a mid-stream toggle can't mislabel rows.
+  div.dataset.mode = opts.mode || turnMode || storeModeOf(typeof mode !== 'undefined' ? mode : 'chat');
   if (role === 'user') {
     // why: You label + 3-line clamp keeps tall pastes to one compact row; click or Enter/Space toggles full text
     div.innerHTML = '<span class="you-label">You</span><span class="you-prompt you-clamp" tabindex="0" role="button" aria-expanded="false"></span>';
     const yp = div.querySelector('.you-prompt');
-    yp.textContent = content;
+    // why: slash commands keep trigger and args as separate nodes — the 8px
+    // chip gap (CSS) means the row can never read "/translatehello".
+    // The text node shows args (falling back to content); the expanded
+    // provider template is never displayed in the You row.
+    if (opts.command) {
+      const chip = document.createElement('span');
+      chip.className = 'slash-chip';
+      chip.textContent = '/' + String(opts.command).replace(/^\//, '');
+      yp.appendChild(chip);
+      yp.appendChild(document.createTextNode(String(opts.args != null ? opts.args : (content == null ? '' : content))));
+    } else {
+      yp.textContent = content;
+    }
     const toggleYou = (el) => {
       el.classList.toggle('you-clamp');
       el.setAttribute('aria-expanded', String(!el.classList.contains('you-clamp')));
@@ -252,8 +369,8 @@ function addMsg(role, content) {
   }
   (currentTurn || messagesEl).appendChild(div);
   if (role === 'assistant') markLastAnswer();
-  // why: user turns always come into view; streaming answers respect a scrolled-up reader
-  if (role === 'user') userScrolledUp = false;
+  // why: sending a message always re-enables following
+  if (role === 'user') followBottom = true;
   scrollToLatest(role === 'user');
   // why: no view yank here — senders switch explicitly; the approval yank lives in handleAgentEvent
   return div;
@@ -261,7 +378,14 @@ function addMsg(role, content) {
 
 // --- conversation turns: one .turn block per { You row, answer } ---
 var currentTurn = null; // live block the current submit appends to (null = messagesEl level)
-var userScrolledUp = false; // reader moved up: streaming holds position, jump button shows
+var turnMode = null; // Ask/Do mode frozen for the live turn (divider + row labels)
+// why: followBottom is the single follow flag (default true). Content growth
+// never flips it — only real user scroll input does (see onViewScroll).
+var followBottom = true;
+var progScroll = false; // our own scrollTop assignment in flight — never flips followBottom
+var lastSetTop = -1; // last scrollTop we assigned (echo detection)
+var savedScroll = {}; // per-view restore positions (run keyed by conversation)
+var FOLLOW_PX = 48; // within-48px counts as bottom (never strict equality: fractional px, HIDPI)
 var MAX_TURNS = 100; // DOM window; the DB keeps every turn
 function startTurnQuiet() {
   currentTurn = document.createElement('div');
@@ -272,7 +396,7 @@ function startTurnQuiet() {
 function startTurn() {
   startTurnQuiet();
   pruneTurns();
-  userScrolledUp = false;
+  followBottom = true;
   syncJump();
   agentScroll();
   requestResize();
@@ -325,16 +449,87 @@ if (messagesEl) {
   });
   messagesEl.addEventListener('focusout', () => placeAnswerMeta(null));
 }
+function viewEl() { try { return $('view'); } catch { return null; } }
+function distToBottom(el) {
+  try { return el.scrollHeight - el.scrollTop - el.clientHeight; } catch { return 0; }
+}
+// why: <= 48, never strict equality — fractional scrollTop and high-DPI
+// scaling make exact bottom checks fail at 125%/150%.
+function isAtBottom(el) { return distToBottom(el) <= 48; }
+function hasOverflow(el) {
+  try { return el.scrollHeight > el.clientHeight + 1; } catch { return false; }
+}
+// Programmatic scroll to the bottom: instant ("auto"), never smooth — smooth
+// falls behind fast streams. Sets the echo guard; the scroll event it emits
+// is consumed, never treated as user input.
+function scrollBottomNow() {
+  const el = viewEl();
+  if (!el) return;
+  try {
+    progScroll = true;
+    lastSetTop = el.scrollHeight;
+    el.scrollTop = el.scrollHeight;
+  } catch { progScroll = false; }
+  // safety: no scroll event fires when already at the bottom — release the
+  // guard on the next frame instead of eating a later user scroll.
+  try {
+    requestAnimationFrame(() => {
+      try {
+        const cur = viewEl();
+        if (cur && Math.abs(cur.scrollTop - lastSetTop) < 2) progScroll = false;
+      } catch { progScroll = false; }
+    });
+  } catch { progScroll = false; }
+}
 function scrollToLatest(force) {
-  const $viewEl = $('view');
-  if (!$viewEl) return;
-  if (force || !userScrolledUp) $viewEl.scrollTop = $viewEl.scrollHeight; // .view is the only scroller
+  const el = viewEl();
+  if (!el) return;
+  if (force) followBottom = true;
+  if (force || followBottom) scrollBottomNow(); // .view is the only scroller
   syncJump();
 }
 function syncJump() {
   const btn = $('jump-latest');
   if (!btn) return;
-  btn.classList.toggle('hidden', !userScrolledUp || (typeof view !== 'undefined' && view !== 'run'));
+  const el = viewEl();
+  const inRun = typeof view === 'undefined' || view === 'run';
+  // why: only when unfollowed AND overflowing — never while streaming
+  // unfollowed-by-nobody, never when everything fits.
+  const show = !!el && inRun && !followBottom && hasOverflow(el);
+  btn.classList.toggle('hidden', !show);
+  // accent dot while a run streams below the viewport; no live-region spam
+  try { btn.classList.toggle('streaming', show && agentRunning()); } catch {}
+}
+// The ONLY writer of followBottom (besides sends/clicks): real scroll events.
+// Wheel, touch, keyboard and scrollbar drag all funnel here; content growth
+// fires no scroll event, and our own sets are echo-guarded above.
+function onViewScroll() {
+  const el = viewEl();
+  if (!el) return;
+  if (progScroll) {
+    if (Math.abs(el.scrollTop - lastSetTop) < 2) { progScroll = false; syncJump(); return; }
+    progScroll = false; // user moved during our window — treat as user input
+  }
+  followBottom = isAtBottom(el);
+  syncJump();
+}
+// Follow content growth + viewport resizes after layout (rAF), but only while
+// following — a scrolled-up reader's position is never touched.
+function followOnResize() {
+  try {
+    if (!followBottom) return;
+    if (typeof view !== 'undefined' && view !== 'run') return;
+    const el = viewEl();
+    if (!el) return;
+    requestAnimationFrame(() => { if (followBottom) scrollBottomNow(); });
+  } catch {}
+}
+if (typeof ResizeObserver !== 'undefined') {
+  try {
+    const ro = new ResizeObserver(() => followOnResize());
+    if ($('view')) ro.observe($('view'));
+    if ($('run')) ro.observe($('run'));
+  } catch { /* follow best-effort without RO */ }
 }
 
 function copySvg() {
@@ -353,6 +548,43 @@ function fallbackCopy(text) {
 function copyText(text) {
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
   else fallbackCopy(text);
+}
+
+// why: session pin keeps the popup open; badge mirrors it next to Read-only.
+var pinState = false;
+async function refreshPin() {
+  try {
+    if (window.nexio && window.nexio.pinGet) pinState = (await window.nexio.pinGet()).pinned === true;
+  } catch { /* badge best-effort */ }
+  paintPin();
+}
+function paintPin() {
+  const b = $('pin-badge');
+  if (b) b.classList.toggle('hidden', !pinState);
+}
+async function togglePin() {
+  try {
+    if (window.nexio && window.nexio.pinToggle) pinState = (await window.nexio.pinToggle()).pinned === true;
+  } catch { /* badge best-effort */ }
+  paintPin();
+}
+
+// why: one scale var drives every conversation gap/padding (1 normal, 0.75 compact)
+function applySpaceScale(compact) {
+  try {
+    document.documentElement.style.setProperty('--space-scale', compact ? '0.75' : '1');
+  } catch { /* preview */ }
+}
+// mirrors main/db/templates.ts render: {{var}} substitution, throws on missing.
+function renderTemplate(body, vars) {
+  const missing = [];
+  const seen = new Set();
+  String(body).replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (_, name) => {
+    if (!seen.has(name)) { seen.add(name); if (!(name in (vars || {}))) missing.push(name); }
+    return '';
+  });
+  if (missing.length) throw new Error(`Missing variables: ${missing.join(', ')}`);
+  return String(body).replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (_, name) => vars[name]);
 }
 
 // why: fenced blocks get a ghost Copy without changing mdLite output shape
@@ -473,10 +705,13 @@ async function sendInner(submitOpts) {
           const info = await window.nexio.ext({ action: 'workflowInfo', trigger });
           if (info && info.kind === 'ext') return void openWorkflowForm(trigger, info);
         } catch { /* fall through to legacy path */ }
+        turnMode = storeModeOf(mode);
+        maybeModeDivider(turnMode);
+        clearSteps();
         startTurn();
-        addMsg('user', text);
+        addMsg('user', text, { mode: turnMode });
         showView('run');
-        assistantDiv = addMsg('assistant', '…');
+        assistantDiv = addMsg('assistant', '…', { mode: turnMode });
         try {
           const out = await window.nexio.runWorkflow(trigger, { text: rest.join(' ') });
           assistantDiv.innerHTML = mdLite(out.outputs.__output || JSON.stringify(out));
@@ -494,6 +729,7 @@ async function sendInner(submitOpts) {
       if (trigger === '/remember') return void runRememberCommand(rest.join(' '));
       if (trigger === '/forget') return void runForgetCommand(rest.join(' '));
       if (trigger === '/incognito') return void runIncognitoCommand();
+      if (trigger === '/pin') { inputEl.value = ''; drafts[mode] = ''; hideSuggest(); grow(); hidePalette(); await togglePin(); return; }
       if (trigger === '/tasks') { inputEl.value = ''; drafts[mode] = ''; hideSuggest(); grow(); hidePalette(); return void openTasksView(); }
       if (trigger === '/spawn' || trigger === '/queue') {
         const body = rest.join(' ').trim();
@@ -506,7 +742,7 @@ async function sendInner(submitOpts) {
       if (trigger === '/new') return void newChat();
       if (trigger === '/clear') { messagesEl.innerHTML = ''; assistantDiv = null; currentTurn = null; const st0 = $('agent-steps'); if (st0) st0.innerHTML = ''; const ch0 = $('run-chips'); if (ch0) ch0.remove(); inputEl.value = ''; drafts[mode] = ''; try { if (typeof clearAttachTray === 'function') clearAttachTray(); } catch {} hideSuggest(); showView('idle'); try { maybeSuggest(); } catch {} syncChrome(); requestResize(); return; }
       if (trigger === '/help') {
-        addMsg('assistant', '**Commands:** /help /new /clear /model /history /settings /log /extensions + prompt templates + workflows + skills.\nType `/` to browse.');
+        addMsg('assistant', '**Commands:** /help /new /clear /model /history /settings /log /extensions /memory /remember /forget /incognito /spawn /queue /tasks /cancel /clear-queue /pin + prompt templates + workflows + skills.\nType `/` to browse.');
         showView('run');
         return;
       }
@@ -517,21 +753,56 @@ async function sendInner(submitOpts) {
         showView('run');
         return;
       }
-      addMsg('user', text);
-      showView('run');
-      // prompt template: send rendered via chat
+      // prompt template: render the body with the command text, then send it.
+      // The template (not the raw "/cmd ...") is what the model must see.
+      // The You row shows a /trigger chip plus the user's own words.
       const id = await ensureConv();
-      assistantDiv = addMsg('assistant', '…');
+      const tplBody = String((r.found && r.found.body) || '');
+      const tplText = rest.join(' ').trim();
+      if (!tplBody || !tplText) {
+        startTurn();
+        addMsg('user', text);
+        showView('run');
+        assistantDiv = addMsg('assistant', t('slash.usageTemplate', { trigger }));
+        return;
+      }
+      let rendered;
+      try {
+        rendered = renderTemplate(tplBody, { text: tplText });
+      } catch (e) {
+        startTurn();
+        addMsg('user', text);
+        showView('run');
+        assistantDiv = addMsg('assistant', errText(e));
+        inputEl.value = text;
+        drafts[mode] = text;
+        grow();
+        return;
+      }
+      // why: chip names the command, the row keeps the user's own words.
+      // Command and args travel separately (display nodes, provider fields,
+      // stored columns) — never one concatenated string.
+      turnMode = storeModeOf(mode);
+      maybeModeDivider(turnMode);
+      clearSteps();
+      startTurn();
+      showView('run');
+      lastUserText = rendered;
+      if (mode === 'chat') lastAskPrompt = rendered;
+      addMsg('user', tplText, { mode: turnMode, command: String(trigger).replace(/^\//, ''), args: tplText });
+      assistantDiv = addMsg('assistant', '…', { mode: turnMode });
       try {
         const claim = typeof window.attachClaimForSend === 'function' ? window.attachClaimForSend() : null;
         const sendOpts = { mode, sessionId: id, requestId: `r${Date.now()}-${++reqSeq}`, explicit: modeExplicitSession };
         lastRequestId = sendOpts.requestId;
         if (claim && claim.attachments) sendOpts.attachments = claim.attachments;
-        const sendP = window.nexio.send(id, text, sendOpts);
+        sendOpts.slash = { command: String(trigger).replace(/^\//, ''), args: tplText };
+        const sendP = window.nexio.send(id, rendered, sendOpts);
         try { if (claim && claim.had && typeof window.attachMarkSent === 'function') window.attachMarkSent(id); } catch { /* noop */ }
         await sendP;
       } catch (e) {
-        assistantDiv.innerHTML = mdLite(errText(e));
+        if (isDbWriteError(e)) { dropLastUserBubble(); showSaveError(assistantDiv, text, e); }
+        else assistantDiv.innerHTML = mdLite(errText(e));
         inputEl.value = text; // keep unsent input after failures
         drafts[mode] = text;
         grow();
@@ -542,13 +813,16 @@ async function sendInner(submitOpts) {
     showView('run');
     return;
   }
+  turnMode = storeModeOf(mode);
+  maybeModeDivider(turnMode);
+  clearSteps();
   startTurn();
-  addMsg('user', text);
+  addMsg('user', text, { mode: turnMode });
   showView('run');
   const id = await ensureConv();
   lastAskPrompt = mode === 'chat' ? text : '';
   lastUserText = text;
-  assistantDiv = addMsg('assistant', '…');
+  assistantDiv = addMsg('assistant', '…', { mode: turnMode });
   try {
     const requestId = `r${Date.now()}-${++reqSeq}`;
     lastRequestId = requestId;
@@ -562,7 +836,8 @@ async function sendInner(submitOpts) {
     try { if (claim && claim.had && typeof window.attachMarkSent === 'function') window.attachMarkSent(id); } catch { /* noop */ }
     await sendP;
   } catch (e) {
-    assistantDiv.innerHTML = mdLite(errText(e));
+    if (isDbWriteError(e)) { dropLastUserBubble(); showSaveError(assistantDiv, text, e); }
+    else assistantDiv.innerHTML = mdLite(errText(e));
     inputEl.value = text; // keep unsent input after failures
     drafts[mode] = text;
     grow();
@@ -604,6 +879,10 @@ inputEl.addEventListener('input', () => {
   }, 80);
 });
 inputEl.addEventListener('paste', () => setTimeout(grow, 0));
+// why: the Tab hint needs focus state — syncChrome only runs on input/mode
+// changes, so focus moves would leave a stale hint without these.
+inputEl.addEventListener('focus', () => { try { syncChrome(); } catch {} });
+inputEl.addEventListener('blur', () => { try { syncChrome(); } catch {} });
 inputEl.addEventListener('keydown', (e) => {
   const paletteOpen = !paletteEl.classList.contains('hidden');
   const composing = e.isComposing || e.keyCode === 229;
@@ -660,13 +939,14 @@ inputEl.addEventListener('keydown', (e) => {
       try { inputEl.focus(); } catch { /* noop */ }
       return;
     }
-    // why: Esc clears first (input, then last attachment) and only closes an empty composer.
+    // why: Esc clears first (input, then last attachment) and only hides an empty composer.
     if (inputEl.value) {
       inputEl.value = ''; drafts[mode] = '';
       try { grow(); } catch { /* noop */ }
       try { inputEl.focus(); } catch { /* noop */ }
       try { syncChrome(); } catch { /* noop */ }
     } else if (attachPending() > 0 && typeof window.attachRemoveLast === 'function') window.attachRemoveLast();
+    else if (window.nexio && typeof window.nexio.hidePopup === 'function') window.nexio.hidePopup();
     else window.close?.();
   }
 });
@@ -700,6 +980,7 @@ document.addEventListener('keydown', (e) => {
   if (e.altKey && (e.key === 'm' || e.key === 'M')) { e.preventDefault(); selectMode(mode === 'chat' ? 'agent' : 'chat'); }
   else if (e.altKey && e.key === '1') { e.preventDefault(); selectMode('chat'); }
   else if (e.altKey && e.key === '2') { e.preventDefault(); selectMode('agent'); }
+  else if (e.altKey && (e.key === 'p' || e.key === 'P')) { e.preventDefault(); void togglePin(); }
   // Queued rows reorder with Alt+Up/Alt+Down inside the Tasks view.
   else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && view === 'tasks' && taskDetailId) {
     var row = taskCache.get(taskDetailId);
@@ -715,6 +996,9 @@ function showView(name) {
   if (name == null) name = 'idle';
   if (name === 'messages') name = 'run'; // legacy alias
   if (name !== 'run' && document.querySelector('#agent-steps .appr')) { flashApproval(); return; } // never bury an undecided approval
+  // why: one scroller shared by every panel — park this view's position,
+  // restore the next view's (run restores per conversation).
+  try { savedScroll[scrollKey(view)] = viewEl() ? viewEl().scrollTop : 0; } catch {}
   if (name !== 'idle' && name !== 'run' && (view === 'idle' || view === 'run')) returnTo = view;
   view = name;
   if (name !== 'idle') hideSuggest(); // suggestions live on idle only
@@ -738,6 +1022,7 @@ function showView(name) {
   if (name === 'tasks') void refreshTasks();
   if ($('view')) $('view').classList.toggle('hidden', name === 'idle');
   if (name === 'run') flushMemPushes();
+  restoreScroll();
   const wasDisabled = inputEl.disabled;
   inputEl.disabled = name === 'settings' || name === 'onboard';
   if (name === 'settings') {
@@ -748,9 +1033,35 @@ function showView(name) {
   syncChrome();
   requestResize();
   syncJump();
+  void refreshPin();
   assertSingleView();
 }
-// dev-only: exactly one top-level view node (idle holds none, or suggest alone)
+// Per-view restore positions for the single shared scroller (run keyed by
+// conversation). Restoring never forces follow — the position decides: at the
+// bottom the button stays hidden, elsewhere it shows.
+function scrollKey(v) {
+  try {
+    if (v === 'run') return 'run:' + (typeof convId !== 'undefined' && convId ? convId : '');
+    return String(v == null ? 'idle' : v);
+  } catch { return 'idle'; }
+}
+function restoreScroll() {
+  try {
+    const el = viewEl();
+    if (!el) return;
+    const saved = savedScroll[scrollKey(typeof view !== 'undefined' ? view : 'idle')];
+    if (saved == null) {
+      if (typeof view !== 'undefined' && view === 'run') { followBottom = true; scrollBottomNow(); }
+      syncJump();
+      return;
+    }
+    progScroll = true;
+    lastSetTop = saved;
+    el.scrollTop = saved;
+    followBottom = isAtBottom(el);
+    syncJump();
+  } catch {}
+}
 function assertSingleView() {
   try {
     const ids = ['palette', 'suggest', 'run', 'settings', 'history', 'extensions', 'memory', 'tasks', 'onboard'];
@@ -803,6 +1114,10 @@ $('btn-settings').onclick = async () => {
   if ($('set-hotkey')) $('set-hotkey').value = s.hotkey || currentToggleHotkey;
   if ($('set-stophotkey') && s.agentStopHotkey) currentStopHotkey = s.agentStopHotkey;
   if ($('set-login')) $('set-login').checked = s.launchAtLogin === true;
+  if ($('set-hideblur')) $('set-hideblur').checked = s.hideOnBlur !== false;
+  if ($('set-compact')) $('set-compact').checked = s.compactSpacing === true;
+  if ($('set-localtext')) $('set-localtext').checked = s.localTextFallback === true;
+  applySpaceScale(s.compactSpacing === true);
   try { paintTaskSettings(s); } catch (e) {}
   void refreshHotkeyStatus();
   paintAgentRoots(s.agentAllowedRoots || []);
@@ -839,6 +1154,9 @@ $('btn-save-settings').onclick = async () => {
   const hk = $('set-hotkey') && $('set-hotkey').value.trim();
   if (hk) patch.hotkey = hk;
   if ($('set-login')) patch.launchAtLogin = $('set-login').checked;
+  if ($('set-hideblur')) patch.hideOnBlur = $('set-hideblur').checked;
+  if ($('set-compact')) { patch.compactSpacing = $('set-compact').checked; applySpaceScale(patch.compactSpacing); }
+  if ($('set-localtext')) patch.localTextFallback = $('set-localtext').checked;
   try { readTaskSettings(patch); } catch (e) {}
   const sug = $('set-suggest').value.split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 8);
   if (sug.length) patch.suggestions = sug;
@@ -929,6 +1247,7 @@ async function refreshModelSuggestions() {
 }
 $('btn-new').onclick = () => void newChat();
 async function newChat() {
+  try { savedScroll[scrollKey('run')] = viewEl() ? viewEl().scrollTop : 0; } catch {}
   const c = await window.nexio.createConversation('New chat');
   convId = c.id; messagesEl.innerHTML = ''; assistantDiv = null; currentTurn = null;
   inputEl.value = ''; drafts.chat = ''; drafts.agent = ''; // fresh composer
@@ -949,12 +1268,22 @@ async function refreshHistory() {
     li.textContent = c.title || c.id;
     li.dataset.cid = c.id;
     li.onclick = async () => {
+      try { savedScroll[scrollKey('run')] = viewEl() ? viewEl().scrollTop : 0; } catch {}
       convId = c.id; messagesEl.innerHTML = ''; currentTurn = null; currentTurn = null;
+      turnMode = null;
       const msgs = await window.nexio.getMessages(c.id);
       for (const m of msgs) {
+        // why: dividers derive from stored per-message modes — consecutive
+        // same-mode rows get none, a mode change gets exactly one.
+        if (m.mode === 'ask' || m.mode === 'do') maybeModeDivider(m.mode);
         if (m.role === 'user') startTurnQuiet();
-        addMsg(m.role === 'user' ? 'user' : 'assistant', m.content);
+        // why: template sends store the rendered provider text as content —
+        // the You row shows chip + args, never the expanded template.
+        const showText = (m.role === 'user' && m.command) ? (m.args ?? '') : m.content;
+        addMsg(m.role === 'user' ? 'user' : 'assistant', showText,
+          { mode: (m.mode === 'ask' || m.mode === 'do') ? m.mode : undefined, command: m.command, args: m.args });
       }
+      normalizeDividers();
       pruneTurns();
       markLastAnswer();
       showView('run');
@@ -967,6 +1296,7 @@ async function refreshHistory() {
     const s = await window.nexio.getSettings();
     document.documentElement.dataset.theme = 'dark'; // dark-only UI; stored theme untouched
     mode = s.mode === 'agent' ? 'agent' : 'chat';
+    applySpaceScale(s.compactSpacing === true);
     // why: locale first — every t() below falls back to the raw key without it.
     try { await loadLocale(); } catch {}
     applyLocale();
@@ -993,7 +1323,9 @@ function requestResize() {
     _rafOn = false;
     try {
       const panel = $('panel');
-      const h = panel ? panel.scrollHeight : ($('app') ? $('app').scrollHeight : 0); // all views in-flow now
+      // why: scrollHeight skips the 1px card border top+bottom — without the
+      // +2 the window ends 2px short and clips the footer + bottom radius.
+      const h = panel ? panel.scrollHeight + 2 : ($('app') ? $('app').scrollHeight : 0); // all views in-flow now
       if (!h || Math.abs(h - _lastH) < 2) return; // +2px filter
       _lastH = h;
       if (window.nexio && typeof window.nexio.resize === 'function') window.nexio.resize(h);
@@ -1017,7 +1349,11 @@ function syncChrome() {
   // MutationObserver every pass (same class of loop as updateRunChip).
   var hasInput = !!inputEl.value;
   var hasAttach = attachPending() > 0;
-  if ($('hint-tab')) $('hint-tab').classList.toggle('hidden', !(inputEl && !inputEl.value && document.activeElement === inputEl && !inputEl.disabled));
+  // why: Tab hint mirrors the footer state machine (syncAgentFooter owns it
+  // too) — empty + focused + idle, never during runs/approvals/failures.
+  var tabQuiet = (typeof agentRunning === 'function' && agentRunning()) ||
+    !!document.querySelector('#agent-steps .appr') || !!failedRun;
+  if ($('hint-tab')) $('hint-tab').classList.toggle('hidden', tabQuiet || !(inputEl && !inputEl.value && document.activeElement === inputEl && !inputEl.disabled));
   var escLabel = (hasInput || hasAttach || hasMsgs) ? 'clear' : 'close';
   var escLabelEl = $('hint-esc-label');
   if (escLabelEl && escLabelEl.textContent !== escLabel) escLabelEl.textContent = escLabel;
@@ -1054,6 +1390,11 @@ renderPalette = function () {
   paletteEl.innerHTML = '';
   const groups = [['PROMPTS', paletteItems.filter((it) => it.source !== 'workflow' && it.source !== 'skill' && it.source !== 'mcp')], ['WORKFLOWS', paletteItems.filter((it) => it.source === 'workflow')], ['SKILLS', paletteItems.filter((it) => it.source === 'skill')], ['MCP', paletteItems.filter((it) => it.source === 'mcp')]];
   const idxOf = new Map(paletteItems.map((it, i) => [it, i]));
+  // why: mono advances are uniform — size the command column to this list's
+  // longest trigger so titles line up without a fixed large width.
+  const cmdW = paletteItems.reduce((m, it) => Math.max(m, String(it.trigger || '').length), 0);
+  // why: titles never wrap — the column fits this list's longest title.
+  const tiW = paletteItems.reduce((m, it) => Math.max(m, String(it.label || '').length), 0);
   for (const [label, items] of groups) {
     if (!items.length) continue;
     const lb = document.createElement('div');
@@ -1066,7 +1407,7 @@ renderPalette = function () {
       d.className = 'item' + (i === paletteActive ? ' active' : '');
       d.setAttribute('role', 'option');
       d.setAttribute('aria-selected', String(i === paletteActive));
-      d.innerHTML = `<span class="cm">${esc(it.trigger)}</span> <span>${esc(it.label || '')}</span><small>${esc(it.description || '')}</small>` +
+      d.innerHTML = `<span class="cm" style="width:${cmdW}ch">${esc(it.trigger)}</span> <span class="ti" style="width:${tiW}ch">${esc(it.label || '')}</span><small title="${esc(it.description || '')}">${esc(it.description || '')}</small>` +
         (i === paletteActive ? '<span class="k" style="margin-left:auto">↵</span>' : '');
       d.onclick = () => pickPalette(i);
       paletteEl.appendChild(d);
@@ -1074,7 +1415,24 @@ renderPalette = function () {
   }
   paletteEl.classList.remove('hidden');
   showView('palette');
+  // why: the palette is its own scroller now — keep the keyboard selection visible
+  try {
+    const active = paletteEl.querySelector('.item.active');
+    if (active && typeof active.scrollIntoView === 'function') active.scrollIntoView({ block: 'nearest' });
+  } catch { /* selection highlight is enough */ }
 };
+// why: one selection model — hover moves the keyboard selection instead of
+// lighting a second row next to it (re-render keeps the Enter hint in place).
+paletteEl.addEventListener('mouseover', (e) => {
+  try {
+    const row = e.target && e.target.closest ? e.target.closest('.item') : null;
+    if (!row || !paletteEl.contains(row)) return;
+    const i = [...paletteEl.querySelectorAll('.item')].indexOf(row);
+    if (i < 0 || i === paletteActive) return;
+    paletteActive = i;
+    renderPalette();
+  } catch { /* hover highlight is enough */ }
+});
 const _hidePalette = hidePalette;
 hidePalette = function () {
   if (paletteEl.classList.contains('hidden')) return; // no view yank on unrelated clicks
@@ -1134,8 +1492,9 @@ if ($('btn-copy')) $('btn-copy').addEventListener('click', async () => {
   const last = divs[divs.length - 1];
   if (!last) return;
   const text = (last.dataset && last.dataset.raw) || last.textContent || '';
-  try { await navigator.clipboard.writeText(text); }
-  catch { fallbackCopy(text); }
+  // why: confirm immediately; the write itself must never block the UI
+  // (headless/background windows can leave the clipboard promise pending).
+  try { copyText(text); } catch { /* fallback inside copyText */ }
   // why: ghost buttons confirm inline; orig stored once so rapid clicks still restore the icon markup
   if (!btn.dataset.orig) btn.dataset.orig = btn.innerHTML;
   const orig = btn.dataset.orig;
@@ -1449,20 +1808,14 @@ function doSwitchRow(promptText) {
 function agentRunning() { return !!agentState; }
 
 function agentScroll() {
-  if (userScrolledUp) { syncJump(); return; } // scrolled-up reader holds position; jump button shows
-  const $viewEl = $('view');
-  if ($viewEl) $viewEl.scrollTop = $viewEl.scrollHeight;
+  if (!followBottom) { syncJump(); return; } // scrolled-up reader holds position; jump button shows
+  scrollBottomNow();
   syncJump();
 }
-if ($('view')) $('view').addEventListener('scroll', () => {
-  const el = $('view');
-  userScrolledUp = el.scrollHeight - el.scrollTop - el.clientHeight > 120;
-  syncJump();
-}, { passive: true });
+if ($('view')) $('view').addEventListener('scroll', onViewScroll, { passive: true });
 if ($('jump-latest')) $('jump-latest').onclick = () => {
-  const $viewEl = $('view');
-  if ($viewEl) $viewEl.scrollTop = $viewEl.scrollHeight;
-  userScrolledUp = false;
+  followBottom = true;
+  scrollBottomNow();
   syncJump();
 };
 
@@ -1485,12 +1838,19 @@ function syncAgentFooter() {
   // Ask mode never queues: the queue hint stays hidden there in every state.
   const quiet = running || approval || failed;
   const askMode = typeof mode !== 'undefined' && mode === 'chat';
+  // why: one explicit state machine for both modes (Ask only drops queue):
+  // empty + focused = Tab + Enter + Esc; typing = Enter + Esc; Esc shows
+  // everywhere except runs (Stop owns the Esc cap there).
+  const empty = !inputEl.value && attachPending() === 0;
+  const focused = !!inputEl && document.activeElement === inputEl && !inputEl.disabled;
   for (const id of ['hint-tab', 'hint-enter', 'hint-queue']) {
     const el = $(id);
     if (!el) continue;
     if (id === 'hint-queue' && askMode) el.classList.add('hidden');
+    else if (id === 'hint-tab') el.classList.toggle('hidden', quiet || !empty || !focused);
     else el.classList.toggle('hidden', quiet);
   }
+  if ($('hint-esc')) $('hint-esc').classList.toggle('hidden', running);
   try { fitFooterHints(); } catch { /* fit best-effort */ }
 }
 if ($('btn-retry')) $('btn-retry').onclick = () => { void retryFailedRun(); inputEl.focus(); };
@@ -1498,7 +1858,13 @@ if ($('btn-retry')) $('btn-retry').onclick = () => { void retryFailedRun(); inpu
 function paintChip() {
   const chip = $('agent-cwd');
   if (!chip) return;
-  const label = agentCwd ? agentCwd.split(/[\\/]/).filter(Boolean).slice(-2).join('/') : 'home';
+  const segs = agentCwd ? agentCwd.split(/[\\/]/).filter(Boolean) : [];
+  // why: LAST segments win; middle ellipsis keeps the tail visible in 180px.
+  let label = segs.length ? segs.slice(-2).join('/') : 'home';
+  if (label.length > 24 && segs.length) {
+    const last = segs[segs.length - 1];
+    label = last.length > 20 ? '…' + last.slice(-19) : '…/' + last;
+  }
   chip.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>';
   chip.appendChild(document.createTextNode(' ' + label));
   chip.title = agentCwd || 'Working folder (default: home) — click to change';
@@ -1801,8 +2167,10 @@ async function startAgentRun(text, submitOpts) {
     // resolve the Planning row here or it spins forever next to the error.
     try { document.querySelectorAll('#agent-steps .plan-row, #agent-steps .still-row').forEach((x) => x.remove()); } catch {}
     finalizeSpinners();
+    const dbWrite = isDbWriteError(e);
+    if (dbWrite) dropLastUserBubble();
     addErrorRow({
-      message: (e && e.message) || errText(e),
+      message: dbWrite ? t('send.saveError') : ((e && e.message) || errText(e)),
       code: (e && (e.appCode || e.code)) || undefined,
       technical: (e && e.technical) || undefined,
       action: (e && e.action) || undefined,
@@ -1839,28 +2207,42 @@ async function sendAgentViaSend(text, submitOpts) {
     await sendP;
     void refreshTasks();
   } catch (e) {
-    assistantDiv.innerHTML = mdLite(errText(e));
+    if (isDbWriteError(e)) { dropLastUserBubble(); showSaveError(assistantDiv, text, e); }
+    else assistantDiv.innerHTML = mdLite(errText(e));
     inputEl.value = text; // keep unsent input after failures
     drafts[mode] = text;
     grow();
   }
 }
 
+// why: a new send owns the step list — stale tool rows from a previous run
+// must never read as steps of a plain answer (Ask sends bypass beginRun).
+function clearSteps() {
+  try {
+    const steps = $('agent-steps');
+    if (steps) { steps.innerHTML = ''; steps.classList.remove('hidden'); steps.classList.remove('collapsed'); }
+    const chips = $('run-chips');
+    if (chips) chips.remove();
+  } catch { /* steps never break sending */ }
+}
+
 async function beginRun(userText) {
   lastUserText = userText;
   failedRun = null; // a new run supersedes the failed state
+  clearSteps();
   const id = await ensureConv();
   hideSuggest(); // a run is never an empty composer
   agentState = { runId: null, rows: new Map(), answerDiv: null };
   agentEventSeen(); // arm the silence watchdog from submit, not first event
   const oldChips = $('run-chips');
   if (oldChips) oldChips.remove();
-  const steps = $('agent-steps');
-  if (steps) { steps.innerHTML = ''; steps.classList.remove('hidden'); steps.classList.remove('collapsed'); }
+  turnMode = 'do';
+  maybeModeDivider(turnMode);
   startTurn();
-  addMsg('user', userText);
+  addMsg('user', userText, { mode: turnMode });
   assistantDiv = null;
   showView('run');
+  const steps = $('agent-steps');
   if (steps) steps.classList.remove('hidden');
   // why: immediate feedback — the first agent event can lag behind slow
   // pre-loop awaits (memory classify, provider), and a run must never sit
@@ -2285,6 +2667,7 @@ if (window.nexio && typeof window.nexio.onPopupShown === 'function') {
       // Force a fresh measurement on every show.
       _lastH = 0;
       syncChrome(); requestResize();
+      void refreshPin();
       inputEl.focus();
     } catch { /* preview */ }
   });
@@ -2330,6 +2713,7 @@ function updateRunChip() {
   if (btn.dataset.rstate !== state) {
     btn.dataset.rstate = state;
     btn.setAttribute('aria-label', state === 'running' ? 'Run in progress. View run' : 'Run finished. View result');
+    btn.title = state === 'running' ? 'Running — view run' : 'Done — view run';
     btn.innerHTML = '';
     const dot = document.createElement('span');
     dot.className = 'rundot' + (state === 'running' ? ' spin' : '');
@@ -4107,6 +4491,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
     try {
       if (ev.open === 'settings') { if (view !== 'settings') $('btn-settings').click(); }
       else if (ev.open === 'log') { void showAgentLog(); }
+      else if (ev.open === 'tasks') { if (view !== 'tasks') togglePanel('tasks'); }
     } catch { /* preview */ }
   });
 }
@@ -4152,6 +4537,16 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
       return SECRET_RES.some(function (re) { return re.test(sample); });
     } catch (e) { return false; }
   }
+  // Structure-based credential-file hint (language-independent): cookie/token/
+  // credential-like names or Netscape cookie headers always need confirmation.
+  function looksLikeCredentialsFile(name) {
+    try {
+      var b = String(name || '').split(/[\\/]/).pop() || '';
+      if (/(^|[_.-])(cookies?|tokens?|credentials?)([_.-]|$)/i.test(b)) return true;
+      if (/\.(env|pem)$/i.test(b) || /(^|[_.-])id_rsa([_.-]|$)/i.test(b)) return true;
+      return false;
+    } catch (e) { return false; }
+  }
   var PROVIDER_DISPLAY = { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', compatible: 'Custom' };
   function isLocalProvider(provider, baseUrl) {
     try {
@@ -4178,7 +4573,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
   // Secrets gate: one confirmation per attachment set before any send.
   var secretsOk = false, secretsAsk = false;
   function secretsMatched() {
-    try { return pending.filter(function (a) { return a.hasSecrets && (a.size || 0) > 0 && a.kind !== 'image'; }); } catch (e) { return []; }
+    try { return pending.filter(function (a) { return ((a.hasSecrets || looksLikeCredentialsFile(a.name)) && (a.size || 0) > 0 && a.kind !== 'image'); }); } catch (e) { return []; }
   }
   function resetSecretsGate() { secretsOk = false; secretsAsk = false; }
   // Provider notice cache (async settings); refreshed on focus and on tray change.
@@ -4317,20 +4712,33 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
               });
             })(a, eb);
             item.appendChild(eb);
-          } else if (a.hasSecrets) {
+          } else if (a.hasSecrets || looksLikeCredentialsFile(a.name)) {
             var wb = document.createElement('span');
             wb.className = 'abadge warn';
-            wb.title = 'May contain secrets';
+            wb.title = looksLikeCredentialsFile(a.name) && !a.hasSecrets
+              ? 'This looks like a login or credentials file — confirmation required.'
+              : 'May contain secrets';
             wb.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v5"/><circle cx="12" cy="18" r="0.5"/></svg>Review';
             item.appendChild(wb);
           }
           if (a.docState) {
             var db = document.createElement('span');
             var dlabel = a.docState === 'extracted' ? 'Extracted' : a.docState === 'macros' ? 'Macros' : a.docState === 'encrypted' ? 'Encrypted' : 'Reference only';
+            // why: native documents ride the provider's own file input; the
+            // unsupported badge names the failing type (remove it or switch model).
+            if (a.docState === 'native') dlabel = t('attach.chip.native');
             db.className = 'abadge ' + (a.docState === 'macros' ? 'warn' : a.docState === 'extracted' ? 'acc' : 'muted');
+            if (a.docState === 'native') db.className = 'abadge acc';
             db.textContent = dlabel;
             db.title = a.docNote || dlabel;
             item.appendChild(db);
+          }
+          if (a.unsupportedType) {
+            var ub = document.createElement('span');
+            ub.className = 'abadge warn';
+            ub.textContent = t('attach.chip.unsupported');
+            ub.title = a.docNote || t('attach.chip.unsupported');
+            item.appendChild(ub);
           }
           if (a.verdict === 'approval') {
             var b = document.createElement('span');
@@ -4590,6 +4998,7 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
               verdict: r.verdict === 'approval' ? 'approval' : undefined,
               hasSecrets: r.hasSecrets === true,
               docState: r.docState, docNote: r.docNote, details: r.details, preview: r.preview,
+              unsupportedType: r.unsupportedType === true ? true : undefined,
             });
           });
           if (ok.length) addEntries(ok);
@@ -4646,6 +5055,17 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
       x.setAttribute('aria-label', 'Close preview');
       x.addEventListener('click', closePreview);
       prevEl.appendChild(x);
+      if (a.path) {
+        var of = document.createElement('button');
+        of.type = 'button';
+        of.className = 'btn';
+        of.textContent = 'Open folder';
+        of.setAttribute('aria-label', 'Reveal file in folder');
+        (function (p) {
+          of.addEventListener('click', function () { try { window.nexio.reveal(p); } catch (e2) {} });
+        })(a.path);
+        prevEl.appendChild(of);
+      }
       prevEl.classList.remove('hidden');
       previewOpen = true;
       try { if (typeof showView === 'function' && view !== 'run') showView('run'); } catch (e2) {}
@@ -4855,11 +5275,15 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
     }
   } catch (e) {}
   // Non-vision notice: one-click Switch model + single recovery resend (bytes were never sent).
+  // why: provider-unsupported file types reuse the same confirm-and-switch
+  // flow (remove the chip, or switch model and re-attach).
   function maybeVisionNotice(node) {
     try {
       if (!node || !node.classList || !node.classList.contains('assistant')) return;
       var t = node.textContent || '';
-      if (t.indexOf('does not support images') < 0) return;
+      var isVision = t.indexOf('does not support images') >= 0;
+      var isUnsupported = t.indexOf("can't read") >= 0 && t.indexOf('directly') >= 0;
+      if (!isVision && !isUnsupported) return;
       if (node.dataset.visionBtn) return;
       node.dataset.visionBtn = '1';
       var b = document.createElement('button');
@@ -4873,7 +5297,10 @@ if (window.nexio && typeof window.nexio.onUi === 'function') {
         b.disabled = true;
         try {
           // Never silently replace the user's provider/model; confirm first.
-          if (!window.confirm('Switch model to OpenAI gpt-4o-mini so images can send? Your current provider and model will be replaced.')) {
+          var confirmMsg = isUnsupported
+            ? 'Switch model to OpenAI gpt-4o-mini and re-attach the file? Your current provider and model will be replaced.'
+            : 'Switch model to OpenAI gpt-4o-mini so images can send? Your current provider and model will be replaced.';
+          if (!window.confirm(confirmMsg)) {
             node.dataset.recovered = '';
             b.disabled = false;
             return;

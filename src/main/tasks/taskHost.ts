@@ -15,6 +15,7 @@ import { ensureTaskTables, insertTask, listTasks, updateTask, getTask, deleteTas
 import { runScheduledTask, type TaskRunEnv } from '../agent/taskRunner';
 import { getMemory } from '../memory/store';
 import { loadFolderRulesFile } from '../memory/protect';
+import { show as visShow, markTaskFinished } from '../app/window-visibility';
 
 /** Prepared attachment record (structural mirror of the ipc-side record). */
 export interface TaskPreparedAttachment {
@@ -107,7 +108,14 @@ export function pushTasksChanged(api: TaskHostApi): void {
 function notify(api: TaskHostApi, title: string, body: string, taskId?: string): void {
   try {
     if (api.settings().taskNotifications === false) return;
-    const n = new Notification({ title, body: body.slice(0, 200) });
+    const n = new Notification({ title, body: body.slice(0, 200), silent: true });
+    n.on('click', () => {
+      // why: toasts never own visibility — the module shows, then we open Tasks.
+      try {
+        visShow('notification-click');
+        api.sender()?.send(IpcChannels.ui, { open: 'tasks' });
+      } catch { /* window gone */ }
+    });
     void taskId;
     n.show();
   } catch { /* headless tests */ }
@@ -121,6 +129,7 @@ function routeSchedulerEvent(api: TaskHostApi, ev: SchedulerEvent): void {
       }
       if (ev.task.state === 'done' || ev.task.state === 'failed' || ev.task.state === 'stopped' || ev.task.state === 'interrupted') {
         taskApprovals.delete(ev.task.id);
+        try { markTaskFinished(); } catch { /* grace best-effort */ }
       }
       pushTasksChanged(api);
       break;

@@ -2,6 +2,7 @@ import { BrowserWindow, screen } from 'electron';
 import path from 'node:path';
 import { IpcChannels } from '../shared/ipc-channels';
 import { resetDialogLock, shouldSuppressBlur } from './app/dialogs';
+import { attach as visAttach, show as visShow, hide as visHide, markResizing } from './app/window-visibility';
 import { platform } from './platform/index';
 
 let win: BrowserWindow | null = null;
@@ -29,6 +30,8 @@ export function createPopup(): BrowserWindow {
     alwaysOnTop: true,
     skipTaskbar: true,
     show: false,
+    // why: first click must both activate and hit the button (no dead click).
+    ...(mac ? { acceptFirstMouse: true } : {}),
     icon: path.join(__dirname, '../assets/icon.png'),
     transparent: true,
     backgroundColor: '#00000000',
@@ -46,12 +49,8 @@ export function createPopup(): BrowserWindow {
   // NOTE: resizable:false pins min/max to the current size on Windows, so
   // creation-time setMinimum/MaximumSize does not stick — setPopupHeight
   // re-pins (width fixed, height free) on every call instead.
-  // Hide (not quit) on blur like a launcher popup — except while a native
-  // dialog owns focus (blur fires on the popup when the picker opens).
-  win.on('blur', () => {
-    if (shouldSuppressBlur(win)) return;
-    if (win?.isVisible() && !win.webContents.isDevToolsOpened()) win.hide();
-  });
+  // Visibility (incl. blur handling) is owned by app/window-visibility.
+  visAttach(win as never);
   win.on('closed', () => { win = null; resetDialogLock(); });
   return win;
 }
@@ -63,20 +62,23 @@ export function setPopupHeight(contentH: number): void {
   const content = Math.min(POPUP_MAX_H, Math.max(POPUP_MIN_H, Math.round(contentH)));
   // resizable:false pins min/max to current size on Windows — re-pin width,
   // free height on every call (post-show sticks, creation-time does not).
+  // Same size, same focus: setSize alone never hides (blur during it is ignored).
+  markResizing();
   win.setMinimumSize(POPUP_CONTENT_WIDTH, POPUP_MIN_H);
   win.setMaximumSize(POPUP_CONTENT_WIDTH, POPUP_MAX_H);
   win.setSize(POPUP_CONTENT_WIDTH, content);
 }
 
-export function togglePopup(): void {
+export function togglePopup(reason: 'hotkey' | 'tray' | 'second-instance' | 'toggle' = 'toggle'): void {
   const w = getPopup() || createPopup();
   if (w.isVisible()) {
     // Hotkey/tray toggle while a native dialog is open: never hide, refocus.
+    // Explicit toggle bypasses pin (only blur/outside auto-hide respects it).
     if (shouldSuppressBlur(w)) {
-      try { w.focus(); } catch { /* window gone */ }
+      visShow(reason);
       return;
     }
-    w.hide();
+    visHide(reason, { force: true });
   } else {
     // Centered upper-third on the display nearest the cursor (multi-monitor safe).
     const cursor = screen.getCursorScreenPoint();
@@ -89,8 +91,7 @@ export function togglePopup(): void {
       Math.min(Math.max(x, ax), ax + aw - POPUP_CONTENT_WIDTH),
       Math.min(Math.max(y, ay), ay + ah - winH),
     );
-    w.show();
-    w.focus();
+    visShow(reason);
     try {
       if (platform().key === 'darwin') w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     } catch { /* older Electron */ }

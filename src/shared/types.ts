@@ -8,6 +8,12 @@ export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
   createdAt: number;
+  /** Ask/Do mode the turn was sent in (dividers derive from this; absent on legacy rows). */
+  mode?: 'ask' | 'do';
+  /** Slash template trigger without the slash (e.g. 'translate'); args stay separate. */
+  command?: string;
+  /** Raw argument text for command (own field — never concatenated for display). */
+  args?: string;
 }
 
 export type SlashSource = 'builtin' | 'prompt' | 'workflow' | 'user' | 'skill' | 'mcp';
@@ -64,6 +70,8 @@ export interface Settings {
   sendTemperature?: boolean;
   /** Compatible-only: image support Auto (probe) / On / Off. Default Auto. */
   compatibleImages?: 'auto' | 'on' | 'off';
+  /** Local text fallback for files the provider can't read (default false = refuse with a notice). */
+  localTextFallback?: boolean;
   theme: 'light' | 'dark';
   hotkey: string;
   mode: Mode;
@@ -86,6 +94,10 @@ export interface Settings {
   askReadNoticeDismissed?: Record<string, boolean>;
   /** Launch at login via app.setLoginItemSettings. Off by default. */
   launchAtLogin?: boolean;
+  /** Hide when I click away (launcher behavior). Default true; pin overrides for the session. */
+  hideOnBlur?: boolean;
+  /** Compact spacing scale (0.75x gaps/padding). Default false. */
+  compactSpacing?: boolean;
   /** UI locale: BCP-47 tag or 'system'. Default 'system'. */
   locale?: string;
   /** Master switch for long-term memory. Default false; enable in Settings. */

@@ -40,6 +40,7 @@ Settings live in the app SQLite DB (`getSettings`/`updateSettings` in
 | `taskPruneDays` | `30` | Prune terminal tasks/runs older than N days (1–3650). |
 | `sendTemperature` | `true` | Custom provider only: send `temperature`. Off for strict local servers. |
 | `compatibleImages` | `auto` | Custom provider only: image support `auto` (probe) / `on` / `off`. Off holds images back with the non-vision notice. |
+| `localTextFallback` | `false` | Extract Office/doc text locally when the provider can't read it (chip + sent text labelled "text extracted locally"). Off refuses with an unsupported notice. |
 | `suggestions` | 4 builtins | Up to 8 starter-suggestion lines. |
 | `onboarded` | `false` | First-run onboarding flag. |
 

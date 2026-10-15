@@ -265,11 +265,12 @@ describe('memory view: single-view mount, list/filter/edit/pin/forget, empty sta
 describe('settings: one switch row per boolean, helper notes, chips, footer chip', () => {
   it('every boolean setting renders a visible track (root cause: hidden input, track span missing)', () => {
     const h = html();
-    // all thirteen boolean rows carry the paint span; the native input is always hidden by CSS
+    // all sixteen boolean rows carry the paint span; the native input is always hidden by CSS
     const tracks = h.split('switch-track" aria-hidden').length - 1;
-    expect(tracks).toBe(13);
+    expect(tracks).toBe(16);
     for (const id of ['set-sendtemp', 'set-askread', 'set-reqapprove', 'set-mem', 'set-mem-suggest',
-      'set-mem-semantic', 'set-mem-ask', 'set-incognito', 'set-login',
+      'set-mem-semantic', 'set-mem-ask', 'set-incognito', 'set-login', 'set-hideblur', 'set-compact',
+      'set-localtext',
       'set-task-subtasks', 'set-task-asksub', 'set-task-confirm', 'set-task-notify']) {
       const at = h.indexOf(`id="${id}"`);
       expect(at).toBeGreaterThan(-1);
@@ -306,15 +307,14 @@ describe('settings: one switch row per boolean, helper notes, chips, footer chip
     expect(src).toContain("box.dataset.memkind = k;");
     expect(src).toContain("input[data-memkind]");
   });
-  it('settings sections stack with titles and 8px groups; footer never covers content', () => {
+  it('settings sections stack with titles and 20px groups; footer never covers content', () => {
     const h = html();
     expect(h).toContain('class="set-section"');
     expect(h).toContain('class="set-title">Ask mode');
     expect(h).toContain('class="set-title">Memory');
     expect(h).toContain('class="group"');
     const css = read('src/renderer/styles.css');
-    expect(css).toContain('#settings { display: flex; flex-direction: column; gap: 24px; }');
-    expect(css).toContain('padding: 16px 22px 24px;');
+    expect(css).toContain('#settings { display: flex; flex-direction: column; gap: calc(20px * var(--space-scale)); }');
     expect(css).toContain('#settings .group { display: flex; flex-direction: column; gap: 8px; }');
   });
 });
@@ -381,7 +381,10 @@ describe('footer: always-visible panel shell, once, send disabled when empty', (
   it('idle hints read Tab/Enter/Esc-close, typing keeps Enter-run/Esc-clear', () => {
     const src = appJs();
     expect(src).toContain("escLabel = (hasInput || hasAttach || hasMsgs) ? 'clear' : 'close'");
-    expect(src).toContain("'hidden', !(inputEl && !inputEl.value && document.activeElement === inputEl && !inputEl.disabled)");
+    // one state machine for both modes: Tab only empty + focused + idle,
+    // Esc everywhere except runs (Stop owns the cap there)
+    expect(src).toContain("else if (id === 'hint-tab') el.classList.toggle('hidden', quiet || !empty || !focused);");
+    expect(src).toContain("$('hint-esc')) $('hint-esc').classList.toggle('hidden', running);");
   });
   it('send disables while input and attachments are empty', () => {
     const src = appJs();
@@ -391,11 +394,11 @@ describe('footer: always-visible panel shell, once, send disabled when empty', (
     expect(body).toContain('sendBtn.disabled = sendEmpty');
     expect(body).toContain('aria-disabled');
   });
-  it('footer metrics: 48px, 8/14/8/22 padding, divider top, groups, caps, buttons, never scrolled away', () => {
+  it('footer metrics: 40px fixed, 6/14/6/22 padding, divider top, groups, caps, buttons, never scrolled away', () => {
     const css = read('src/renderer/styles.css');
     const block = css.slice(css.indexOf('#hints {'), css.indexOf('#hints {') + 400);
-    expect(block).toContain('height: 48px');
-    expect(block).toContain('8px 14px 8px 22px');
+    expect(block).toContain('height: 40px');
+    expect(block).toContain('6px 14px 6px 22px');
     expect(block).toContain('1px solid var(--divider)');
     expect(block).toContain('flex: none');
     expect(block).toContain('white-space: nowrap');

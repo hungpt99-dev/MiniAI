@@ -66,8 +66,14 @@ If the hotkey is taken, change `hotkey` in settings. If the window disappears on
   (`Ctrl+V`/`Cmd+V`), drag-drop ("Drop to attach"), or the paperclip button stages
   images/files under the composer; `Enter` on attachments alone sends "Describe the
   attached file(s)." Types are sniffed by magic bytes (max 5, 20MB/file, 50MB
-  total); images are EXIF-stripped and capped at 2048px, text is BOM-decoded and
-  truncated at 200KB. Temp files live under `<data>/attachments/<conversation>`
+  total, plus each provider's own request cap); images are EXIF-stripped and
+  capped at 2048px, text is BOM-decoded and truncated at 200KB. Images and
+  PDFs are sent to the provider natively as its own file/document input
+  (original bytes, no OCR or local extraction — first use per provider shows
+  "Attached files are sent to <provider>"); types the provider can't read
+  (e.g. `.docx`) are refused with a notice (remove it or switch model),
+  unless the opt-in `localTextFallback` setting re-enables local text
+  extraction for those types only. Temp files live under `<data>/attachments/<conversation>`
   and are deleted on conversation delete/Clear or swept after 7 days; files
   outside the working folder need per-file Allow once; non-vision models get a
   notice with a confirming "Switch model" button; logs keep name/type/size/SHA256

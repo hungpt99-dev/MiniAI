@@ -90,31 +90,41 @@
 - File types are detected by magic bytes + structure, never the extension:
   ZIP containers are opened (OOXML/ODF/EPUB/JAR classified by central
   directory), OLE2 by stream markers. Renamed executables reject even when
-  the extension claims otherwise; unknown types become reference-only,
-  never rejected. Details: `docs/attachments.md`.
+  the extension claims otherwise. Details: `docs/attachments.md`.
 - Rejected inline (never silent), with a specific reason: executables,
   installers, shortcuts and code packages (`exe elf macho msi lnk url scf
   appx jar apk` by content), empty files. Macros and encrypted files are
   accepted as reference-only with a visible warning — never opened or run.
-- Limits: max 5 files, 20MB per file, 200KB text truncation, 50MB total.
+  Types the active provider cannot read natively are refused with
+  "<provider> can't read .docx directly" (remove the file or switch model).
+- Limits: max 5 files, 20MB per file, 200KB text truncation, 50MB total,
+  plus each provider's own request-size cap (base64 adds ~33%).
 - Images are re-encoded via Electron `nativeImage` (no extra dependency):
   EXIF is stripped, orientation applied, longest edge capped at 2048px.
   Outside Electron (fallback) the original bytes are kept with JPEG EXIF
   stripped only — PNG/WebP/GIF metadata is retained and no resize applies.
   Text is decoded with UTF-8/UTF-16 BOM handling.
+- Images and PDFs are sent to the active provider NATIVELY as its own
+  image/document input (original bytes — no OCR, no local text
+  extraction). File bytes therefore leave the machine: first use per
+  provider shows the tray notice "Sent to <provider> when you press
+  Enter" (dismissible per provider). An opt-in Settings fallback
+  (`localTextFallback`, default off) re-enables local text extraction for
+  provider-unsupported types only, labelled "text extracted locally".
 - Attached paths go through the same realpath + allowed/protected policy as
   agent tools: outside-root files need per-file "Allow once", protected or
   symlink-escaping paths are refused ("Remove"). Attachment reads never grant
   permission; writes still need approval with the exact path.
 - Attachment content is untrusted data (delimited, system-prompt rule, and
-  "Requested after reading \<name\>" on follow-up approvals). Extracted
-  document text counts too; embedded images are ignored, macros never run.
-  Tray text shows
+  "Requested after reading \<name\>" on follow-up approvals). Native
+  document bytes count too; macros are never run and encrypted files are
+  never opened. Tray text shows
   "Attachment text may contain secrets — confirm before sharing."
 - Temp files live in `<data>/attachments/<conversationId>` with safe names and are
   deleted on conversation delete/Clear, plus a 7-day orphan sweep. Run logs keep
-  name/type/size/SHA256 only — never bytes. First use shows
-  "Attachments stay on this computer … (localhost processing)".
+  name/type/size/SHA256 only — never bytes, never base64. Attachments send on
+  the first turn only; a temp file deleted before sending becomes an
+  "attachment no longer available" note while the rest sends normally.
 
 ## Ask-mode read-only guarantee
 

@@ -1,5 +1,6 @@
 /** Attachment detection: WHAT is this file (magic bytes + structure, never the extension).
  * Main-process only (needs Buffer/zlib for container inspection). */
+import { decodeAttachmentText } from './decode';
 
 export type AttachKind =
   | 'empty' | 'text' | 'rtf'
@@ -24,6 +25,8 @@ export interface Detection {
   /** Human evidence for the Details toggle (never file content). */
   evidence: string;
   confidence: 'high' | 'medium' | 'low';
+  /** Detected text encoding for kind 'text' (shown on the chip tooltip). */
+  encoding?: string;
 }
 
 /** Safety limits for container inspection (constants, tested). */
@@ -277,29 +280,36 @@ function isUtf16Text(sample: Buffer): boolean {
 
 function classifyText(buf: Buffer): Detection | null {
   if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
-    return { kind: 'text', mime: MIME.text, flags: [], evidence: 'UTF-8 BOM', confidence: 'high' };
+    return { kind: 'text', mime: MIME.text, flags: [], evidence: 'UTF-8 BOM', confidence: 'high', encoding: 'UTF-8 BOM' };
   }
   if (buf.length >= 2 && ((buf[0] === 0xff && buf[1] === 0xfe) || (buf[0] === 0xfe && buf[1] === 0xff))) {
-    return { kind: 'text', mime: MIME.text, flags: [], evidence: 'UTF-16 BOM', confidence: 'high' };
+    return { kind: 'text', mime: MIME.text, flags: [], evidence: 'UTF-16 BOM', confidence: 'high', encoding: buf[0] === 0xff ? 'UTF-16 LE' : 'UTF-16 BE' };
   }
   const sample = buf.subarray(0, Math.min(buf.length, ZIP_LIMITS.headScanBytes));
   const head = sample.toString('utf8');
   const firstLine = head.split(/\r?\n/, 1)[0].trim();
   if (firstLine === '[InternetShortcut]') return mk('url', undefined, [], 'INI [InternetShortcut] header');
   if (firstLine === '[Shell]') return mk('scf', undefined, [], 'INI [Shell] header');
-  if (isUtf16Text(sample)) return { kind: 'text', mime: MIME.text, flags: [], evidence: 'UTF-16 pattern, no BOM', confidence: 'medium' };
+  if (isUtf16Text(sample)) return { kind: 'text', mime: MIME.text, flags: [], evidence: 'UTF-16 pattern, no BOM', confidence: 'medium', encoding: 'UTF-16' };
   try {
     new TextDecoder('utf-8', { fatal: true }).decode(sample);
-    if (!sample.includes(0)) return { kind: 'text', mime: MIME.text, flags: [], evidence: 'valid UTF-8, no NUL bytes', confidence: 'medium' };
+    if (!sample.includes(0)) return { kind: 'text', mime: MIME.text, flags: [], evidence: 'valid UTF-8, no NUL bytes', confidence: 'medium', encoding: 'UTF-8' };
   } catch { /* not strict UTF-8 */ }
   let printable = 0;
   for (let i = 0; i < sample.length; i++) {
     const c = sample[i];
-    if (c === 9 || c === 10 || c === 13 || (c >= 32 && c < 127)) printable++;
+    // why: tabs/CRLF/FF allowed; long lines and ;/tab separators never disqualify.
+    if (c === 9 || c === 10 || c === 12 || c === 13 || (c >= 32 && c < 127) || c >= 0xa0) printable++;
   }
   if (sample.length > 0 && printable / sample.length > 0.85) {
-    return { kind: 'text', mime: MIME.text, flags: [], evidence: 'printable ASCII heuristic', confidence: 'medium' };
+    return { kind: 'text', mime: MIME.text, flags: [], evidence: 'printable bytes heuristic', confidence: 'medium', encoding: 'Windows-1252' };
   }
+  // Legacy multibyte encodings (Shift-JIS/GBK/EUC-KR/...) fail strict UTF-8
+  // but decode cleanly with their own label — never call them binary.
+  try {
+    const dec = decodeAttachmentText(buf.subarray(0, Math.min(buf.length, 65536)));
+    if (dec && dec.text.trim()) return { kind: 'text', mime: MIME.text, flags: [], evidence: `decoded as ${dec.encoding}`, confidence: dec.confidence, encoding: dec.encoding };
+  } catch { /* decoder never breaks detection */ }
   return null;
 }
 

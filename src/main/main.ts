@@ -18,10 +18,10 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
 app.setName('Nexio');
 
-app.on('second-instance', () => togglePopup());
+app.on('second-instance', () => togglePopup('second-instance'));
 
 function showAndOpen(view: 'settings' | 'log'): void {
-  togglePopup();
+  togglePopup('tray');
   const w = getPopup();
   try { w?.webContents.send(IpcChannels.ui, { open: view }); } catch { /* not ready */ }
 }
@@ -100,7 +100,7 @@ async function startup(): Promise<void> {
   try {
     if (getSettings(db).launchAtLogin === true) applyLaunchAtLogin();
   } catch { /* db not ready */ }
-  refreshToggleHotkey(() => togglePopup());
+  refreshToggleHotkey(() => togglePopup('hotkey'));
   // Sleep marks mid-stream tasks interrupted (Retry in Tasks); resume repaints.
   try {
     powerMonitor.on('suspend', () => {

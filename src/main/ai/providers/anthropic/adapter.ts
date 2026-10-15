@@ -3,6 +3,7 @@ import { stripTrailingSlash } from '../base';
 import { capabilitiesFor } from './capabilities';
 import { parseError } from './errors';
 import { assertVision, toAnthropicContent } from '../vision';
+import { assertAttachments, getAttachmentCapabilities } from '../attachments';
 
 const BASE = 'https://api.anthropic.com';
 const VERSION = '2023-06-01';
@@ -19,6 +20,7 @@ export const anthropicAdapter: ProviderAdapter = {
   buildRequest(model, req: NormalizedRequest, baseUrl?: string) {
     const caps = capabilitiesFor(model);
     assertVision(req, caps);
+    assertAttachments(req, getAttachmentCapabilities('anthropic', model, caps));
     const systemParts: string[] = [];
     for (const m of req.messages) {
       if (m.role !== 'system') continue;

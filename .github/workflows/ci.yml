@@ -55,3 +55,5 @@ jobs:
       - run: npm run build
       - run: npm run smoke
         timeout-minutes: 5
+      - run: node e2e/visibility-copy.js
+        timeout-minutes: 5

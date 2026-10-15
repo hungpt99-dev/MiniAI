@@ -24,6 +24,7 @@ export const DEFAULT_SETTINGS: Settings = {
   temperature: 0.7,
   sendTemperature: true,
   compatibleImages: 'auto',
+  localTextFallback: false,
   theme: 'light',
   hotkey: 'Alt+Space',
   mode: 'agent',
@@ -49,6 +50,8 @@ export const DEFAULT_SETTINGS: Settings = {
   onboarded: false,
   suggestions: [...DEFAULT_SUGGESTIONS],
   launchAtLogin: false,
+  hideOnBlur: true,
+  compactSpacing: false,
   locale: 'system',
   taskMaxParallel: 2,
   taskMaxQueued: 20,
@@ -71,6 +74,7 @@ export function validateSettings(s: Partial<Settings>): string[] {
   if (s.temperature !== undefined && (typeof s.temperature !== 'number' || s.temperature < 0 || s.temperature > 2)) errors.push('temperature must be 0..2');
   if (s.sendTemperature !== undefined && typeof s.sendTemperature !== 'boolean') errors.push('sendTemperature must be boolean');
   if (s.compatibleImages !== undefined && s.compatibleImages !== 'auto' && s.compatibleImages !== 'on' && s.compatibleImages !== 'off') errors.push('compatibleImages must be auto, on or off');
+  if (s.localTextFallback !== undefined && typeof s.localTextFallback !== 'boolean') errors.push('localTextFallback must be boolean');
   if (s.theme !== undefined && s.theme !== 'light' && s.theme !== 'dark') errors.push('theme must be light or dark');
   if (s.mode !== undefined && !MODES.includes(s.mode)) errors.push('mode must be chat or agent');
   if (s.modeHotkey !== undefined && (typeof s.modeHotkey !== 'string' || !HOTKEY_RE.test(s.modeHotkey))) errors.push('modeHotkey must match letters/digits joined by + (e.g. Alt+M)');
@@ -105,6 +109,8 @@ export function validateSettings(s: Partial<Settings>): string[] {
     !Object.values(s.askReadNoticeDismissed).every((v) => typeof v === 'boolean'))) errors.push('askReadNoticeDismissed must be a map of booleans');
   if (s.suggestions !== undefined && (!Array.isArray(s.suggestions) || s.suggestions.length > 8 || !s.suggestions.every((x) => typeof x === 'string' && x.trim()))) errors.push('suggestions must be up to 8 non-empty strings');
   if (s.launchAtLogin !== undefined && typeof s.launchAtLogin !== 'boolean') errors.push('launchAtLogin must be boolean');
+  if (s.hideOnBlur !== undefined && typeof s.hideOnBlur !== 'boolean') errors.push('hideOnBlur must be boolean');
+  if (s.compactSpacing !== undefined && typeof s.compactSpacing !== 'boolean') errors.push('compactSpacing must be boolean');
   if (s.locale !== undefined && (typeof s.locale !== 'string' || !s.locale.trim() || s.locale.length > 20)) errors.push('locale must be a BCP-47 tag or "system"');
   if (s.taskMaxParallel !== undefined && (typeof s.taskMaxParallel !== 'number' || s.taskMaxParallel < 1 || s.taskMaxParallel > 4)) errors.push('taskMaxParallel must be 1..4');
   if (s.taskMaxQueued !== undefined && (typeof s.taskMaxQueued !== 'number' || s.taskMaxQueued < 1 || s.taskMaxQueued > 100)) errors.push('taskMaxQueued must be 1..100');

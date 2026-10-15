@@ -12,6 +12,7 @@ import {
   normalizeAndResolve,
 } from '../agent/permissions';
 import { platform } from '../platform/index';
+import { show as visShow, markDialogClosed } from './window-visibility';
 
 // Native dialogs and shell opens steal focus from the popup, whose blur
 // handler hides the window on focus loss. Everything native runs inside
@@ -60,6 +61,7 @@ export async function withDialogLock<T>(
   } finally {
     lockCount = Math.max(0, lockCount - 1);
     lastClosedAt = Date.now();
+    markDialogClosed();
   }
 }
 
@@ -138,8 +140,7 @@ function refocusPopup(win: BrowserWindow | null | undefined): void {
   setImmediate(() => {
     try {
       if (w.isDestroyed()) return;
-      if (!w.isVisible()) w.show();
-      w.focus();
+      visShow('dialog', w as never);
       w.webContents.send(IpcChannels.popupShown);
     } catch { /* window gone mid-refocus */ }
   });

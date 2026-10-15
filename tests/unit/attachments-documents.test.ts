@@ -305,20 +305,33 @@ describe('send path: prepareAttachments end to end', () => {
     allowedRoots: [cwd], explicitRoots: [] as string[], alwaysAllow: [] as never[],
     requireApprovalForWrites: true, homeDir: os.homedir(),
   });
-  it('attaches SHDS-CV-PhamThanhHung.docx with extracted text (Unicode-safe name)', async () => {
+  it('attaches SHDS-CV-PhamThanhHung.docx with extracted text only under the opt-in fallback (Unicode-safe name)', async () => {
     const { prepareAttachments } = await import('../../src/main/ipc');
     const out = prepareAttachments('conv1', [{
       name: 'SHDS-CV-PhamThanhHung.docx',
       dataBase64: docxBuf([{ name: 'word/media/image1.png', data: Buffer.alloc(10) }]).toString('base64'),
-    }], dir, ctxOf(dir));
+    }], dir, ctxOf(dir), { provider: 'openai', localTextFallback: true });
     expect(out.length).toBe(1);
     expect(out[0].part.type).toBe('file_ref');
     const text = (out[0].part as { text: string }).text;
     expect(text).toMatch(/Curriculum Vitae/);
     expect(text).toMatch(/Pham Thanh Hung, senior engineer/);
     expect(text).toMatch(/\[Extracted from SHDS-CV-PhamThanhHung.docx \(docx\)\]/);
+    expect(text).toMatch(/text extracted locally/);
     expect(out[0].ref.kind).toBe('text');
-    expect(out[0].ref.name).toBe('SHDS-CV-PhamThanhHung.docx');
+    expect(out[0].ref.name).toMatch(/\.docx$/);
+    expect(out[0].log.name).toBe('SHDS-CV-PhamThanhHung.docx');
+  });
+  it('refuses .docx by default: provider unsupported notice, bytes never extracted', async () => {
+    const { prepareAttachments } = await import('../../src/main/ipc');
+    let err = '';
+    try {
+      prepareAttachments('conv1', [{
+        name: 'SHDS-CV-PhamThanhHung.docx',
+        dataBase64: docxBuf().toString('base64'),
+      }], dir, ctxOf(dir), { provider: 'anthropic' });
+    } catch (e) { err = (e as Error).message; }
+    expect(err).toBe("Anthropic can't read .docx directly");
   });
   it('rejects a renamed exe with the specific executable message', async () => {
     const { prepareAttachments } = await import('../../src/main/ipc');
@@ -352,7 +365,7 @@ describe('send path: prepareAttachments end to end', () => {
     __resetAttachmentRefsForTests();
     const out = prepareAttachments('run9', [{
       name: 'cv.docx', dataBase64: docxBuf().toString('base64'),
-    }], dir, ctxOf(dir));
+    }], dir, ctxOf(dir), { provider: 'openai', localTextFallback: true });
     registerRunAttachments('run9', out.map((p) => p.ref));
     const first = await attachmentReadTool.run({ runId: 'run9', id: out[0].ref.id, maxBytes: 20 }, { signal: new AbortController().signal, cwd: dir });
     expect(first.ok).toBe(true);
@@ -391,11 +404,15 @@ describe('renderer: chips, Details toggle, preview', () => {
   });
 });
 describe('classify pipeline', () => {
-  it('accepts a real docx for extraction, rejects a renamed exe specifically', () => {
-    const ok = classifyAttachment(docxBuf(), 'SHDS-CV-PhamThanhHung.docx');
+  it('extracts a real docx only under the opt-in fallback; default is provider-unsupported', () => {
+    const ok = classifyAttachment(docxBuf(), 'SHDS-CV-PhamThanhHung.docx', { localTextFallback: true, providerLabel: 'OpenAI' });
     expect(ok.decision.action).toBe('document_extract');
     expect(ok.extractedText).toMatch(/Curriculum Vitae/);
     expect(ok.mime).toMatch(/wordprocessingml/);
+    const def = classifyAttachment(docxBuf(), 'SHDS-CV-PhamThanhHung.docx', { providerLabel: 'OpenAI' });
+    expect(def.decision.action).toBe('reference_only');
+    expect(def.unsupportedType).toBe(true);
+    expect(def.docNote).toBe("OpenAI can't read .docx directly");
     const bad = classifyAttachment(Buffer.concat([Buffer.from('MZ'), Buffer.alloc(500)]), 'notes.docx');
     expect(bad.decision.action).toBe('reject');
     expect(bad.decision.rule).toBe('executable-deny');

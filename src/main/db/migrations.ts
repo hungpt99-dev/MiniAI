@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export function runMigrations(db: DatabaseSync): void {
   db.exec(`
@@ -11,7 +11,8 @@ export function runMigrations(db: DatabaseSync): void {
     );
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY, conversationId TEXT NOT NULL,
-      role TEXT NOT NULL, content TEXT NOT NULL, createdAt INTEGER NOT NULL
+      role TEXT NOT NULL, content TEXT NOT NULL, createdAt INTEGER NOT NULL,
+      mode TEXT, command TEXT, args TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversationId);
     CREATE TABLE IF NOT EXISTS templates (
@@ -39,4 +40,6 @@ export function runMigrations(db: DatabaseSync): void {
   if (!row) {
     db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)').run('schema_version', String(SCHEMA_VERSION));
   }
+  // why: stamp every fresh DB (file or :memory:) so the open-time guard can tell stale from current.
+  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 }

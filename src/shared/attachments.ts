@@ -98,6 +98,24 @@ export function safeName(name: string): string {
   return takeGraphemeSlice(base.replace(/[^\p{L}\p{N}.\-]+/gu, '_'), 80) || 'file';
 }
 
+/**
+ * Display name: exactly what the user attached (NFC, controls stripped,
+ * capped at 200 chars). Shown on chips, rows, requests, tools and logs —
+ * never altered, never underscored.
+ */
+export function displayName(name: string): string {
+  const base = String(name || 'file').split(/[\\/]/).pop() || 'file';
+  const clean = base.normalize('NFC').replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+  return takeGraphemeSlice(clean, 200) || 'file';
+}
+
+/** Lowercase file extension for storage names only (display keeps its own). */
+export function storageExt(name: string): string {
+  const base = String(name || '').split(/[\\/]/).pop() || '';
+  const m = /\.([A-Za-z0-9]{1,10})$/.exec(base);
+  return (m ? m[1] : 'bin').toLowerCase();
+}
+
 function takeGraphemeSlice(s: string, n: number): string {
   try {
     const Seg = (Intl as unknown as { Segmenter?: new (l?: string, o?: object) => { segment(x: string): Iterable<{ segment: string }> } }).Segmenter;
@@ -148,6 +166,42 @@ export function scanSecretsText(text: string): boolean {
   if (!text || text.length < 8) return false;
   const sample = text.length > 65536 ? text.slice(0, 65536) : text;
   return SECRET_RES.some((re) => re.test(sample));
+}
+
+/**
+ * Structure-based credential-file hint (language-independent): file names or
+ * first lines that look like cookie/token/credential exports. Always requires
+ * the one-click confirmation, in every language.
+ */
+export function looksLikeCredentialsFile(name: string, headText = ''): boolean {
+  const base = String(name || '').split(/[\\/]/).pop() || '';
+  if (/(^|[_.-])(cookies?|tokens?|credentials?)([_.-]|$)/i.test(base)) return true;
+  if (/\.(env|pem)$/i.test(base) || /(^|[_.-])id_rsa([_.-]|$)/i.test(base)) return true;
+  const head = String(headText || '').slice(0, 2000);
+  if (/#\s*Netscape\s+HTTP\s+Cookie\s+File/i.test(head)) return true;
+  if (/^\s*(Cookie|Set-Cookie)\s*:/im.test(head)) return true;
+  return false;
+}
+
+/**
+ * Mask matched secret values with ***, keeping the file useful.
+ * Returns the masked text, match count, and fraction of chars hidden.
+ */
+export function maskSecretsText(text: string): { masked: string; matches: number; hiddenRatio: number } {
+  let matches = 0;
+  let masked = String(text);
+  for (const re of SECRET_RES) {
+    const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');
+    masked = masked.replace(g, (m) => {
+      matches++;
+      // Keep a short recognizable head (e.g. "sk-abc…***") so the model can
+      // still tell values apart without seeing them.
+      const head = m.slice(0, Math.min(7, Math.max(1, Math.floor(m.length / 4))));
+      return `${head}***`;
+    });
+  }
+  const hidden = Math.max(0, text.length - masked.length + matches * 3);
+  return { masked, matches, hiddenRatio: text.length ? hidden / text.length : 0 };
 }
 
 /** Attachment count via Intl.PluralRules (no "(s)" concatenation). Caller localizes the nouns. */
