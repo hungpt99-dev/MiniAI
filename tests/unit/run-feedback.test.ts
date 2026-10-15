@@ -141,7 +141,7 @@ describe('footer states per task state (shell, single copy)', () => {
     expect(src).toContain('btnStop.title');
     expect(src).toContain('Stop (${stopLabel})');
     const c = css();
-    expect(c).toContain('#hints #btn-stop { width: auto; height: 28px;');
+    expect(c).toContain('#hints #btn-stop { width: auto; height: var(--control-h);');
     expect(c).toContain('1px solid var(--border)');
     expect(c).toContain('color: var(--danger)');
   });

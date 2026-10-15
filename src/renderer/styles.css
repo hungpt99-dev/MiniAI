@@ -16,10 +16,11 @@
   --popup-pad-x: 20px;
   --popup-pad-y: 12px;
   --popup-edge-y: 18px;
-  --popup-inset: 28px;
-  --popup-gap: 16px;
-  --row-h: 36px;
-  --list-pad-y: 12px;
+  --popup-inset: 16px;
+  --popup-gap: 10px;
+  --control-h: 32px;
+  --row-h: 34px;
+  --list-pad-y: 10px;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
@@ -48,8 +49,8 @@ button { font: inherit; }
 .btn-icon:hover { background: var(--hover); color: var(--text); }
 .btn svg, .btn-icon svg { width: 18px; height: 18px; flex: none; }
 
-/* bar: 18px top edge + 48px centered content + 16px to the divider */
-.bar { min-height: calc(48px + var(--popup-edge-y)); padding: var(--popup-edge-y) var(--popup-inset) var(--popup-gap); display: flex; align-items: center; gap: 14px; flex: none; }
+/* bar + footer: control-h + 2*inset = 64px, content centered; divider sits at the row boundary */
+.bar { min-height: calc(var(--control-h) + 2 * var(--popup-inset)); padding: var(--popup-inset); display: flex; align-items: center; gap: 12px; flex: none; }
 /* single-panel flow: bar + view + footer; .view is the ONLY scroller (cap 560 via main clamp) */
 .view { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; border-top: 1px solid var(--divider);
   /* why: cap the single scroller so the 560-clamped window never clips content */
@@ -67,7 +68,7 @@ button { font: inherit; }
 #run > #answer-meta { order: 2; }
 #run > .chips { order: 3; }
 #settings, #history, #extensions, #onboard { order: 2; }
-.bar.multiline { align-items: flex-start; padding: 18px var(--popup-pad-x); }
+.bar.multiline { align-items: flex-start; padding: var(--popup-inset); }
 .bar.multiline #search-icon { margin-top: 3px; }
 .bar.multiline #modebar { align-self: flex-start; }
 #input { flex: 1 1 auto; min-width: 220px; width: 100%; display: block; background: transparent; border: 0; outline: 0;
@@ -203,9 +204,10 @@ body.show-tabkey #modebar:not(.hidden) + #mode-hint { display: inline !important
 #answer-meta #actions #more-menu .menu-hint { margin-inline-start: auto; padding-inline-start: 12px; font-size: 12px;
   color: var(--muted); font-family: 'JetBrains Mono', monospace; }
 
-/* palette (list box at the view inset; rows bleed 14px past the text column) */
-#palette { display: flex; flex-direction: column; gap: 2px; padding-inline: 6px; margin: -8px 0; flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; overflow-y: overlay; scroll-padding-bottom: 4px; }
-#palette .item { display: flex; gap: 12px; align-items: center; padding-inline: 14px; cursor: pointer; }
+/* palette owns its inset/gap; rows bleed 12px past the text column so text shares the icon x */
+#palette { display: flex; flex-direction: column; gap: 2px; padding: var(--popup-gap) var(--popup-inset); margin: 0; flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; overflow-y: overlay; scrollbar-gutter: auto; scroll-padding-bottom: 4px; }
+.view:has(#palette:not(.hidden)) { padding: 0; }
+#palette .item { display: flex; gap: 12px; align-items: center; flex-wrap: nowrap; white-space: nowrap; padding-inline: 12px; cursor: pointer; }
 #palette .item b, #palette .item .cm { font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 500; flex: none;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-soft); }
 /* artboard-exact selected row: #23262E (shared pick-list highlight below) */
@@ -216,10 +218,10 @@ body.show-tabkey #modebar:not(.hidden) + #mode-hint { display: inline !important
 #palette .item.active .k { margin-inline-start: auto; }
 /* why: fixed 18px badge never grows the 28px row; flex centers it */
 #palette .k { height: 18px; display: inline-flex; align-items: center; }
-#palette .lb { font-size: 12px; color: var(--muted); margin-inline: -14px; padding: 6px 14px 2px; letter-spacing: .06em; font-weight: 500; }
+#palette .lb { font-size: 12px; color: var(--muted); margin-inline: -12px; padding: 6px 12px 2px; letter-spacing: .06em; font-weight: 500; }
 
-/* footer: 16px from the divider + 40px centered content + 18px bottom edge */
-#hints { display: flex; align-items: center; gap: 12px; min-height: calc(40px + var(--popup-gap) + var(--popup-edge-y)); padding: var(--popup-gap) var(--popup-inset) var(--popup-edge-y); font-size: 12px;
+/* footer: control-h + 2*inset = 64px, same height as header; divider at the row boundary */
+#hints { display: flex; align-items: center; gap: 12px; min-height: calc(var(--control-h) + 2 * var(--popup-inset)); padding: var(--popup-inset); font-size: 12px;
   line-height: 1; color: var(--muted); white-space: nowrap; border-top: 1px solid var(--divider); flex: none; }
 #hints .f-hints { display: flex; align-items: center; gap: 14px; min-width: 0; overflow: hidden; }
 #hints .f-actions { margin-inline-start: auto; display: flex; align-items: center; gap: 4px; flex: none; }
@@ -234,7 +236,7 @@ body.show-tabkey #modebar:not(.hidden) + #mode-hint { display: inline !important
   border-radius: 999px; background: var(--surface); color: var(--text-soft); font-size: 12px; flex: none; }
 #hints .badge svg { width: 12px; height: 12px; flex: none; }
 #hints .f-sep { width: 1px; height: 14px; background: var(--divider); flex: none; }
-#hints .fbtn { flex: none; width: 32px; height: 32px; display: grid; place-items: center;
+#hints .fbtn { flex: none; width: var(--control-h); height: var(--control-h); display: grid; place-items: center;
   border: 0; background: transparent; color: var(--muted); border-radius: 9px;
   cursor: pointer; font-size: 13px; line-height: 1; padding: 0; font-family: inherit;
   transition: background-color 120ms; }
@@ -364,8 +366,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* footer agent bits */
 #fbtn-stop, #btn-stop { color: var(--danger); }
 #hints .fbtn.danger { color: var(--danger); }
-/* running-state Stop: ghost button, danger text, bordered, 28px */
-#hints #btn-stop { width: auto; height: 28px; padding: 0 10px; font-size: 12px;
+/* running-state Stop: ghost button, danger text, bordered, control-h */
+#hints #btn-stop { width: auto; height: var(--control-h); padding: 0 10px; font-size: 12px;
   background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--danger); }
 #hints #btn-stop:hover { background: var(--hover); color: var(--danger); }
 #hints .fbtn.textbtn { width: auto; padding: 0 10px; font-size: 12px; }
@@ -422,7 +424,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .mem-kinds-block { padding: 0 2px; }
 .mem-kinds-block > .flab { display: block; font-size: 12px; color: var(--muted); font-weight: 500; }
 /* footer run chip: one inline row (dot + label), centered with the icon buttons */
-#btn-runview { height: 28px; width: auto; padding: 0 10px; border-radius: 999px;
+#btn-runview { height: var(--control-h); width: auto; padding: 0 10px; border-radius: 999px;
   display: inline-flex; align-items: center;
   background: var(--surface); border: 1px solid var(--border); font-size: 12px;
   color: var(--text-soft); gap: 6px; margin-right: 8px; font-family: inherit; white-space: nowrap; }
@@ -502,12 +504,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .chip { background: var(--surface); border: 1px solid var(--border); color: var(--text-soft);
   border-radius: 10px; padding: 6px 12px; font-size: 13px; cursor: pointer; font-family: inherit; }
 .chip:hover { background: var(--hover); }
-#suggest { margin: -12px 0 0; padding: var(--list-pad-y) var(--popup-inset); display: flex; flex-direction: column; gap: 2px; }
-#suggest .item { display: flex; gap: 14px; align-items: center; padding-inline: 14px; cursor: pointer; }
+#suggest { margin: 0; padding: var(--popup-gap) var(--popup-inset); display: flex; flex-direction: column; gap: 2px; }
+#suggest .item { display: flex; gap: 12px; align-items: center; flex-wrap: nowrap; white-space: nowrap; padding-inline: 12px; cursor: pointer; }
 #suggest .item span { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-soft); }
-/* shared pick-list vertical rhythm (palette + suggestions): rows bleed past the text column */
-#palette, #suggest { padding-block: var(--list-pad-y); }
-#palette .item, #suggest .item { margin-inline: -14px; padding-block: 4px; min-height: var(--row-h); line-height: 1.25; border-radius: 8px; }
+/* shared pick-list rhythm: rows bleed 12px past the text column so text shares the icon x */
+#palette, #suggest { padding-block: var(--popup-gap); }
+#palette .item, #suggest .item { margin-inline: -12px; padding-block: 4px; min-height: 34px; line-height: 1.25; border-radius: 8px; font-weight: 500; }
 /* shared pick-list highlight: palette and suggestions select the same way */
 #palette .item.active, #palette .item:hover, #suggest .item:hover { background: #23262E; }
 #suggest .item:hover span { color: var(--accent); }
