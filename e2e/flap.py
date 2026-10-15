@@ -3,7 +3,7 @@ from pywinauto import keyboard
 from pywinauto.findwindows import find_elements
 
 def n():
-    return len(find_elements(title='MiniAI', top_level_only=True, backend='uia'))
+    return len(find_elements(title='Nexio', top_level_only=True, backend='uia'))
 print('start:', n())
 keyboard.send_keys('%x')
 for i in range(16):

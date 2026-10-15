@@ -9,7 +9,7 @@ async function main() {
   await new Promise((r) => { ws.onopen = r; });
   const send = (m, pr = {}) => new Promise((res, rej) => { const i = ++id; const to = setTimeout(() => rej(new Error('to ' + m)), 10000); pend.set(i, (x) => { clearTimeout(to); res(x); }); ws.send(JSON.stringify({ id: i, method: m, params: pr })); });
   const ev = async (e) => (await send('Runtime.evaluate', { expression: e, returnByValue: true, awaitPromise: true })).result.result.value;
-  console.log(await ev(`(async () => { const r = await (window.nexio||window.miniAI).slashResolve('/model', 'agent'); return JSON.stringify({found: r.found && r.found.trigger, scope: r.found && r.found.scope, sug: (r.suggestions||[]).length}); })()`));
+  console.log(await ev(`(async () => { const r = await (window.nexio).slashResolve('/model', 'agent'); return JSON.stringify({found: r.found && r.found.trigger, scope: r.found && r.found.scope, sug: (r.suggestions||[]).length}); })()`));
   ws.close();
 }
 main().catch((e) => { console.error('FATAL', e.message); process.exit(1); });

@@ -31,7 +31,7 @@ async function main() {
   await sleep(600);
   console.log('ta-scroll:', await ev(`JSON.stringify({h: document.getElementById('input').style.height, sh: document.getElementById('input').scrollHeight, st: document.getElementById('input').scrollTop})`));
   // hover textarea via OS mouse for :hover thumb
-  console.log(await py("from pywinauto import mouse, Desktop\nfrom pywinauto.findwindows import find_elements\nels=find_elements(title='MiniAI',top_level_only=True,backend='uia')\nr=Desktop(backend='uia').window(handle=els[0].handle).rectangle()\nmouse.move(coords=(r.left+600, r.top+120))\nprint('hover-moved')"));
+  console.log(await py("from pywinauto import mouse, Desktop\nfrom pywinauto.findwindows import find_elements\nels=find_elements(title='Nexio',top_level_only=True,backend='uia')\nr=Desktop(backend='uia').window(handle=els[0].handle).rectangle()\nmouse.move(coords=(r.left+600, r.top+120))\nprint('hover-moved')"));
   await sleep(600);
   await show();
   await shot('sh-paste15');

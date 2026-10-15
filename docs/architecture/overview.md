@@ -114,13 +114,15 @@ See `docs/tasks.md` and `docs/adr/0007-task-queue.md`.
 ## Settings / storage
 
 SQLite `%APPDATA%/Nexio/nexio.db` (WAL), override `NEXIO_DATA_DIR`
-(`src/main/db/db.ts`). Legacy MiniAI paths (`.MiniAI` db files) are read
-in place, never moved. Tables: conversations, messages, templates, workflows,
-runs, secrets (safeStorage DPAPI/Keychain, XOR fallback warns only), settings
+(`src/main/db/db.ts`). Tables: conversations, messages, templates, workflows,
+runs, secrets (single `src/main/secrets/` module over safeStorage
+DPAPI/Keychain, refuses loudly without a backend), settings
 (key/value JSON, `validateSettings` + `updateSettings`). Removed external-runtime
 keys (`agentRuntime`, `agentBackend`, `engine`, `opencodeBaseUrl`, `claudeBin`,
 `codexBin`) fall back to built-in and are purged on read. Dev-only env fallback
-`${PROVIDER}_API_KEY`. MiniAIâ†’Nexio migration is DB-path only.
+`${PROVIDER}_API_KEY`. A key the OS store can no longer decrypt (new OS user,
+new machine, restored backup, deleted OS key) waits for re-entry while the
+rest of the app keeps working. See `docs/troubleshooting.md`.
 
 ## Platform
 

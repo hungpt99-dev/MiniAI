@@ -30,13 +30,17 @@ describe('tasks view: mounted once, single active view, footer in shell', () => 
     expect(src).toContain("const taskOpen = view === 'tasks';");
     expect(src).toContain("'palette', 'suggest', 'run', 'settings', 'history', 'extensions', 'memory', 'tasks', 'onboard'");
   });
-  it('footer: tasks button with badge + warn dot, queue hint, footer stays put', () => {
+  it('footer: tasks icon button with badge + warn dot, queue hint, footer stays put', () => {
     const h = html();
     expect(h).toContain('id="btn-tasks"');
     expect(h).toContain('id="task-badge"');
     expect(h).toContain('id="task-warn"');
     expect(h).toContain('id="hint-queue"');
     expect(h).toContain('data-i18n="footer.queue"');
+    // icon button between History and Settings: no text label in the footer
+    expect(h).not.toContain('task-label');
+    expect(h.indexOf('id="btn-tasks"')).toBeGreaterThan(h.indexOf('id="btn-history"'));
+    expect(h.indexOf('id="btn-tasks"')).toBeLessThan(h.indexOf('id="btn-settings"'));
     const src = appJs();
     expect(src).toContain('function paintTasksButton');
     expect(src).toContain("$('task-badge')");

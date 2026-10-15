@@ -140,14 +140,16 @@ describe('onboarding: one screen (provider + key)', () => {
     expect(src).not.toMatch(/textContent = .*ob-key.*value/);
     expect(src).not.toMatch(/innerHTML = .*ob-key.*value/);
   });
-  it('footer tasks button keeps its badge spans and repaints after locale apply', () => {
+  it('footer tasks icon button keeps its badge spans and repaints after locale apply', () => {
     const src = appJs();
     const html = read('src/renderer/index.html');
     const fn = src.slice(src.indexOf('function paintTasksButton()'), src.indexOf('function openTasksView()'));
     expect(fn).not.toContain("innerHTML = ''");
-    expect(fn).toContain('btn.insertBefore(span, btn.firstChild)');
+    // icon button: status goes to aria-label/title, never button text
+    expect(fn).not.toContain('task-label');
+    expect(fn).toContain("btn.setAttribute('aria-label'");
     expect(src).toContain('paintTasksButton(); } catch');
-    expect(html).toContain('class="task-label" data-i18n="tasks.title"');
+    expect(html).not.toContain('task-label');
     expect(html).toContain('id="task-badge"');
   });
 });

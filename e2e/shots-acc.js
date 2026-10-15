@@ -26,7 +26,7 @@ async function main() {
   await sleep(600);
   await shot('acc-idle');
   await show();
-  const para = 'MiniAI is a keyboard-first personal assistant for Windows. '.repeat(6).slice(0, 300);
+  const para = 'Nexio is a keyboard-first personal assistant for Windows. '.repeat(6).slice(0, 300);
   await send('Input.insertText', { text: para });
   await sleep(800);
   await show();

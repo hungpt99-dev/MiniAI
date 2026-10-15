@@ -95,9 +95,19 @@ button { font: inherit; }
 #modebar:hover + #mode-hint { display: inline !important; }
 body.show-tabkey #modebar:not(.hidden) + #mode-hint { display: inline !important; }
 
-/* result: single column 18/22 rhythm, 16 gap; meta row carries model left + actions right */
-#messages { display: flex; flex-direction: column; gap: 16px; padding: 18px 22px 0; }
+/* result: single column 18/22 rhythm, 20px between turns, 8px inside a turn; meta row carries model left + actions right */
+#messages { display: flex; flex-direction: column; gap: 20px; padding: 18px 22px 0; }
 #messages:empty { display: none; }
+#run { padding-top: 12px; } /* why: first turn never sits under the divider */
+.turn { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.mode-div { display: flex; align-items: center; gap: 12px; margin: 16px 0; }
+.mode-div .mode-line { flex: 1; height: 1px; background: var(--divider); }
+.mode-div .mode-text { font-size: 12px; font-weight: 400; color: var(--muted); white-space: nowrap; }
+.switch-do-row { margin-top: 8px; }
+#jump-latest { position: absolute; inset-inline-end: 14px; bottom: 60px; z-index: 6;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text-soft);
+  border-radius: 999px; padding: 6px 12px; font-size: 12px; cursor: pointer; font-family: inherit; }
+#jump-latest:hover { background: var(--hover); color: var(--text); }
 .msg { padding: 0; color: var(--text-body); white-space: pre-wrap; word-break: break-word; font-size: 15px; }
 .msg.user { display: flex; flex-direction: column; gap: 4px; color: var(--text-soft); }
 .you-label { font-size: 12px; font-weight: 500; color: var(--muted); }
@@ -123,17 +133,40 @@ body.show-tabkey #modebar:not(.hidden) + #mode-hint { display: inline !important
 .pre-copy { position: absolute; top: 8px; inset-inline-end: 8px; }
 .msg.streaming::after { content: ''; display: inline-block; width: 8px; height: 17px; background: var(--accent);
   margin-inline-start: 3px; vertical-align: -3px; border-radius: 2px; }
-/* answer meta row: model 12 muted with dot left, ghost actions right */
-#answer-meta { display: flex; gap: 12px; align-items: center; font-size: 12px; color: var(--muted);
-  padding: 12px 22px 18px; }
+/* answer meta row: one line, never wraps — model left, ghost actions right */
+#answer-meta { display: flex; align-items: center; gap: 8px; min-height: 32px; margin-top: 12px;
+  padding: 0 22px 16px; font-size: 12px; line-height: 1; color: var(--muted); }
+#answer-meta > * { white-space: nowrap; flex: none; }
 #answer-meta .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+#answer-meta #model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
+/* narrow: actions go icon-only first, then the model collapses to the dot */
+#answer-meta.minimal #model-name { display: none; }
 /* ghost row buttons: 28 high, no border, muted 12px, 14px icon; shared with code copy */
-#answer-meta #actions { display: flex; gap: 4px; margin-inline-start: auto; padding: 0; }
-#answer-meta #actions button, .pre-copy { min-height: 28px; display: inline-flex; align-items: center; gap: 6px;
+#answer-meta #actions { display: flex; gap: 2px; margin-inline-start: auto; padding: 0; }
+#answer-meta #actions button, .pre-copy { min-height: 28px; height: 28px; display: inline-flex; align-items: center; gap: 6px;
   background: transparent; border: 0; color: var(--muted); border-radius: 8px;
-  padding: 0 10px; font-size: 12px; cursor: pointer; font-family: inherit; }
-#answer-meta #actions button:hover, .pre-copy:hover { background: var(--hover); color: var(--text-soft); }
+  padding: 0 10px; font-size: 12px; line-height: 1; cursor: pointer; font-family: inherit; white-space: nowrap; }
+#answer-meta #actions button:hover, .pre-copy:hover { background: var(--hover); color: var(--text); }
+#answer-meta #actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #answer-meta #actions button svg, .pre-copy svg { width: 14px; height: 14px; flex: none; }
+#answer-meta #actions.compact button span { display: none; }
+#answer-meta #actions.compact button { width: 28px; padding: 0; justify-content: center; }
+#answer-meta .more-wrap { position: relative; display: inline-flex; flex: none; }
+#answer-meta #btn-more { width: 28px; padding: 0; justify-content: center; }
+/* More menu: under the button, right-aligned, flips up without room */
+#more-menu { position: absolute; top: calc(100% + 4px); inset-inline-end: 0; z-index: 30;
+  min-width: 220px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 4px; }
+#more-menu.flip { top: auto; bottom: calc(100% + 4px); }
+/* why: 3 IDs beat the 2-ID ghost-row rule above so items stack full-width */
+#answer-meta #actions #more-menu button { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px;
+  padding: 0 10px; border-radius: 8px; background: transparent; border: 0;
+  font-size: 13px; line-height: 1; color: var(--text-soft); cursor: pointer; font-family: inherit;
+  white-space: nowrap; text-align: start; }
+#answer-meta #actions #more-menu button:hover, #answer-meta #actions #more-menu button:focus-visible { background: var(--hover); color: var(--text); outline: none; }
+#answer-meta #actions #more-menu button svg { width: 14px; height: 14px; flex: none; }
+#answer-meta #actions #more-menu .menu-hint { margin-inline-start: auto; padding-inline-start: 12px; font-size: 12px;
+  color: var(--muted); font-family: 'JetBrains Mono', monospace; }
 
 /* palette (in-flow view section: no own border) */
 #palette { padding: 6px 8px 8px; }
@@ -152,7 +185,9 @@ body.show-tabkey #modebar:not(.hidden) + #mode-hint { display: inline !important
   line-height: 1; color: var(--muted); white-space: nowrap; border-top: 1px solid var(--divider); flex: none; }
 #hints .f-hints { display: flex; align-items: center; gap: 14px; min-width: 0; overflow: hidden; }
 #hints .f-actions { margin-inline-start: auto; display: flex; align-items: center; gap: 4px; flex: none; }
-#hints .hint { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+#hints .hint { display: inline-flex; align-items: center; gap: 6px; flex: none; white-space: nowrap; }
+/* crowded footer: hints hide from the right, never wrap (separate from state .hidden) */
+#hints .crowd-hide { display: none !important; }
 #hints #hint-nav { display: contents; }
 /* key cap: 20px, mono 11px, surface on border */
 #hints .k { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; font-size: 11px; border-radius: 6px; }
@@ -250,6 +285,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   white-space: pre-wrap; word-break: break-word; margin: 6px 0 2px; }
 .astep.stopped-row { color: var(--danger); }
 .astep.error-row { color: var(--danger); }
+/* silence watchdog rows: still-working hint + 60s error with retry */
+.astep.still-row .tx { color: var(--muted); }
+.astep .btn-stop-inline, .astep .btn-retry { flex: none; align-self: center; background: transparent;
+  border: 1px solid var(--border); border-radius: 8px; color: var(--text-soft); font-size: 12px;
+  padding: 3px 10px; cursor: pointer; font-family: inherit; margin-inline-start: 8px; }
+.astep .btn-stop-inline { color: var(--danger); }
+.astep .btn-stop-inline:hover, .astep .btn-retry:hover { background: var(--hover); color: var(--text); }
+.astep .btn-stop-inline:hover { color: var(--danger); }
+.astep.watchdog-row .tx .btn-retry { margin-inline-start: 8px; }
+.astep.watchdog-row .tx .show-out { margin-inline-start: 8px; }
 /* approval card */
 .appr { background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
   padding: 14px 16px; margin: 6px 0; }
@@ -281,6 +326,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* footer agent bits */
 #fbtn-stop, #btn-stop { color: var(--danger); }
 #hints .fbtn.danger { color: var(--danger); }
+/* running-state Stop: ghost button, danger text, bordered, 28px */
+#hints #btn-stop { width: auto; height: 28px; padding: 0 10px; font-size: 12px;
+  background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--danger); }
+#hints #btn-stop:hover { background: var(--hover); color: var(--danger); }
 #hints .fbtn.textbtn { width: auto; padding: 0 10px; font-size: 12px; }
 #stop-hint { display: inline-flex; gap: 3px; align-items: center; }
 /* settings agent lists */
@@ -601,11 +650,13 @@ button.abadge.muted:hover { color: var(--text); }
   border-radius: 12px; padding: 8px 12px; }
 #task-choice { display: flex; gap: 8px; padding: 0 22px 12px; flex-wrap: wrap; align-items: center; }
 #task-choice .task-dontask { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
-/* footer tasks button: count badge + warn dot */
+/* footer tasks button: icon with count badge + warn dot overlays */
+#btn-tasks { position: relative; }
 #btn-tasks.warn { color: var(--warn); }
-#task-badge { font-size: 11px; color: var(--text-soft); background: var(--surface);
-  border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; margin-inline-start: 4px; }
-#task-warn { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); flex: none; }
+#task-badge { position: absolute; top: -4px; inset-inline-end: -6px; font-size: 11px; color: var(--text-soft);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; }
+#task-warn { position: absolute; bottom: 2px; inset-inline-end: 2px; width: 7px; height: 7px;
+  border-radius: 50%; background: var(--warn); flex: none; }
 .runrow-sub { margin-inline-start: 16px; }
 /* i18n: CJK/Thai/Devanagari need taller lines; code/paths stay LTR. */
 .msg, .you-prompt, #input, .chip, #suggest .item span { line-height: 1.6; }

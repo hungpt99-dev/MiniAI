@@ -2,6 +2,8 @@
   "app.name": "Nexio",
   "mode.ask": "Hỏi",
   "mode.do": "Làm",
+  "mode.switchedDo": "Đã chuyển sang Làm",
+  "mode.switchedAsk": "Đã chuyển sang Hỏi",
   "composer.placeholder.ask": "Hỏi về tệp của bạn hoặc bất cứ gì…",
   "composer.placeholder.do": "Bạn muốn làm gì?",
   "composer.placeholder.settings": "Cài đặt",
@@ -30,6 +32,7 @@
   "answer.copyCode": "Sao chép khối mã",
   "answer.followup": "Hỏi tiếp",
   "answer.newchat": "Chat mới",
+  "answer.more": "Thao tác khác",
 
   "approval.deny": "Từ chối",
   "approval.allowOnce": "Cho phép một lần",

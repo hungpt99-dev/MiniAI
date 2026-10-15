@@ -151,8 +151,13 @@ describe('e2e-fake: fresh shows no Planning, slow run shows the chip', () => {
     expect(done).toContain('.plan-row');
     expect(done).toContain('remove()');
     expect(done).toContain('collapseSteps()');
-    const err = src.slice(src.indexOf("ev.type === 'error'"), src.indexOf("ev.type === 'error'") + 400);
+    const err = src.slice(src.indexOf("ev.type === 'error'"), src.indexOf("ev.type === 'error'") + 800);
+    expect(err).toContain('.plan-row');
+    expect(err).toContain('remove()');
+    expect(err).toContain('finalizeSpinners()');
+    expect(err).toContain('addErrorRow(');
     expect(err).toContain('expandSteps()');
+    expect(err).toContain('endAgentRun()');
     const stop = src.slice(src.indexOf("ev.type === 'stopped'"), src.indexOf("ev.type === 'stopped'") + 400);
     expect(stop).toContain('expandSteps()');
     const steps = src.slice(src.indexOf('function syncSteps'), src.indexOf('function renderRunChips'));

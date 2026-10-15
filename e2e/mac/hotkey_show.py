@@ -40,7 +40,7 @@ def n():
     lst = Quartz.CGWindowListCopyWindowInfo(
         Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
         Quartz.kCGNullWindowID)
-    return sum(1 for w in lst if str(w.get('kCGWindowName', '')) in ('Nexio', 'MiniAI'))
+    return sum(1 for w in lst if str(w.get('kCGWindowName', '')) in ('Nexio',))
 
 
 def post():

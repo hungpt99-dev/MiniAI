@@ -1,4 +1,4 @@
-// Zero-dep CDP driver for MiniAI popup (Node 22+: fetch + WebSocket global).
+// Zero-dep CDP driver for Nexio popup (Node 22+: fetch + WebSocket global).
 const CDP = 'http://127.0.0.1:9222/json';
 const ART = './artifacts-e2e';
 const fs = require('fs');

@@ -12,6 +12,8 @@ import type { Settings } from '../../shared/types';
 import type { HookRunner } from '../extensions/hooks';
 import type { ContentPart } from '../ai/providers/types';
 import { scanSecretsText } from '../../shared/attachments';
+import { toAppError, friendlyFor } from '../errors/app-error';
+import { isKnownProvider } from '../store/settings';
 
 /** Attachment refs prepared for a task (structural copy of the ipc-side record). */
 export interface TaskAttachmentRef {
@@ -71,6 +73,11 @@ export async function runScheduledTask(
 ): Promise<{ status: 'done' | 'failed' | 'stopped' | 'interrupted'; summary: string }> {
   const { settings: s } = env;
   const cwd = task.snapshot.workingFolder;
+  // why: snapshots outlive settings edits; an unknown stored provider fails
+  // here with setup guidance, never as adapter TypeError deep in the loop.
+  if (!isKnownProvider(task.snapshot.provider)) {
+    return { status: 'failed', summary: friendlyFor('PROVIDER_NOT_CONFIGURED').text };
+  }
   const runId = `taskrun-${task.id}-${Date.now().toString(36)}`;
   const state = { controller: new AbortController(), approvals: new Map<string, (o: ApprovalOutcome) => void>() };
   if (ctl.signal.aborted) return { status: 'stopped', summary: 'Stopped' };
@@ -174,7 +181,8 @@ export async function runScheduledTask(
   } catch (e) {
     if ((e as { name?: string })?.name === 'TaskParkedError') throw new TaskParked((e as Error).message.replace(/^task-parked:\s*/, ''));
     if (state.controller.signal.aborted || ctl.signal.aborted) return { status: 'stopped', summary: 'Stopped' };
-    const msg = (e as Error)?.message || String(e);
+    const app = toAppError(e);
+    const msg = app.friendly;
     env.recordRun({
       runId, kind: 'agent', prompt: task.prompt, outcome: msg.slice(0, 160),
       status: 'error', undoable: false, taskId: task.id, parentId: task.parentId, origin: task.origin,

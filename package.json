@@ -17,6 +17,8 @@
     "assets:check": "node scripts/check-assets.mjs",
     "e2e": "node e2e/suite.js",
     "e2e:trash": "node e2e/trash-verify.js",
+    "check:no-fakes": "node scripts/check-no-fakes.mjs",
+    "smoke": "node e2e/smoke-hello.js",
     "dist": "npm run build:main && npm run build:renderer && electron-builder",
     "typecheck": "tsc -p tsconfig.main.json --noEmit"
   },

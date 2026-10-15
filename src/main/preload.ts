@@ -21,7 +21,7 @@ export interface SendOpts {
 // why: raw chat + upsertTemplate stay main-only — the renderer sends via
 // send() (intent routing + attachments) and never edits templates, so they
 // get no bridge surface; their handlers remain for the startup assert.
-function isIpcError(v: unknown): v is { ok: false; code: string; message: string } {
+function isIpcError(v: unknown): v is { ok: false; code: string; message: string; appCode?: string; technical?: string; action?: string } {
   return (
     !!v && typeof v === 'object' &&
     (v as { ok?: unknown }).ok === false &&
@@ -43,7 +43,14 @@ async function invoke(channel: string, ...args: unknown[]): Promise<any> {
     }
     throw e;
   }
-  if (isIpcError(raw)) throw Object.assign(new Error(raw.message), { code: raw.code });
+  if (isIpcError(raw)) {
+    const err = new Error(raw.message) as Error & { code: string; appCode?: string; technical?: string; action?: string };
+    err.code = raw.code;
+    if (raw.appCode) err.appCode = raw.appCode;
+    if (raw.technical) err.technical = raw.technical;
+    if (raw.action) err.action = raw.action;
+    throw err;
+  }
   return raw;
 }
 
@@ -52,6 +59,8 @@ const api = {
   setSettings: (patch: Partial<Settings>) => invoke(IpcChannels.setSettings, patch),
   setApiKey: (provider: string, key: string) => invoke(IpcChannels.setApiKey, provider, key),
   isEncryptionAvailable: (): Promise<boolean> => invoke(IpcChannels.isEncryptionAvailable),
+  secretsStatus: (): Promise<{ available: boolean; backend: string; ready: boolean; roundTrip: 'ok' | 'failed' | 'skipped'; reentry: string[] }> =>
+    invoke(IpcChannels.secretsStatus),
   testConnectivity: (provider: string, model: string, baseUrl?: string, apiKey?: string) =>
     invoke(IpcChannels.testConnectivity, provider, model, baseUrl, apiKey),
   listModels: (provider: string, baseUrl?: string) =>

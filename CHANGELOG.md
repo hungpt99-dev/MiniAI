@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Multi-turn conversations build one correct provider request per turn
+  (`buildAgentMessages`: system + full thread in order + the new user message
+  once, last; oldest turns drop first). Follow-ups continue the same thread;
+  spawns/queues stay isolated. The run view groups turns ({ You, answer },
+  windowed at 100), shows the Switch-to-Do chip only for Ask answers that
+  plausibly wanted a file action, auto-scrolls unless the reader scrolled up
+  (Jump to latest), keeps answer actions under the last answer (hover/focus
+  for earlier ones), and marks mode switches with a divider.
+
+- Failed runs now end cleanly: every exception becomes one friendly terminal
+  error (Retry + Details toggle with redacted technical text, Open Settings
+  for key/provider errors) with all spinners stopped and footer Retry +
+  Esc-clear. A saved API key the OS store can no longer decrypt no longer
+  leaves a spinning "Planning..." next to a raw decrypt string: the run ends
+  at once with "Nexio could not unlock your saved API key. Enter it again in
+  Settings." Secrets live behind one module (`src/main/secrets/`, v2
+  envelope, atomic writes, never-throw reads, no silent plaintext); startup
+  marks undecryptable blobs for re-entry. See `docs/troubleshooting.md`.
+
 - Onboarding is now a single screen: provider tabs + one 44px API key
   field (inside eye toggle and Test button, per-provider placeholder,
   encrypted-device helper with key-page link, idle/loading/success/error

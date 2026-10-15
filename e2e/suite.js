@@ -27,7 +27,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let id = 0;
 const VIS_PY = IS_MAC
   ? "exec(open('e2e/mac/vis.py').read())"
-  : "from pywinauto.findwindows import find_elements\nprint('N:'+str(len(find_elements(title='Nexio',top_level_only=True,backend='uia')+find_elements(title='MiniAI',top_level_only=True,backend='uia'))))";
+  : "from pywinauto.findwindows import find_elements\nprint('N:'+str(len(find_elements(title='Nexio',top_level_only=True,backend='uia'))))";
 // Windows: pywinauto send-keys (%{SPACE}, %x). macOS: keyspec for e2e/mac/hotkey_show.py.
 const HOTKEY_FOR = IS_MAC
   ? (hk) => String(hk || 'Alt+Space').toLowerCase().split('+').map((p) => p.trim()).filter(Boolean).join('+')

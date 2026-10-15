@@ -43,8 +43,11 @@ Settings live in the app SQLite DB (`getSettings`/`updateSettings` in
 | `suggestions` | 4 builtins | Up to 8 starter-suggestion lines. |
 | `onboarded` | `false` | First-run onboarding flag. |
 
-Provider keys live in the OS store (DPAPI/Keychain) via `safeStorage`, never
-in settings. `${PROVIDER}_API_KEY` env fallback is dev-only.
+Provider keys live in the OS store (DPAPI/Keychain) through the single
+`src/main/secrets/` module, never in settings. `${PROVIDER}_API_KEY` env
+fallback is dev-only. A key the OS store can no longer decrypt is reported
+for re-entry (Settings notice + friendly run error) instead of failing raw;
+see `docs/troubleshooting.md`.
 
 Provider request/response code lives in `src/main/ai/providers/<id>/`
 (`adapter.ts`, `capabilities.ts`, `errors.ts`); the Test button uses unsaved

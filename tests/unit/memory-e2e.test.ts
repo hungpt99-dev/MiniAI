@@ -107,6 +107,8 @@ beforeAll(() => {
   registerIpc();
   const db = (globalThis as unknown as { __nexioDb: Parameters<typeof updateSettings>[0] }).__nexioDb;
   updateSettings(db, { memoryEnabled: true, agentCwd: sandbox, model: 'gpt-4o-mini' });
+  // runs fail fast without a stored provider key; one file key for all sends.
+  setSecret(db, apiKeyService('openai'), 'k');
   conv = createConversation(db, 'e2e').id;
 });
 
@@ -115,6 +117,8 @@ function db() {
 }
 function send(text: string, opts: Record<string, unknown> = {}) {
   pushes = [];
+  // runs need a stored provider key (real handler now fails fast without one)
+  setSecret(db(), apiKeyService('openai'), 'k');
   return listenerFor(IpcChannels.send)({ sender }, conv, text, { explicit: true, ...opts });
 }
 
@@ -242,6 +246,9 @@ describe('memory end-to-end through the real send handler', () => {
     addMessage(db(), conv, 'user', 'my first request about invoices');
     addMessage(db(), conv, 'assistant', 'ok');
     toolQueue.push(finalTurn('done here'));
+    // a stored key enables the one-tap classifier: it runs before the run and
+    // consumes the first scripted SSE (valid none-json keeps behavior unchanged)
+    sseQueue.push(sseTurn(['{"intent":"none","text":"","kind":"fact","language":"en"}']));
     sseQueue.push(sseTurn(['I prefer PDF exports\n', 'Dark theme everywhere\n']));
     const p = listenerFor(IpcChannels.send)({ sender }, conv, 'one more invoice question', { explicit: true, mode: 'agent' });
     await p;
@@ -290,8 +297,7 @@ describe('memory recall: names across conversations', () => {
   it('K. statement fires one-tap via classifier, never auto-saves', async () => {
     resetFetch();
     setSecret(db(), apiKeyService('openai'), 'k');
-    try {
-      const before = countMemories(db());
+    const before = countMemories(db());
       sseQueue.push(sseTurn(['{"intent":"remember","text":"Your name is Pham Thanh Hung","kind":"fact","language":"en","pin":true}']));
       toolQueue.push(finalTurn('Nice to meet you!'));
       await send('my name is Pham Thanh Hung', { mode: 'chat' });
@@ -302,9 +308,7 @@ describe('memory recall: names across conversations', () => {
       expect(one?.event.lang).toBe('en');
       expect(countMemories(db())).toBe(before); // row shown, nothing stored
       expect(memEvents().some((e) => e.event.type === 'saved')).toBe(false);
-    } finally {
-      deleteSecret(db(), apiKeyService('openai'));
-    }
+      setSecret(db(), apiKeyService('openai'), 'k'); // file key restored for later tests
   });
   it('L. Save stores a pinned fact; new chat recalls it with Used 1 memory', async () => {
     const saved = await memSave({ action: 'save', kind: 'fact', text: 'Your name is Pham Thanh Hung', pinned: true, source: 'user_approved' });
@@ -338,15 +342,19 @@ describe('memory recall: names across conversations', () => {
   });
   it('N. prompt carries the honesty rule in both modes', async () => {
     resetFetch();
+    sseQueue.push(sseTurn(['{"intent":"none","text":"","kind":"fact","language":"en"}']));
     toolQueue.push(finalTurn('ok'));
     pushes = [];
     await send('hello there', { mode: 'agent' });
-    expect(JSON.stringify(bodies[0])).toMatch(/Never say you will remember/);
+    const agentBody = JSON.stringify(bodies.find((b: any) => !(b as any).stream));
+    expect(agentBody).toMatch(/Never say you will remember/);
     resetFetch();
+    sseQueue.push(sseTurn(['{"intent":"none","text":"","kind":"fact","language":"en"}']));
     toolQueue.push(finalTurn('ok'));
     pushes = [];
     await send('hello there', { mode: 'chat' });
-    expect(JSON.stringify(bodies[0])).toMatch(/Never say you will remember/);
+    const chatBody = JSON.stringify(bodies.find((b: any) => !(b as any).stream));
+    expect(chatBody).toMatch(/Never say you will remember/);
   });
   it('O. lying reply saves nothing and pushes no saved row', async () => {
     resetFetch();

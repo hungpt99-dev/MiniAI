@@ -9,6 +9,7 @@ import { confirmQuitWithTasks, resetDialogLock } from './app/dialogs';
 import { createTray } from './tray';
 import { registerIpc, refreshToggleHotkey, applyLaunchAtLogin } from './ipc';
 import { getScheduler, interruptTasksForQuit, runningTaskCount } from './tasks/taskHost';
+import { markSecretsReady, scanForReentry } from './secrets/index';
 import { extService, shutdownExtensions } from './extensions/index';
 import { platform } from './platform/index';
 import { IpcChannels } from '../shared/ipc-channels';
@@ -67,6 +68,15 @@ async function startup(): Promise<void> {
   const db = getDb();
   (globalThis as unknown as { __nexioDb: unknown }).__nexioDb = db;
   seedBuiltins(db);
+  // Secrets after ready: self-check + mark stored blobs the OS store can no
+  // longer decrypt (ids only, never values). Secrets never break startup.
+  markSecretsReady();
+  try {
+    const reentry = scanForReentry(db);
+    if (reentry.length > 0) {
+      console.warn(`[Nexio] secrets need re-entry: ${reentry.join(',')}`);
+    }
+  } catch { /* secrets never break startup */ }
   // Locale before any user-facing string: settings value, else OS locale.
   try {
     const s = getSettings(db);

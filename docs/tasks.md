@@ -23,7 +23,11 @@ later, and let the agent split large jobs into subtasks.
 - Slashes (before the router): `/spawn <text>`, `/queue <text>`, `/tasks`,
   `/cancel <n>` (n-th live row), `/clear-queue` (asks first).
 - Under an answer: "Run as separate task" and "Add to queue" re-send the prompt.
-- Footer hints: `[Enter] run`, `[Ctrl+Enter] queue`.
+- Footer hints depend on state: idle `[Tab] switch mode [Enter] run [Esc] close`;
+  typing `[Enter] run [Ctrl+Enter] queue [Esc] clear`; task running `Stop + [Esc]`
+  (the global stop hotkey is in the Stop tooltip); waiting approval
+  `[Enter] allow once [Esc] deny`. The footer Tasks entry is an icon button
+  (badge = running+queued, dot = approval needed).
 
 A task snapshots its context at creation — working folder, mode, provider/model,
 relevant memory ids, attachments (copied to the task's own temp folder) — and
@@ -121,3 +125,17 @@ cap. Approval waits never count against time.
 
 `Enter` run · `Ctrl/Cmd+Enter` queue · `Shift+Enter` newline · `Alt+Up/Down`
 reorder queued rows in the Tasks view.
+
+## Run-view routing + silence watchdog
+
+Every agent event is keyed by runId. The renderer's tasks cache maps runIds to
+tasks; a foreground inline run links its agent runId onto the task record at
+creation (`scheduler.linkRun`, before the first event can arrive), so live
+events render in the run view instead of buffering as background work. Events
+that arrive before the tasks refresh replays from the buffer once the mapping
+is known (`src/shared/task-routing.ts` holds the rule; both sides mirror it).
+
+A run is never silent: the run view shows "Planning…" from submit, "Still
+working… [Stop]" after 10 s with no event, and a "No response. Retry?"
+error with [Retry] + [Copy details] after 60 s. The run stays alive under the
+watchdog — Stop still aborts it, Retry stops it and starts over.

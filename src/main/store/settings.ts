@@ -2,6 +2,12 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Mode, ProviderId, Settings } from '../../shared/types';
 
 export const PROVIDERS: ProviderId[] = ['openai', 'anthropic', 'gemini', 'compatible'];
+
+/** Stored settings predate validation (or were hand-edited): unknown ids are
+ * "not configured", never loaded and never substituted with another provider. */
+export function isKnownProvider(p: unknown): p is ProviderId {
+  return typeof p === 'string' && (PROVIDERS as readonly string[]).includes(p);
+}
 const HOTKEY_RE = /^[A-Za-z0-9+ ]+$/;
 const URL_RE = /^https?:\/\/[^\s/$.?#].[^\s]*$/i;
 

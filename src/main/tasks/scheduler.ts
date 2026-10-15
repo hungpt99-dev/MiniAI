@@ -512,6 +512,20 @@ export class Scheduler {
     return n;
   }
 
+  /** Link a foreground (external/inline) agent run id to its task record.
+   * No state transition: the task is already running via beginExternal.
+   * Lets the renderer map agentEvent runIds to the foreground task so the
+   * run view renders live events instead of buffering them as background. */
+  linkRun(taskId: string, runId: string): boolean {
+    const t = this.tasks.get(taskId);
+    if (!t || isTerminal(t.state)) return false;
+    const nx: Task = { ...t, runId, undoGroupId: runId };
+    this.tasks.set(taskId, nx);
+    this.persist?.update(taskId, { runId, undoGroupId: runId });
+    this.emit({ type: 'task_changed', task: nx });
+    return true;
+  }
+
   /** Move a queued task up/down (Alt+Up/Down, drag). Announces via task_changed. */
   move(id: string, dir: -1 | 1): boolean {
     const t = this.tasks.get(id);

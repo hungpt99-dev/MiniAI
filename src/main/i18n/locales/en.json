@@ -2,6 +2,8 @@
   "app.name": "Nexio",
   "mode.ask": "Ask",
   "mode.do": "Do",
+  "mode.switchedDo": "Switched to Do",
+  "mode.switchedAsk": "Switched to Ask",
   "composer.placeholder.ask": "Ask about your files or anything else…",
   "composer.placeholder.do": "What do you want to do?",
   "composer.placeholder.settings": "Settings",
@@ -30,6 +32,7 @@
   "answer.copyCode": "Copy code block",
   "answer.followup": "Follow up",
   "answer.newchat": "New chat",
+  "answer.more": "More actions",
 
   "approval.deny": "Deny",
   "approval.allowOnce": "Allow once",

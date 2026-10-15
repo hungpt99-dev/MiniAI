@@ -79,6 +79,7 @@ function applyLocale() {
     if (typeof view !== 'undefined' && view === 'tasks' && typeof renderTasksView === 'function') {
       try { renderTasksView(); } catch (e) {}
     }
+    try { fitAnswerMeta(); fitFooterHints(); } catch (e) {} // translated labels change widths
     syncChrome();
     requestResize();
   } catch (e) { /* locale never breaks chrome */ }
@@ -91,10 +92,37 @@ if (!window.nexio) {
 }
 
 function setMode(m, persist) {
+  const changed = m !== mode;
+  // why: a stale Do chip must never survive the switch it offers.
+  try { document.querySelectorAll('.switch-do-row').forEach((r) => r.remove()); } catch {}
   drafts[mode] = inputEl.value;
   mode = m;
   inputEl.value = drafts[mode] || '';
   updateModeUI();
+  // why: earlier answers were produced under the other mode; mark the seam.
+  // Quiet separator row (not a message): lines + muted label, never a heading.
+  if (changed && hasRun()) {
+    try {
+      const div = document.createElement('div');
+      div.className = 'msg mode-div';
+      div.setAttribute('role', 'separator');
+      const label = m === 'agent' ? t('mode.switchedDo') : t('mode.switchedAsk');
+      div.setAttribute('aria-label', label);
+      const line = () => {
+        const s = document.createElement('span');
+        s.className = 'mode-line';
+        s.setAttribute('aria-hidden', 'true');
+        return s;
+      };
+      const tx = document.createElement('span');
+      tx.className = 'mode-text';
+      tx.textContent = label;
+      div.append(line(), tx, line());
+      messagesEl.appendChild(div);
+      agentScroll();
+      requestResize();
+    } catch { /* divider never breaks mode switch */ }
+  }
   grow();
   if (persist !== false && window.nexio?.setSettings) void window.nexio.setSettings({ mode: m }).catch(() => {});
 }
@@ -112,6 +140,10 @@ function updateModeUI() {
   if (ro) ro.classList.toggle('hidden', !isChat);
   const sep = $('hint-sep');
   if (sep) sep.classList.toggle('hidden', !isChat);
+  const queue = $('hint-queue');
+  if (queue && isChat) queue.classList.add('hidden'); // Ask never queues
+  try { layoutAnswerActions(); } catch { /* actions best-effort */ }
+  try { fitFooterHints(); } catch { /* fit best-effort */ }
 }
 
 // why: autosize composer up to 224px, then internal scroll
@@ -218,11 +250,91 @@ function addMsg(role, content) {
     div.innerHTML = mdLite(content);
     decorateCode(div);
   }
-  messagesEl.appendChild(div);
-  const $viewEl = $('view');
-  if ($viewEl) $viewEl.scrollTop = $viewEl.scrollHeight; // .view is the only scroller
+  (currentTurn || messagesEl).appendChild(div);
+  if (role === 'assistant') markLastAnswer();
+  // why: user turns always come into view; streaming answers respect a scrolled-up reader
+  if (role === 'user') userScrolledUp = false;
+  scrollToLatest(role === 'user');
   // why: no view yank here — senders switch explicitly; the approval yank lives in handleAgentEvent
   return div;
+}
+
+// --- conversation turns: one .turn block per { You row, answer } ---
+var currentTurn = null; // live block the current submit appends to (null = messagesEl level)
+var userScrolledUp = false; // reader moved up: streaming holds position, jump button shows
+var MAX_TURNS = 100; // DOM window; the DB keeps every turn
+function startTurnQuiet() {
+  currentTurn = document.createElement('div');
+  currentTurn.className = 'turn';
+  messagesEl.appendChild(currentTurn);
+  return currentTurn;
+}
+function startTurn() {
+  startTurnQuiet();
+  pruneTurns();
+  userScrolledUp = false;
+  syncJump();
+  agentScroll();
+  requestResize();
+  return currentTurn;
+}
+function pruneTurns() {
+  try {
+    let turns = messagesEl.querySelectorAll(':scope > .turn');
+    while (turns.length > MAX_TURNS) {
+      turns[0].remove();
+      turns = messagesEl.querySelectorAll(':scope > .turn');
+    }
+  } catch { /* windowing never breaks rendering */ }
+}
+function markLastAnswer() {
+  try {
+    const answers = messagesEl.querySelectorAll('.msg.assistant');
+    answers.forEach((a) => a.classList.remove('last'));
+    if (answers.length) answers[answers.length - 1].classList.add('last');
+    placeAnswerMeta(null);
+  } catch { /* last-marking never breaks rendering */ }
+}
+/** Latest answer gets the shared meta row; hovering/focusing an earlier one
+ * borrows it (moved back afterwards) — one row, no duplicated IDs. */
+function placeAnswerMeta(anchor) {
+  const meta = $('answer-meta');
+  if (!meta) return;
+  try {
+    if (anchor && anchor.parentNode && !anchor.classList.contains('last')) {
+      if (meta.previousSibling !== anchor) anchor.after(meta);
+    } else {
+      const runHost = $('run');
+      if (runHost && meta.parentNode !== runHost) runHost.appendChild(meta);
+    }
+  } catch { /* placement never breaks rendering */ }
+}
+if (messagesEl) {
+  messagesEl.addEventListener('mouseover', (e) => {
+    const a = e.target && e.target.closest ? e.target.closest('.msg.assistant') : null;
+    if (a && !a.classList.contains('last')) placeAnswerMeta(a);
+  });
+  messagesEl.addEventListener('mouseout', (e) => {
+    const to = e.relatedTarget && e.relatedTarget.closest ? e.relatedTarget.closest('.msg.assistant') : null;
+    const from = e.target && e.target.closest ? e.target.closest('.msg.assistant') : null;
+    if (to !== from) placeAnswerMeta(to && !to.classList.contains('last') ? to : null);
+  });
+  messagesEl.addEventListener('focusin', (e) => {
+    const a = e.target && e.target.closest ? e.target.closest('.msg.assistant') : null;
+    if (a && !a.classList.contains('last')) placeAnswerMeta(a);
+  });
+  messagesEl.addEventListener('focusout', () => placeAnswerMeta(null));
+}
+function scrollToLatest(force) {
+  const $viewEl = $('view');
+  if (!$viewEl) return;
+  if (force || !userScrolledUp) $viewEl.scrollTop = $viewEl.scrollHeight; // .view is the only scroller
+  syncJump();
+}
+function syncJump() {
+  const btn = $('jump-latest');
+  if (!btn) return;
+  btn.classList.toggle('hidden', !userScrolledUp || (typeof view !== 'undefined' && view !== 'run'));
 }
 
 function copySvg() {
@@ -295,6 +407,7 @@ async function sendInner(submitOpts) {
   const text = inputEl.value.trim();
   if (!text) return;
   lastUserText = text;
+  failedRun = null; // a new submit supersedes the failed state
   // View-only slashes work during a run (background continues): clear + hide before router/agent.
   {
     const early = text.split(' ')[0];
@@ -360,6 +473,7 @@ async function sendInner(submitOpts) {
           const info = await window.nexio.ext({ action: 'workflowInfo', trigger });
           if (info && info.kind === 'ext') return void openWorkflowForm(trigger, info);
         } catch { /* fall through to legacy path */ }
+        startTurn();
         addMsg('user', text);
         showView('run');
         assistantDiv = addMsg('assistant', '…');
@@ -390,7 +504,7 @@ async function sendInner(submitOpts) {
       if (trigger === '/cancel') return void runCancelCommand(rest.join(' '));
       if (trigger === '/clear-queue') return void runClearQueueCommand();
       if (trigger === '/new') return void newChat();
-      if (trigger === '/clear') { messagesEl.innerHTML = ''; assistantDiv = null; const st0 = $('agent-steps'); if (st0) st0.innerHTML = ''; const ch0 = $('run-chips'); if (ch0) ch0.remove(); inputEl.value = ''; drafts[mode] = ''; try { if (typeof clearAttachTray === 'function') clearAttachTray(); } catch {} hideSuggest(); showView('idle'); try { maybeSuggest(); } catch {} syncChrome(); requestResize(); return; }
+      if (trigger === '/clear') { messagesEl.innerHTML = ''; assistantDiv = null; currentTurn = null; const st0 = $('agent-steps'); if (st0) st0.innerHTML = ''; const ch0 = $('run-chips'); if (ch0) ch0.remove(); inputEl.value = ''; drafts[mode] = ''; try { if (typeof clearAttachTray === 'function') clearAttachTray(); } catch {} hideSuggest(); showView('idle'); try { maybeSuggest(); } catch {} syncChrome(); requestResize(); return; }
       if (trigger === '/help') {
         addMsg('assistant', '**Commands:** /help /new /clear /model /history /settings /log /extensions + prompt templates + workflows + skills.\nType `/` to browse.');
         showView('run');
@@ -428,6 +542,7 @@ async function sendInner(submitOpts) {
     showView('run');
     return;
   }
+  startTurn();
   addMsg('user', text);
   showView('run');
   const id = await ensureConv();
@@ -460,8 +575,7 @@ window.nexio.onStream((ev) => {
   assistantDiv.dataset.raw = (assistantDiv.dataset.raw || '') + ev.token;
   assistantDiv.innerHTML = mdLite(assistantDiv.dataset.raw);
   decorateCode(assistantDiv);
-  const $viewEl = $('view');
-  if ($viewEl) $viewEl.scrollTop = $viewEl.scrollHeight;
+  scrollToLatest();
 });
 
 // launcher behavior: refocus composer when popup regains OS focus,
@@ -512,11 +626,40 @@ inputEl.addEventListener('keydown', (e) => {
     else if (e.key === 'Escape') { hidePalette(); }
   } else if (e.key === 'Enter') {
     if (e.shiftKey || composing) return; // Shift+Enter newline, no preventDefault
+    // Undecided approval with an empty composer: Enter allows once
+    // (the card itself handles Enter when focused; this covers composer focus).
+    if (!inputEl.value) {
+      const allow = document.querySelector('#agent-steps .appr .btn-allow');
+      if (allow) { e.preventDefault(); allow.click(); return; }
+    }
     // Ctrl/Cmd+Enter always pushes to the queue ("do this later"), even free.
     if (e.ctrlKey || e.metaKey) { e.preventDefault(); void send({ queued: true }); return; }
     e.preventDefault(); void send();
   }
   else if (e.key === 'Escape') {
+    // why: an open More menu closes first — Esc must not clear the composer under it.
+    try {
+      const mm = document.getElementById('more-menu');
+      if (mm && !mm.classList.contains('hidden')) { closeMoreMenu(true); return; }
+    } catch { /* menu best-effort */ }
+    // why: Esc answers the approval first (deny), then clears a failed run —
+    // it only stops/clears when something is active, else closes.
+    const appr = document.querySelector('#agent-steps .appr');
+    if (appr) {
+      const deny = appr.querySelector('.btn-deny');
+      if (deny) deny.click();
+      return;
+    }
+    if (typeof failedRun !== 'undefined' && failedRun && !inputEl.value) {
+      clearFailedRun();
+      try { inputEl.focus(); } catch { /* noop */ }
+      return;
+    }
+    if (typeof agentRunning === 'function' && agentRunning()) {
+      stopAgentRun();
+      try { inputEl.focus(); } catch { /* noop */ }
+      return;
+    }
     // why: Esc clears first (input, then last attachment) and only closes an empty composer.
     if (inputEl.value) {
       inputEl.value = ''; drafts[mode] = '';
@@ -604,6 +747,7 @@ function showView(name) {
   updateRunChip();
   syncChrome();
   requestResize();
+  syncJump();
   assertSingleView();
 }
 // dev-only: exactly one top-level view node (idle holds none, or suggest alone)
@@ -707,6 +851,7 @@ $('btn-save-settings').onclick = async () => {
   } catch { /* badge best-effort */ }
   { const k = $('set-apikey').value.trim(); if (k) await window.nexio.setApiKey(patch.provider, k); }
   $('set-apikey').value = '';
+  void paintSecretsNotice();
   currentStopHotkey = $('set-stophotkey').value.trim() || 'Ctrl+Alt+Esc';
   void refreshHotkeyStatus();
   void loadPlatform(); // re-read toggle/stop labels (hotkeys may have changed)
@@ -785,7 +930,7 @@ async function refreshModelSuggestions() {
 $('btn-new').onclick = () => void newChat();
 async function newChat() {
   const c = await window.nexio.createConversation('New chat');
-  convId = c.id; messagesEl.innerHTML = ''; assistantDiv = null;
+  convId = c.id; messagesEl.innerHTML = ''; assistantDiv = null; currentTurn = null;
   inputEl.value = ''; drafts.chat = ''; drafts.agent = ''; // fresh composer
   try { if (typeof clearAttachTray === 'function') clearAttachTray(); } catch {}
   hideSuggest();
@@ -804,9 +949,14 @@ async function refreshHistory() {
     li.textContent = c.title || c.id;
     li.dataset.cid = c.id;
     li.onclick = async () => {
-      convId = c.id; messagesEl.innerHTML = '';
+      convId = c.id; messagesEl.innerHTML = ''; currentTurn = null; currentTurn = null;
       const msgs = await window.nexio.getMessages(c.id);
-      for (const m of msgs) addMsg(m.role === 'user' ? 'user' : 'assistant', m.content);
+      for (const m of msgs) {
+        if (m.role === 'user') startTurnQuiet();
+        addMsg(m.role === 'user' ? 'user' : 'assistant', m.content);
+      }
+      pruneTurns();
+      markLastAnswer();
       showView('run');
     };
     ul.appendChild(li);
@@ -884,6 +1034,17 @@ function syncChrome() {
   }
   // single Tab keycap beside the pill: only when composer focused-and-empty (hover handled in CSS)
   document.body.classList.toggle('show-tabkey', document.activeElement === inputEl && !inputEl.value && !inputEl.disabled);
+  try { layoutAnswerActions(); } catch { /* actions best-effort */ }
+  // why: footer fitting runs only when hint visibility actually changed — its
+  // own crowd-hide mutations must never retrigger it through the observer.
+  try {
+    const key = ['hint-tab', 'hint-enter', 'hint-queue', 'hint-multi', 'hint-nav',
+      'hint-readonly', 'hint-sep', 'hint-approval'].map((id) => {
+        const el = $(id);
+        return el ? (el.classList.contains('hidden') ? '0' : '1') : '-';
+      }).join('');
+    if (key !== lastFooterKey) { lastFooterKey = key; fitFooterHints(); }
+  } catch { /* fit best-effort */ }
   try { paintIncognito(); } catch { /* badge best-effort */ }
   updateRunChip();
 }
@@ -952,7 +1113,13 @@ if (typeof MutationObserver !== 'undefined' && $('panel')) {
 async function refreshModelName() {
   try {
     const s = await window.nexio.getSettings();
-    if ($('model-name') && s.model) $('model-name').textContent = s.model;
+    if ($('model-name') && s.model) {
+      $('model-name').textContent = s.model;
+      $('model-name').title = s.model; // ellipsis tooltip carries the full name
+      const dot = document.querySelector('#answer-meta .dot');
+      if (dot) dot.title = s.model;
+      try { fitAnswerMeta(); } catch { /* fit best-effort */ }
+    }
   } catch { /* preview */ }
 }
 void refreshModelName();
@@ -978,12 +1145,14 @@ if ($('btn-copy')) $('btn-copy').addEventListener('click', async () => {
 if ($('btn-followup')) $('btn-followup').addEventListener('click', () => inputEl.focus());
 if ($('btn-newchat')) $('btn-newchat').addEventListener('click', () => void newChat());
 if ($('btn-task-spawn')) $('btn-task-spawn').addEventListener('click', () => {
+  closeMoreMenu(false);
   const text = (typeof lastUserText === 'string' && lastUserText.trim()) || inputEl.value.trim();
   if (!text) return;
   inputEl.value = text;
   void send({ taskAction: 'spawn' });
 });
 if ($('btn-task-queue')) $('btn-task-queue').addEventListener('click', () => {
+  closeMoreMenu(false);
   const text = (typeof lastUserText === 'string' && lastUserText.trim()) || inputEl.value.trim();
   if (!text) return;
   inputEl.value = text;
@@ -994,6 +1163,151 @@ if ($('btn-task-queue')) $('btn-task-queue').addEventListener('click', () => {
   const meta = $('answer-meta'), actions = $('actions');
   if (meta && actions && actions.parentNode !== meta) meta.appendChild(actions);
 })();
+// --- answer actions: Copy + Follow up visible, the rest in a More menu ---
+// Ask mode shows New chat as a visible button instead of More (its menu would
+// hold only that item); task items hide in Ask and without the tasks bridge.
+function tasksAvailable() {
+  try { return !!(window.nexio && window.nexio.tasks); } catch { return false; }
+}
+function layoutAnswerActions() {
+  const ask = (typeof mode !== 'undefined' && mode === 'chat') || !tasksAvailable();
+  const more = document.querySelector('#actions .more-wrap');
+  const fresh = $('btn-newchat');
+  if (more) more.classList.toggle('hidden', ask);
+  if (fresh) fresh.classList.toggle('hidden', !ask);
+  if (ask) closeMoreMenu();
+  const spawn = $('btn-task-spawn'), queue = $('btn-task-queue');
+  const showTasks = !ask && tasksAvailable();
+  if (spawn) spawn.classList.toggle('hidden', !showTasks);
+  if (queue) queue.classList.toggle('hidden', !showTasks);
+  const sc = $('queue-shortcut');
+  if (sc) {
+    const mac = typeof platformInfo !== 'undefined' && platformInfo && platformInfo.os === 'darwin';
+    const want = mac ? 'Cmd+Enter' : 'Ctrl+Enter';
+    if (sc.textContent !== want) sc.textContent = want;
+  }
+  fitAnswerMetaOnMode();
+}
+function moreMenuItems() {
+  return [...document.querySelectorAll('#more-menu button')].filter((b) => !b.classList.contains('hidden'));
+}
+function openMoreMenu() {
+  const menu = $('more-menu'), btn = $('btn-more');
+  if (!menu || !btn) return;
+  layoutAnswerActions();
+  menu.classList.remove('hidden');
+  btn.setAttribute('aria-expanded', 'true');
+  // flip upward when there is no room below (never clipped, never resizes)
+  menu.classList.remove('flip');
+  try {
+    const view = $('view');
+    const mr = menu.getBoundingClientRect();
+    const vr = (view || document.body).getBoundingClientRect();
+    if (mr.bottom > vr.bottom) menu.classList.add('flip');
+  } catch {}
+  const items = moreMenuItems();
+  items.forEach((b, i) => b.tabIndex = i === 0 ? 0 : -1);
+  if (items[0]) items[0].focus();
+  document.addEventListener('click', closeMoreMenuOutside, true);
+}
+function closeMoreMenu(refocus) {
+  const menu = $('more-menu'), btn = $('btn-more');
+  if (!menu || menu.classList.contains('hidden')) return;
+  menu.classList.add('hidden');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+  document.removeEventListener('click', closeMoreMenuOutside, true);
+  if (refocus && btn) btn.focus();
+}
+function closeMoreMenuOutside(e) {
+  const wrap = document.querySelector('.more-wrap');
+  if (wrap && !wrap.contains(e.target)) closeMoreMenu(false);
+}
+function toggleMoreMenu() {
+  const menu = $('more-menu');
+  if (!menu) return;
+  if (menu.classList.contains('hidden')) openMoreMenu();
+  else closeMoreMenu(false);
+}
+if ($('btn-more')) {
+  $('btn-more').addEventListener('click', () => toggleMoreMenu());
+  $('btn-more').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); openMoreMenu(); }
+  });
+}
+if ($('btn-menu-newchat')) $('btn-menu-newchat').addEventListener('click', () => { closeMoreMenu(false); void newChat(); });
+if ($('more-menu')) $('more-menu').addEventListener('keydown', (e) => {
+  const items = moreMenuItems();
+  const i = items.indexOf(document.activeElement);
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMoreMenu(true); }
+  else if (e.key === 'Tab') { closeMoreMenu(false); } // close, focus moves on
+  else if (e.key === 'ArrowDown') { e.preventDefault(); (items[i + 1] || items[0])?.focus(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); (items[i - 1] || items[items.length - 1])?.focus(); }
+  else if (e.key === 'Home') { e.preventDefault(); items[0]?.focus(); }
+  else if (e.key === 'End') { e.preventDefault(); items[items.length - 1]?.focus(); }
+});
+// Narrow answer meta: icon-only actions first, then dot-only model. Container
+// query via ResizeObserver with hysteresis (no fixed breakpoints, follows
+// font scale + RTL). Hysteresis matters: the toggles change the measured
+// width, so a single threshold would ping-pong forever and wedge the page.
+function fitAnswerMeta() {
+  const meta = $('answer-meta');
+  if (!meta || meta.classList.contains('hidden')) return;
+  const w = meta.clientWidth;
+  // why: unmeasurable (hidden window) — show everything; a real layout refits.
+  if (!(w > 0)) { meta.classList.remove('compact'); meta.classList.remove('minimal'); return; }
+  const compact = meta.classList.contains('compact');
+  // why: add on narrow container OR overflowing content (large fonts), drop
+  // only on comfortably wide — asymmetric so the toggle can never ping-pong.
+  if (!compact && w > 0 && (w < 420 || meta.scrollWidth > meta.clientWidth + 1)) meta.classList.add('compact');
+  else if (compact && w > 460) {
+    meta.classList.remove('compact');
+    meta.classList.remove('minimal');
+  }
+  const actions = $('actions');
+  if (actions) actions.classList.toggle('compact', meta.classList.contains('compact'));
+  // why: minimal never outlives compact (removal is container-driven, never a
+  // scrollWidth slack that can never be true) — the chain cannot ping-pong.
+  if (meta.classList.contains('compact') && !meta.classList.contains('minimal') &&
+      meta.scrollWidth > meta.clientWidth + 1) {
+    meta.classList.add('minimal');
+  }
+}
+var lastAnswerMode = '';
+function fitAnswerMetaOnMode() {
+  if (mode !== lastAnswerMode) { lastAnswerMode = mode; fitAnswerMeta(); }
+}
+if (typeof ResizeObserver !== 'undefined' && $('answer-meta')) {
+  new ResizeObserver(() => { fitAnswerMeta(); }).observe($('answer-meta'));
+}
+// Tight footer: hide hints from the right (queue, clear, run, switch mode),
+// never wrap. crowd-hide is separate from state .hidden so they never fight;
+// unhiding needs 160px slack or hints would ping-pong too.
+function fitFooterHints() {
+  const hints = $('f-hints');
+  if (!hints) return;
+  const seq = ['hint-queue', 'hint-esc', 'hint-enter', 'hint-tab'];
+  // why: unmeasurable (hidden window) — show everything; a real layout refits.
+  if (!(hints.clientWidth > 0)) {
+    for (const id of seq) {
+      const el = $(id);
+      if (el) el.classList.remove('crowd-hide');
+    }
+    return;
+  }
+  const over = () => hints.scrollWidth > hints.clientWidth + 1;
+  const roomy = () => hints.scrollWidth < hints.clientWidth - 160;
+  for (const id of seq) {
+    const el = $(id);
+    if (over() && el && !el.classList.contains('hidden')) el.classList.add('crowd-hide');
+  }
+  for (const id of [...seq].reverse()) {
+    const el = $(id);
+    if (el && el.classList.contains('crowd-hide') && roomy()) el.classList.remove('crowd-hide');
+  }
+}
+if (typeof ResizeObserver !== 'undefined' && $('hints')) {
+  new ResizeObserver(() => { fitFooterHints(); }).observe($('hints'));
+}
 // segmented provider is the only provider control (native select deleted);
 // Base URL row shows only for Custom
 function paintProv() {
@@ -1003,6 +1317,30 @@ function paintProv() {
   if (fb) fb.classList.toggle('hidden', settingsProvider !== 'compatible');
   const st = $('fld-sendtemp');
   if (st) st.classList.toggle('hidden', settingsProvider !== 'compatible');
+  void paintSecretsNotice();
+}
+// why: unreadable stored keys fail visibly here, not later as a raw error mid-run.
+async function paintSecretsNotice() {
+  const note = $('key-note');
+  if (!note) return;
+  let st = null;
+  try { if (window.nexio && window.nexio.secretsStatus) st = await window.nexio.secretsStatus(); } catch { /* notice best-effort */ }
+  const enc = $('enc-note');
+  if (enc) {
+    if (st && !st.available) enc.textContent = 'Secure storage is not available on this device.';
+    else if (typeof platformInfo !== 'undefined' && platformInfo && platformInfo.secretStore) {
+      enc.textContent = `Encrypted on this device (${platformInfo.secretStore}).`;
+    }
+  }
+  if (!st) { note.classList.add('hidden'); return; }
+  const id = `apikey:${settingsProvider}`;
+  const msgs = [];
+  if (!st.available) msgs.push('Secure storage is unavailable — a pasted key is kept for this session only.');
+  if ((st.reentry || []).includes(id)) msgs.push("Saved key couldn't be unlocked. Paste it again to continue.");
+  const others = (st.reentry || []).filter((x) => x !== id).map((x) => x.replace(/^apikey:/, ''));
+  if (others.length) msgs.push(`Also needs re-entry: ${others.join(', ')}.`);
+  note.textContent = msgs.join(' ');
+  note.classList.toggle('hidden', msgs.length === 0);
 }
 (function () {
   const seg = $('set-prov-seg');
@@ -1013,6 +1351,12 @@ function paintProv() {
 // Esc: results showing -> collapse + clear; second Esc hides (capture runs before core closer)
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  // why: an open More menu dismisses first — capture runs before the menu's
+  // own handler and before run-clearing below.
+  try {
+    const mm = document.getElementById('more-menu');
+    if (mm && !mm.classList.contains('hidden')) { e.stopPropagation(); closeMoreMenu(true); return; }
+  } catch { /* menu best-effort */ }
   if (agentRunning()) { // Esc stops a running agent before collapsing anything
     e.stopPropagation();
     stopAgentRun();
@@ -1041,6 +1385,7 @@ document.addEventListener('keydown', (e) => {
     if (document.querySelector('#agent-steps .appr')) { flashApproval(); inputEl.focus(); return; } // never bury an undecided approval
     messagesEl.innerHTML = '';
     assistantDiv = null;
+    currentTurn = null;
     inputEl.value = ''; drafts.chat = ''; drafts.agent = ''; // fresh composer
     try { if (typeof clearAttachTray === 'function') clearAttachTray(); } catch {}
     hideSuggest();
@@ -1068,9 +1413,12 @@ function switchToDoChip(promptText) {
   btn.className = 'switch-do-chip';
   btn.textContent = 'Switch to Do and run this';
   btn.title = 'Switch to Do mode and re-send this prompt (approvals still apply)';
+  btn.setAttribute('aria-label', 'Switch to Do and run this');
   btn.onclick = () => {
     const text = (promptText || '').trim() || (inputEl.value || '').trim();
     if (!text) return;
+    try { btn.closest('.switch-do-row')?.remove(); } catch {}
+    try { requestResize(); } catch {}
     selectMode('agent');
     inputEl.value = text;
     drafts.agent = text;
@@ -1080,18 +1428,72 @@ function switchToDoChip(promptText) {
   return btn;
 }
 
+// mirrors shared/conversation.ts isActionLike: structural action signal only,
+// no verb lists (same rule as the intent router's structural pass).
+function isActionLike(text) {
+  const t = String(text || '').trim();
+  if (!t || t[0] === '/') return false;
+  if (/[?\uFF1F\u061F\u037E]\s*$/u.test(t)) return false;
+  return /([A-Za-z]:\\|\/(Users|home|tmp|etc|var)\/|\.(txt|md|pdf|docx?|xlsx?|png|jpe?g|mp3|mp4|zip|json|ts|js|py)\b)/.test(t);
+}
+
+/** Answer-area Do chip: Ask zero-tool answers that plausibly wanted action
+ * get a sibling row (never inside the sentence); greetings never do. */
+function doSwitchRow(promptText) {
+  const row = document.createElement('div');
+  row.className = 'switch-do-row';
+  row.appendChild(switchToDoChip(promptText));
+  return row;
+}
+
 function agentRunning() { return !!agentState; }
 
 function agentScroll() {
+  if (userScrolledUp) { syncJump(); return; } // scrolled-up reader holds position; jump button shows
   const $viewEl = $('view');
   if ($viewEl) $viewEl.scrollTop = $viewEl.scrollHeight;
+  syncJump();
 }
+if ($('view')) $('view').addEventListener('scroll', () => {
+  const el = $('view');
+  userScrolledUp = el.scrollHeight - el.scrollTop - el.clientHeight > 120;
+  syncJump();
+}, { passive: true });
+if ($('jump-latest')) $('jump-latest').onclick = () => {
+  const $viewEl = $('view');
+  if ($viewEl) $viewEl.scrollTop = $viewEl.scrollHeight;
+  userScrolledUp = false;
+  syncJump();
+};
 
+// why: footer fitting runs only when hint visibility actually changed — its
+// own crowd-hide mutations must never retrigger it through the observer.
+var lastFooterKey = '';
 function syncAgentFooter() {
   const running = agentRunning();
   if ($('btn-stop')) $('btn-stop').classList.toggle('hidden', !running);
   if ($('stop-hint')) $('stop-hint').classList.toggle('hidden', !running);
+  // Failed Do run, nothing active: footer Retry + Esc-clear (no idle hints).
+  const failed = !running && !!failedRun;
+  if ($('btn-retry')) $('btn-retry').classList.toggle('hidden', !failed);
+  // Approval cards decide the footer: only allow/deny hints while one is open.
+  const approval = !!document.querySelector('#agent-steps .appr');
+  if ($('hint-approval')) $('hint-approval').classList.toggle('hidden', !approval);
+  // A running task owns the footer: Stop + Esc only. Idle Tab/Enter/queue hide
+  // while it runs; the trailing syncChrome in every caller restores them after.
+  // A failed run shows Retry + Esc-clear instead of the idle hints.
+  // Ask mode never queues: the queue hint stays hidden there in every state.
+  const quiet = running || approval || failed;
+  const askMode = typeof mode !== 'undefined' && mode === 'chat';
+  for (const id of ['hint-tab', 'hint-enter', 'hint-queue']) {
+    const el = $(id);
+    if (!el) continue;
+    if (id === 'hint-queue' && askMode) el.classList.add('hidden');
+    else el.classList.toggle('hidden', quiet);
+  }
+  try { fitFooterHints(); } catch { /* fit best-effort */ }
 }
+if ($('btn-retry')) $('btn-retry').onclick = () => { void retryFailedRun(); inputEl.focus(); };
 
 function paintChip() {
   const chip = $('agent-cwd');
@@ -1219,6 +1621,7 @@ function buildApprovalCard(runId, ev) {
 function handleAgentEvent(runId, ev) {
   const st = agentState;
   if (!st) return;
+  agentEventSeen();
   if (ev.type === 'step') {
     // Do-only planning narration: one pending row until tools run (Ask streams via onStream, never here)
     let row = document.querySelector('#agent-steps .plan-row');
@@ -1336,12 +1739,16 @@ function handleAgentEvent(runId, ev) {
     collapseSteps();
     clearRunCards(runId);
     endAgentRun();
-    // Ask: a zero-tool answer gets the quiet switch chip in any language.
+    // Ask: a zero-tool answer that plausibly wanted action gets the switch row
+    // (sibling, never inline); greetings and plain answers never do.
     // Nothing ran in Ask; the Do re-send still needs its normal approvals.
     try {
       if (typeof mode !== 'undefined' && mode === 'chat' && st.answerDiv &&
-        st.rows.size === 0 && (lastAskPrompt || '').trim()) {
-        st.answerDiv.appendChild(switchToDoChip(lastAskPrompt));
+        st.rows.size === 0 && isActionLike(lastAskPrompt) && st.answerDiv.parentNode) {
+        const row = doSwitchRow(lastAskPrompt);
+        st.answerDiv.after(row);
+        agentScroll();
+        requestResize();
       }
     } catch {}
     renderRunChips(runId);
@@ -1351,7 +1758,10 @@ function handleAgentEvent(runId, ev) {
   } else if (ev.type === 'error') {
     document.querySelectorAll('#agent-steps .plan-row').forEach((r) => r.remove());
     finalizeSpinners();
-    addAgentRow('error', iconFor('fail') + `<div class="tx">${esc(ev.message || 'Error')}</div>`);
+    // why: the Planning row never survives a terminal event; the error row
+    // carries Retry + Details instead of a raw string next to a spinner.
+    addErrorRow({ message: ev.message, code: ev.code, technical: ev.technical, action: ev.action });
+    if (/^agent-/.test(runId || '') && lastUserText) failedRun = { text: lastUserText };
     setRouteStatus(null);
     clearRunCards(runId);
     expandSteps();
@@ -1387,7 +1797,17 @@ async function startAgentRun(text, submitOpts) {
     if (!agentState) return;
     agentState.runId = r && r.runId;
   } catch (e) {
-    addAgentRow('error', iconFor('fail') + `<div class="tx">${esc(errText(e))}</div>`);
+    // why: an invoke rejection means no terminal event will ever arrive —
+    // resolve the Planning row here or it spins forever next to the error.
+    try { document.querySelectorAll('#agent-steps .plan-row, #agent-steps .still-row').forEach((x) => x.remove()); } catch {}
+    finalizeSpinners();
+    addErrorRow({
+      message: (e && e.message) || errText(e),
+      code: (e && (e.appCode || e.code)) || undefined,
+      technical: (e && e.technical) || undefined,
+      action: (e && e.action) || undefined,
+    });
+    if (lastUserText) failedRun = { text: lastUserText };
     endAgentRun();
   }
 }
@@ -1399,6 +1819,7 @@ async function sendAgentViaSend(text, submitOpts) {
   hideTaskChoice();
   grow();
   hidePalette();
+  startTurn();
   addMsg('user', text);
   showView('run');
   const id = await ensureConv();
@@ -1427,17 +1848,29 @@ async function sendAgentViaSend(text, submitOpts) {
 
 async function beginRun(userText) {
   lastUserText = userText;
+  failedRun = null; // a new run supersedes the failed state
   const id = await ensureConv();
   hideSuggest(); // a run is never an empty composer
   agentState = { runId: null, rows: new Map(), answerDiv: null };
+  agentEventSeen(); // arm the silence watchdog from submit, not first event
   const oldChips = $('run-chips');
   if (oldChips) oldChips.remove();
   const steps = $('agent-steps');
   if (steps) { steps.innerHTML = ''; steps.classList.remove('hidden'); steps.classList.remove('collapsed'); }
+  startTurn();
   addMsg('user', userText);
   assistantDiv = null;
   showView('run');
   if (steps) steps.classList.remove('hidden');
+  // why: immediate feedback — the first agent event can lag behind slow
+  // pre-loop awaits (memory classify, provider), and a run must never sit
+  // silent with only the "You" row. Reused as the step narration row.
+  if (steps && !steps.querySelector('.plan-row')) {
+    const row = document.createElement('div');
+    row.className = 'astep plan-row';
+    row.innerHTML = iconFor('run') + '<div class="tx">Planning…</div><span class="dur"></span>';
+    steps.appendChild(row);
+  }
   syncSteps();
   syncAgentFooter();
   syncChrome();
@@ -1469,9 +1902,156 @@ function endAgentRun() {
   agentState = null;
   assistantDiv = null;
   memSuppressed.clear();
+  agentStillShown = false;
+  agentWatchdogShown = false;
+  try { document.querySelectorAll('#agent-steps .still-row').forEach((r) => r.remove()); } catch {}
   syncAgentFooter();
   syncChrome();
   requestResize();
+}
+
+// --- failed-run state: a Do failure leaves Retry + Esc-clear in the footer ---
+// failedRun is set only for Do agent runs (runId `agent-*`); undo/workflow
+// errors render their row but never arm footer Retry for a different prompt.
+var failedRun = null; // { text } | null
+
+/** Friendly error row: one-line message, Retry, Details toggle (redacted
+ * technical, hidden by default), Open Settings for secret/provider errors. */
+function addErrorRow(info) {
+  finalizeSpinners();
+  const row = addAgentRow('error', iconFor('fail') + `<div class="tx">${esc(info.message || 'Something went wrong.')}</div>`);
+  const tx = row.querySelector('.tx');
+  if (info.action === 'open-settings') {
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'btn-retry';
+    open.textContent = 'Open Settings';
+    open.onclick = () => { togglePanel('settings'); inputEl.focus(); };
+    tx.appendChild(open);
+  }
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.className = 'btn-retry';
+  retry.textContent = 'Retry';
+  retry.onclick = () => { void retryFailedRun(); };
+  tx.appendChild(retry);
+  if (info.technical) {
+    const det = document.createElement('button');
+    det.type = 'button';
+    det.className = 'show-out';
+    det.textContent = 'Details';
+    det.setAttribute('aria-expanded', 'false');
+    const pre = document.createElement('pre');
+    pre.className = 'out hidden';
+    pre.textContent = info.technical;
+    det.onclick = () => {
+      const hidden = pre.classList.toggle('hidden');
+      det.textContent = hidden ? 'Details' : 'Hide details';
+      det.setAttribute('aria-expanded', String(!hidden));
+      agentScroll();
+      requestResize();
+    };
+    tx.appendChild(det);
+    tx.appendChild(pre);
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'show-out';
+    copy.textContent = 'Copy details';
+    copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(`${info.message || ''}\n${info.technical || ''}`); }
+      catch { try { fallbackCopy(`${info.message || ''}\n${info.technical || ''}`); } catch {} }
+    };
+    tx.appendChild(copy);
+  }
+  agentScroll();
+  return row;
+}
+
+function retryFailedRun() {
+  const t = failedRun && failedRun.text;
+  stopAgentRun();
+  failedRun = null;
+  syncAgentFooter();
+  if (t) void startAgentRun(t, {});
+}
+
+function clearFailedRun() {
+  failedRun = null;
+  try { document.querySelectorAll('#agent-steps .error-row, #agent-steps .watchdog-row, #agent-steps .still-row, #agent-steps .plan-row').forEach((r) => r.remove()); } catch {}
+  syncAgentFooter();
+  syncChrome();
+  requestResize();
+}
+// --- run silence watchdog: a live run must never sit quiet ---
+// 10 s with no event -> "Still working… [Stop]"; 60 s -> error row with
+// [Retry] + [Copy details]. The run stays alive under it: Stop still aborts,
+// Retry stops the old run and starts a new one. Never auto-ends: a slow
+// provider is not a failure, but silence must always be visible.
+var agentLastEventAt = 0;
+var agentStillShown = false;
+var agentWatchdogShown = false;
+var agentWatchTimer = null;
+function agentEventSeen() {
+  agentLastEventAt = Date.now();
+  if (agentStillShown) {
+    agentStillShown = false;
+    try { document.querySelectorAll('#agent-steps .still-row').forEach((r) => r.remove()); } catch {}
+  }
+  if (!agentWatchTimer) {
+    try { agentWatchTimer = setInterval(checkAgentSilence, 1000); } catch {}
+  }
+}
+function checkAgentSilence() {
+  try {
+    if (typeof agentState === 'undefined' || !agentState || !agentLastEventAt) return;
+    const steps = document.getElementById('agent-steps');
+    if (!steps || !document.contains(steps)) return;
+    const elapsed = Date.now() - agentLastEventAt;
+    if (elapsed > 10000 && !agentStillShown && !agentWatchdogShown) {
+      agentStillShown = true;
+      const row = document.createElement('div');
+      row.className = 'astep still-row';
+      row.innerHTML = iconFor('run') + '<div class="tx">Still working…</div>';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn-stop-inline';
+      btn.textContent = 'Stop';
+      btn.setAttribute('aria-label', 'Stop');
+      btn.onclick = () => { stopAgentRun(); inputEl.focus(); };
+      row.appendChild(btn);
+      steps.appendChild(row);
+      agentScroll();
+      requestResize();
+    }
+    if (elapsed > 60000 && !agentWatchdogShown) {
+      agentWatchdogShown = true;
+      const runId = agentState.runId || '(pending)';
+      const row = document.createElement('div');
+      row.className = 'astep error-row watchdog-row';
+      row.innerHTML = iconFor('fail') + '<div class="tx">No response for 60 s. The run may still be going — Retry starts over.</div>';
+      const tx = row.querySelector('.tx');
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'btn-retry';
+      retry.textContent = 'Retry';
+      retry.onclick = () => { stopAgentRun(); if (lastUserText) void startAgentRun(lastUserText, {}); };
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'show-out';
+      copy.textContent = 'Copy details';
+      copy.onclick = async () => {
+        const details = `runId=${runId} foregroundTask=${(typeof foregroundTaskId !== 'undefined' ? foregroundTaskId : '-') || '-'} elapsedMs=${elapsed}`;
+        try { await navigator.clipboard.writeText(details); }
+        catch { try { fallbackCopy(details); } catch {} }
+      };
+      tx.appendChild(retry);
+      tx.appendChild(copy);
+      steps.appendChild(row);
+      expandSteps();
+      agentScroll();
+      requestResize();
+    }
+  } catch {}
 }
 
 /** Remove this run's undecided approval cards (stopped/error/done leave them stale). */
@@ -1720,6 +2300,7 @@ if (window.nexio && typeof window.nexio.onAgentEvent === 'function') {
       // Routed act (or undo) with no active run: adopt it so steps/approvals render.
       if (event.type === 'done' || event.type === 'error' || event.type === 'stopped') return;
       agentState = { runId, rows: new Map(), answerDiv: assistantDiv };
+      agentEventSeen();
       const steps = $('agent-steps');
       if (steps) steps.classList.remove('hidden');
       showView('run');
@@ -3222,6 +3803,7 @@ function flushMemPushes() {
   for (const p of q) void renderMemoryPush(p);
 }
 async function renderMemoryUsed(runId, ev) {
+  agentEventSeen(); // memory activity resets the silence watchdog too
   const host = (agentState && agentState.runId === runId && agentState.answerDiv && document.contains(agentState.answerDiv))
     ? agentState.answerDiv
     : memoryHost({ runId });
@@ -3467,8 +4049,21 @@ function paintKeyHints() {
   }
   const sh = $('stop-hint');
   if (sh) {
-    sh.innerHTML = (platformInfo && platformInfo.stopKeys)
-      ? keysHtml(platformInfo.stopKeys) : capsHtml(currentStopHotkey);
+    // why: one Esc cap next to Stop; the global stop hotkey lives in the
+    // tooltip (and docs), never as three caps in the footer.
+    const escCap = (platformInfo && platformInfo.caps && platformInfo.caps.esc) || 'Esc';
+    const cap = `<span class="k">${esc(escCap)}</span>`;
+    if (sh.innerHTML !== cap) sh.innerHTML = cap;
+    const stopLabel = (platformInfo && platformInfo.stopLabel) || currentStopHotkey || 'Ctrl+Alt+Esc';
+    sh.title = stopLabel;
+    const btnStop = $('btn-stop');
+    if (btnStop && btnStop.title !== `Stop (${stopLabel})`) btnStop.title = `Stop (${stopLabel})`;
+    // footer queue hint: one cap pair, platform modifier (Cmd on macOS)
+    const qm = $('queue-cap-mod');
+    if (qm) {
+      const want = (platformInfo && platformInfo.os === 'darwin') ? 'Cmd' : 'Ctrl';
+      if (qm.textContent !== want) qm.textContent = want;
+    }
   }
 }
 async function loadPlatform() {
@@ -4410,13 +5005,21 @@ async function refreshTasks() {
   rows.forEach(function (r) { if (r.runId) taskRunCache.set(r.runId, r.id); });
   if (res && 'foregroundTaskId' in res) foregroundTaskId = res.foregroundTaskId || null;
   // Replay buffered events that turned out to belong to the foreground task.
+  // Mirrors shared/task-routing.ts shouldReplayBuffered: adopt into an absent
+  // view, or into a view waiting for the same run — never into another run.
   try {
     for (const [runId, evs] of taskEventBuf) {
-      if (taskRunCache.get(runId) === foregroundTaskId && !agentState) {
+      var cached = taskRunCache.get(runId);
+      if (cached !== foregroundTaskId) continue;
+      if (!agentState) {
         agentState = { runId: runId, rows: new Map(), answerDiv: assistantDiv };
         var steps = $('agent-steps');
         if (steps) steps.classList.remove('hidden');
         showView('run');
+        evs.forEach(function (ev) { handleAgentEvent(runId, ev); });
+        taskEventBuf.delete(runId);
+      } else if (!agentState.runId || agentState.runId === runId) {
+        if (!agentState.runId) agentState.runId = runId;
         evs.forEach(function (ev) { handleAgentEvent(runId, ev); });
         taskEventBuf.delete(runId);
       }
@@ -4455,12 +5058,10 @@ function paintTasksButton() {
   else if (c.running > 0) label = t('tasks.running') + ' (' + c.running + ')';
   else if ([...taskCache.values()].some(function (r) { return r.state === 'done' || r.state === 'failed'; })) label = t('tasks.done') + '. ' + t('common.view');
   else label = t('tasks.title');
-  // why: guarded write (same MutationObserver-loop avoidance as updateRunChip).
-  // why: never wipe the button: badge + warn spans live inside it.
-  var span = btn.querySelector('.task-label');
-  if (!span) { span = document.createElement('span'); span.className = 'task-label'; btn.insertBefore(span, btn.firstChild); }
-  if (span.textContent !== label) span.textContent = label;
+  // why: icon button — status goes to aria-label/title, never button text.
+  var tip = label === t('tasks.title') ? t('tasks.title') + ' (/tasks)' : label;
   btn.setAttribute('aria-label', t('tasks.title') + (n > 0 ? ' (' + n + ')' : ''));
+  if (btn.title !== tip) btn.title = tip;
 }
 
 function openTasksView() { showView('tasks'); }

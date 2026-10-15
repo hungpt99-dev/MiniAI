@@ -2,8 +2,7 @@
 
 Single panel, 1px `--border`, no shadow, 22px radius, solid `#15161B` panel —
 identical on Windows and macOS. Slim custom scrollbars, real buttons with
-`aria-label`s, accent usage as before. The legacy `design/MiniAI — Popup UI.html`
-file does not exist in this repo; these notes are the source of truth.
+`aria-label`s, accent usage as before. No legacy mockup files remain in this repo; these notes are the source of truth.
 
 macOS differences (conventions only, no redesign):
 
@@ -59,6 +58,33 @@ Dark-background brand only — there is no light variant.
   region; `Backspace` removes the focused (or last) chip.
 - Ask history shows 160px thumbs/chips with a "Delete attachments" menu.
   Vision-failure notices carry a one-click "Switch model" button.
+
+## Answer actions
+
+- One row, never wraps: `#answer-meta` (flex, 8px gap, 32px min-height,
+  12px top margin, 12px muted, `line-height: 1`). Everything inside is
+  `nowrap`/`flex:none` except the model label (ellipsis, `max-width 160px`).
+  Model label: 6px accent dot + 12px muted name with full-name tooltip.
+  Steps/memory toggles stay in their own row above, in `#agent-steps`.
+- Right group (`margin-inline-start: auto`, 2px gap): Copy and Follow up are
+  visible ghost buttons (28px, `0 10px`, `r8`, 12px muted, 14px icon, 6px
+  gap; hover surface + text; 2px accent focus ring). Copy confirms inline
+  ("Copied", 1.5 s). A "More" dots button (28x28, `aria-haspopup="menu"`)
+  opens a custom menu: New chat, Run as separate task, Add to queue (with
+  the Ctrl/Cmd+Enter hint). Ask mode shows New chat as a visible button
+  instead of More and hides the task items.
+- Menu: absolute under the button, right-aligned, flips up without room,
+  `min-width 220px`, surface + border, `r12`, 4px padding, no shadow.
+  Items 32px, `0 10px`, `r8`, 13px text-soft, 14px icon, mono muted shortcut
+  hint right. Full keyboard (arrows/Home/End/Enter/Esc/Tab), focus returns
+  to More, click-outside closes, in-panel so never clipped.
+- Narrow: container-driven with hysteresis (no fixed breakpoints, follows
+  font scale + RTL logical props) — icon-only actions under ~420px, then
+  dot-only model. Footer hints hide from the right under pressure
+  (queue, clear, run, switch mode) via a separate `crowd-hide` class and
+  never wrap.
+- Rhythm: You row, 16px, answer (15px/1.6 regular), 12px, meta; view padding
+  `18px 22px 16px`, dividers and footer untouched.
 
 ## Footer icons
 

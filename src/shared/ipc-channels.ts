@@ -23,6 +23,7 @@ export const IpcChannels = {
   setSettings: 'nexio:set-settings',
   setApiKey: 'nexio:set-api-key',
   isEncryptionAvailable: 'nexio:is-encryption-available',
+  secretsStatus: 'nexio:secrets-status',
   testConnectivity: 'nexio:test-connectivity',
   listModels: 'nexio:list-models',
   resetProviderFixes: 'nexio:reset-provider-fixes',
@@ -83,11 +84,16 @@ const sendPush = new Set<string>([...IpcSendKeys, ...IpcPushKeys]);
 export const IpcInvokeKeys = (Object.keys(IpcChannels) as IpcChannelKey[]).filter((k) => !sendPush.has(k));
 export const IpcInvokeChannels = IpcInvokeKeys.map((k) => IpcChannels[k]);
 
-/** IPC failure envelope: typedHandle returns it, preload rethrows it. */
+/** IPC failure envelope: typedHandle returns it, preload rethrows it.
+ * `code` stays the original compat code; `message` is always user-friendly
+ * (mapped, redacted); `technical`/`action` feed Details/Retry/Open Settings. */
 export interface IpcErrorEnvelope {
   ok: false;
   code: string;
   message: string;
+  appCode?: string;
+  technical?: string;
+  action?: 'open-settings' | 'retry' | null;
 }
 
 export interface StagedAttachment {
@@ -127,6 +133,7 @@ export interface IpcChannelMap {
   setSettings: { args: [patch: Partial<Settings>]; result: Settings };
   setApiKey: { args: [provider: string, key: string]; result: boolean };
   isEncryptionAvailable: { args: []; result: boolean };
+  secretsStatus: { args: []; result: { available: boolean; backend: string; ready: boolean; roundTrip: 'ok' | 'failed' | 'skipped'; reentry: string[] } };
   testConnectivity: { args: [provider: string, model: string, baseUrl?: string, apiKey?: string]; result: { ok: boolean; error?: unknown; details?: unknown } };
   listModels: { args: [provider: string, baseUrl?: string]; result: string[] };
   resetProviderFixes: { args: []; result: boolean };

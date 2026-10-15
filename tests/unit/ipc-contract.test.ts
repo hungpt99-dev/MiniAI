@@ -5,8 +5,7 @@ import { IpcChannels } from '../../src/shared/ipc-channels';
 import { openTestDb, resolveDbPath } from '../../src/main/db/db';
 import { getSettings } from '../../src/main/store/settings';
 
-// Phase 1: IPC contract without external runtimes; legacy runtime keys
-// migrate to the built-in fallback, MiniAI DB reuse untouched.
+// Phase 1: IPC contract without external runtimes; direct DB path, no legacy reuse.
 describe('ipc contract', () => {
   it('channels share one prefix with no duplicates', () => {
     const vals = Object.values(IpcChannels);
@@ -48,7 +47,7 @@ describe('settings runtime migration', () => {
     expect(s.mode).toBe('agent');
     db.close();
   });
-  it('resolveDbPath honors an explicit data dir (MiniAI reuse path untouched)', () => {
+  it('resolveDbPath honors an explicit data dir', () => {
     const dir = path.join(os.tmpdir(), 'nexio-mig');
     expect(resolveDbPath(dir)).toBe(path.join(dir, 'nexio.db'));
   });

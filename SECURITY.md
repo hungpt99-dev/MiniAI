@@ -9,12 +9,28 @@
 
 ## Secret handling (how this project stores keys)
 
-- API keys are stored in SQLite via Electron `safeStorage`
-  (DPAPI on Windows, Keychain on macOS).
-- When `safeStorage` is unavailable, the app falls back to a plain
-  XOR-obfuscated local value and logs a `console.warn` (dev only).
-  Do not rely on this fallback for real secrets.
-- `redact()` masks `sk-…`, `Bearer …`, `api_key=…` before logging.
+- API keys are stored in SQLite through the single `src/main/secrets/`
+  module over Electron `safeStorage` (DPAPI on Windows, Keychain on macOS).
+  Nothing else touches `safeStorage` (grep-tested).
+- New secrets use a versioned v2 envelope (base64 ciphertext + backend/app
+  id); old raw-buffer rows still read, the legacy insecure `plain:`+xor rows
+  read for compatibility but are NEVER written anymore. Writes without a
+  backend refuse loudly instead of persisting plaintext silently; the user can
+  keep the key for the session only (in memory, never persisted).
+- Reads never throw: missing / undecryptable / unavailable / corrupt come
+  back as reason codes. An unreadable provider key marks that service for
+  re-entry (Settings notice + run error "Nexio could not unlock your saved
+  API key. Enter it again in Settings." with Open Settings) instead of
+  crashing the run with a raw decrypt string.
+- Renames change the OS key, so the app name and userData path are pinned in
+  one place (`main.ts` + `db.ts`): the DB always lives under the Nexio folder
+  and there is no legacy migration. A blob the current OS key cannot decrypt
+  waits for re-entry (Settings notice + run error "Nexio could not unlock
+  your saved API key. Enter it again in Settings." with Open Settings)
+  instead of crashing the run with a raw decrypt string.
+- `redact()` masks `sk-…`, `Bearer …`, `api_key=…` before logging, and
+  technical error detail additionally redacts filesystem paths. Logs carry
+  secret ids and reason codes only — never values or ciphertext.
 - Dev-only env fallback: `${PROVIDER}_API_KEY` (e.g. `OPENAI_API_KEY`)
   is read in `ipc.ts`. Never commit `.env` files.
 - DB lives at `%APPDATA%/Nexio/nexio.db` (WAL mode),
@@ -25,8 +41,9 @@
 
 ## Long-term memory (injection rule + Ask exception)
 
-- Memory text is encrypted at rest when `safeStorage` is available,
-  plaintext otherwise (Settings > Memory says which). Run logs record
+- Memory text is encrypted at rest when `safeStorage` is available.
+  Saving with no backend refuses loudly instead of writing plaintext;
+  Settings > Memory says which backend is active. Run logs record
   memory ids and kinds only, never text.
 - Untrusted content (files, web pages, attachments, images, MCP output) can
   NEVER create, edit or delete memories: only the user's own messages feed

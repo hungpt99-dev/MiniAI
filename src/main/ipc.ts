@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { IpcChannels, IpcErrorEnvelope, IpcInvokeChannels, IpcPushChannels, IpcSendChannels } from '../shared/ipc-channels';
-import { getSettings, updateSettings } from './store/settings';
-import { setSecret, getSecret, apiKeyService, isEncryptionAvailable } from './store/secrets';
+import { getSettings, updateSettings, isKnownProvider } from './store/settings';
+import { getSecret, apiKeyService, isEncryptionAvailable } from './store/secrets';
 import { createConversation, listConversations, addMessage, getMessages, deleteConversation } from './db/conversations';
 import { listTemplates, upsertTemplate, listWorkflows, render } from './db/templates';
 import { streamChat } from './ai/stream';
@@ -83,6 +83,8 @@ import { type Task } from './tasks/taskTypes';
 import { updateTask as updateTaskRow } from './tasks/taskStore';
 import { TaskParkedError } from './agent/types';
 import { makeSubtaskTools } from './tasks/subtaskTools';
+import { toAppError, missingKeyError } from './errors/app-error';
+import { requireApiKey, writeSecret, writeSessionSecret, secretsStatus, clearReentry } from './secrets/index';
 
 const aborters = new Map<string, AbortController>();
 let seq = 0;
@@ -374,7 +376,15 @@ const vAttachClass: IpcSchema = {
 
 function ipcError(err: unknown): IpcErrorEnvelope {
   const code = (err as { code?: unknown })?.code;
-  return { ok: false, code: typeof code === 'string' && code ? code : 'IPC_ERROR', message: asError(err).message };
+  const compat = typeof code === 'string' && code ? code : 'IPC_ERROR';
+  // why: every invoke rejection becomes user-friendly at the boundary —
+  // raw Electron/Node strings never reach the UI as the main message.
+  const app = toAppError(err);
+  const out: IpcErrorEnvelope = { ok: false, code: compat, message: app.friendly };
+  if (app.code && app.code !== 'UNKNOWN') out.appCode = app.code;
+  if (app.technical) out.technical = app.technical;
+  if (app.action) out.action = app.action;
+  return out;
 }
 
 /**
@@ -840,6 +850,9 @@ async function runSend(
   const d = db();
   // Freeze mode/sessionId/requestId at send time.
   const s = getSettings(d);
+  // why: a stored id outside the registry (legacy/test leftovers) is "not
+  // configured" — never loaded, never substituted with another provider.
+  if (!isKnownProvider(s.provider)) throw missingKeyError(String(s.provider));
   const mode: Mode = opts.mode || s.mode || 'agent';
   const sessionId = opts.sessionId || conversationId;
   const requestId = opts.requestId || `req-${Date.now()}-${++seq}`;
@@ -849,7 +862,15 @@ async function runSend(
   const incognito = s.incognito === true;
   if (!incognito) addMessage(d, conversationId, 'user', text);
   const history = getMessages(d, conversationId);
-  const key = getSecret(d, apiKeyService(s.provider)) || '';
+  // why: unreadable/missing keys fail fast with one friendly error, never a
+  // raw decrypt string after minutes of silence (env keys still win for dev).
+  let key = '';
+  try {
+    key = requireApiKey(d, s.provider);
+  } catch (eKey) {
+    key = process.env[`${s.provider.toUpperCase()}_API_KEY`] || '';
+    if (!key) throw eKey;
+  }
   const aborter = new AbortController();
   aborters.set(requestId, aborter);
   // Prepare attachments first: rejections throw inline errors, never silent.
@@ -1047,6 +1068,8 @@ async function runSend(
     const state: AgentRunState = { controller: aborter, approvals: new Map() };
     agentRuns.set(runId, state);
     try { sch.beginExternal(taskId); } catch { /* record best-effort */ }
+    // why: link the agent runId before the first event (see agentStart).
+    try { sch.linkRun(taskId, runId); } catch { /* routing hint only */ }
     const cwd = s.agentCwd || os.homedir();
     let terminalStatus: 'done' | 'failed' | 'stopped' | 'interrupted' = 'done';
     let terminalSummary = '';
@@ -1401,12 +1424,18 @@ async function runExtWorkflowRun(
       }
     } catch (e2) {
       if (controller.signal.aborted) emit({ type: 'stopped' });
-      else emit({ type: 'error', message: asError(e2).message.slice(0, 500) });
+      else emitAppError(emit, e2);
     } finally {
       agentRuns.delete(runId);
     }
   })();
   return { runId };
+}
+
+/** One friendly terminal error event (message safe for the UI, detail redacted). */
+function emitAppError(emit: (event: AgentEvent) => void, e: unknown): void {
+  const app = toAppError(e);
+  emit({ type: 'error', message: app.friendly, code: app.code, technical: app.technical, action: app.action });
 }
 
 /** Custom provider with the temperature toggle off sends no sampling param. */
@@ -1427,9 +1456,22 @@ function registerSettingsIpc(): void {
   });
   typedHandle(IpcChannels.setApiKey, vStr2, (_e, provider: string, key: string) => {
     if (!key) throw new Error('Empty API key');
-    setSecret(db(), apiKeyService(provider), key);
+    const id = apiKeyService(provider);
+    try {
+      writeSecret(db(), id, key);
+    } catch (e) {
+      // No secure backend: keep it for this session only, never persist it.
+      if (toAppError(e).code === 'SECRET_UNAVAILABLE') {
+        writeSessionSecret(id, key);
+        clearReentry(id);
+        return true;
+      }
+      throw e;
+    }
+    clearReentry(id);
     return true;
   });
+  typedHandle(IpcChannels.secretsStatus, vNone, () => secretsStatus(db()));
   typedHandle(IpcChannels.isEncryptionAvailable, vNone, () => isEncryptionAvailable());
   typedHandle(IpcChannels.locale, vNone, () => {
     const tag = getLocaleTag();
@@ -1644,12 +1686,15 @@ function registerAgentIpc(): void {
   typedHandle(IpcChannels.agentStart, vHead2, async (e, conversationId: string, content: string, opts: { cwd?: string; attachments?: SendOpts['attachments'] } = {}) => {
     const d = db();
     const s = getSettings(d);
+    if (!isKnownProvider(s.provider)) {
+      // No task, no run: a single friendly terminal state via the envelope.
+      throw missingKeyError(String(s.provider));
+    }
     const staged = opts.attachments || [];
     const text = content.trim() || (staged.length ? ATTACH_STRINGS.defaultInstruction : content);
     const incognito = s.incognito === true;
     if (!incognito) addMessage(d, conversationId, 'user', text);
     const history = getMessages(d, conversationId);
-    const key = getSecret(d, apiKeyService(s.provider)) || process.env[`${s.provider.toUpperCase()}_API_KEY`] || '';
     const controller = new AbortController();
     const runId = `agent-${Date.now()}-${++seq}`;
     const state: AgentRunState = { controller, approvals: new Map() };
@@ -1658,19 +1703,45 @@ function registerAgentIpc(): void {
     const emit = (event: AgentEvent) => {
       try { sender.send(IpcChannels.agentEvent, { runId, event }); } catch { /* window gone */ }
     };
+    // Provider key reads stay INSIDE the run (never in the sync section): a
+    // throwing read becomes exactly one error event, never a rejected invoke
+    // with a spinning Planning row and no terminal event.
+    let key = '';
+    try {
+      key = requireApiKey(d, s.provider);
+    } catch (eKey) {
+      const app = toAppError(eKey);
+      const envKey = process.env[`${s.provider.toUpperCase()}_API_KEY`] || '';
+      if (envKey) {
+        key = envKey;
+      } else {
+        emit({ type: 'error', message: app.friendly, code: app.code, technical: app.technical, action: app.action });
+        finishRun(d, sender, runId, 'agent', text, app.friendly, 'error', opts.cwd || s.agentCwd || os.homedir(), !incognito);
+        agentRuns.delete(runId);
+        return { runId };
+      }
+    }
     // Foreground task record (Tasks view + locks + per-task approvals).
+    // Best-effort: without it the run still streams events, just untracked.
     const api = taskHostApi();
     const sch = initScheduler(api);
     const cwd0 = opts.cwd || s.agentCwd || os.homedir();
-    const fg = createUserTask(api, {
-      prompt: text, origin: 'user_spawn', cwd: cwd0, provider: s.provider, model: s.model,
-      staged, conversationId, hold: true,
-    });
-    const fgTaskId = 'error' in fg ? null : fg.task.id;
+    let fgTaskId: string | null = null;
+    try {
+      const fg = createUserTask(api, {
+        prompt: text, origin: 'user_spawn', cwd: cwd0, provider: s.provider, model: s.model,
+        staged, conversationId, hold: true,
+      });
+      if (!('error' in fg)) fgTaskId = fg.task.id;
+    } catch { fgTaskId = null; }
     if (fgTaskId && !sch.beginExternal(fgTaskId)) {
       // Slot taken between create and start: run headless via the queue instead.
       setForegroundTaskId(null);
     } else if (fgTaskId) {
+      // why: link the agent runId before the first event so the renderer maps
+      // live events to the foreground task (unlinked runs were buffered as
+      // background forever: stuck "You:" view with Stop that never clears).
+      try { sch.linkRun(fgTaskId, runId); } catch { /* routing hint only */ }
       setForegroundTaskId(fgTaskId);
     }
     void (async () => {
@@ -1768,10 +1839,10 @@ function registerAgentIpc(): void {
           finishRun(d, sender, runId, 'agent', text, notice, 'done', opts.cwd || s.agentCwd || os.homedir(), !incognito);
           return;
         }
-        emit({ type: 'error', message: asError(e2).message.slice(0, 500) });
+        emitAppError(emit, e2);
         terminalStatus = controller.signal.aborted ? 'stopped' : 'failed';
-        terminalSummary = asError(e2).message;
-        if (!incognito) finishRun(d, sender, runId, 'agent', text, asError(e2).message, 'error', opts.cwd || s.agentCwd || os.homedir());
+        terminalSummary = toAppError(e2).friendly;
+        if (!incognito) finishRun(d, sender, runId, 'agent', text, toAppError(e2).friendly, 'error', opts.cwd || s.agentCwd || os.homedir());
         else finishRun(d, sender, runId, 'agent', '', '', 'error', opts.cwd || s.agentCwd || os.homedir(), false);
       } finally {
         if (fgTaskId) {
@@ -1913,7 +1984,7 @@ function registerHistoryIpc(): void {
         emitLogged({ type: 'done', summary: text.slice(0, 500) });
       } catch (e2) {
         if (controller.signal.aborted) emitLogged({ type: 'stopped' });
-        else emitLogged({ type: 'error', message: asError(e2).message.slice(0, 500) });
+        else emitAppError(emitLogged, e2);
       } finally {
         agentRuns.delete(undoRunId);
       }
@@ -2198,7 +2269,15 @@ function taskHostApi(): TaskHostApi {
   return {
     db,
     settings: () => getSettings(db()),
-    apiKeyFor: (provider) => getSecret(db(), apiKeyService(provider)) || process.env[`${provider.toUpperCase()}_API_KEY`] || '',
+    apiKeyFor: (provider) => {
+      try {
+        return requireApiKey(db(), provider);
+      } catch (e) {
+        const env = process.env[`${provider.toUpperCase()}_API_KEY`] || '';
+        if (env) return env;
+        throw e;
+      }
+    },
     uiLocaleTag: () => uiLocaleTag(getSettings(db())),
     homeDir: () => os.homedir(),
     policyContext: (cwd: string) => policyFor(getSettings(db()), cwd),

@@ -27,6 +27,7 @@ jobs:
       - run: npm run typecheck
       - run: npx vitest run
       - run: npm run build
+      - run: npm run check:no-fakes
       - name: Smoke package (unsigned, no publish)
         run: npx electron-builder --dir
         env:
@@ -35,3 +36,22 @@ jobs:
         with:
           name: dist-${{ matrix.os }}
           path: dist/
+
+  smoke:
+    # Stuck-run guard: Do "hello" through a slow fake provider must answer
+    # within 30s and leave no running task behind (routes + footer included).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run smoke
+        timeout-minutes: 5

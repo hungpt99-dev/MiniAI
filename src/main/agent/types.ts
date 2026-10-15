@@ -53,7 +53,9 @@ export type AgentEvent =
   | { type: 'tool_result'; id: string; ok: boolean; output: string; durationMs: number }
   | { type: 'text_delta'; text: string }
   | { type: 'done'; summary: string }
-  | { type: 'error'; message: string }
+  /** Terminal failure: message is user-friendly (never raw internals);
+   * code/technical/action feed the error row (Details toggle, Retry, Open Settings). */
+  | { type: 'error'; message: string; code?: string; technical?: string; action?: 'open-settings' | 'retry' | null }
   | { type: 'stopped' }
   /** Long-term memory used for this run (ids only, never text). */
   | { type: 'memory_used'; count: number; ids: string[] };

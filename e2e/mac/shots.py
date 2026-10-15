@@ -13,7 +13,7 @@ name = args[0] if args else 'shot'
 lst = Quartz.CGWindowListCopyWindowInfo(
     Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
     Quartz.kCGNullWindowID)
-wins = [w for w in lst if str(w.get('kCGWindowName', '')) in ('Nexio', 'MiniAI')]
+wins = [w for w in lst if str(w.get('kCGWindowName', '')) in ('Nexio',)]
 if not wins:
     print('NO-WINDOW')
     sys.exit(0)

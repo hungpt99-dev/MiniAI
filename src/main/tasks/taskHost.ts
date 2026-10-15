@@ -7,8 +7,9 @@ import type { HookRunner } from '../extensions/hooks';
 import type { ContentPart } from '../ai/providers/types';
 import type { Tool } from '../agent/types';
 import { IpcChannels } from '../../shared/ipc-channels';
-import { Scheduler, newTaskId, taskTitle } from './scheduler';
+import { Scheduler, TaskParked, newTaskId, taskTitle } from './scheduler';
 import type { SchedulerEvent } from './scheduler';
+import { toAppError } from '../errors/app-error';
 import { TASK_LIMITS, type Task } from './taskTypes';
 import { ensureTaskTables, insertTask, listTasks, updateTask, getTask, deleteTask, pruneTasks, saveTaskCtx, getTaskCtx, deleteTaskCtx } from './taskStore';
 import { runScheduledTask, type TaskRunEnv } from '../agent/taskRunner';
@@ -178,7 +179,14 @@ export function initScheduler(api: TaskHostApi): Scheduler {
   scheduler = new Scheduler({
     settings: () => schedulerSettings(api),
     persist,
-    runTask: (task, ctl) => runScheduledTask(task, ctl, taskEnv(api)),
+    runTask: (task, ctl) => runScheduledTask(task, ctl, taskEnv(api)).catch((e) => {
+      // why: env construction (e.g. an unreadable provider key) throws before
+      // the loop starts; map it to the same friendly failed summary.
+      // Parked tasks must keep propagating (the scheduler requeues them).
+      if (e instanceof TaskParked) throw e;
+      const app = toAppError(e);
+      return { status: 'failed' as const, summary: app.friendly.slice(0, 500) };
+    }),
     onEvent: (ev) => routeSchedulerEvent(api, ev),
   });
   if (!hydrated) {

@@ -18,10 +18,10 @@ async function main() {
   const send = (m, pr = {}) => new Promise((res, rej) => { const i = ++id; const to = setTimeout(() => rej(new Error('to ' + m)), 8000); pend.set(i, (x) => { clearTimeout(to); res(x); }); ws.send(JSON.stringify({ id: i, method: m, params: pr })); });
   const ev = async (e) => (await send('Runtime.evaluate', { expression: e, returnByValue: true })).result.result.value;
   // second instance -> single-instance event -> togglePopup (no clicks anywhere)
-  const child = spawn('npx', ['electron', '.'], { cwd: 'D:\\my-project\\MiniAI', shell: true });
+  const child = spawn('npx', ['electron', '.'], { cwd: 'D:\\my-project\\Nexio', shell: true });
   await sleep(4000);
   try { child.kill(); } catch {}
-  console.log('V:', await py("from pywinauto.findwindows import find_elements\nprint('N:'+str(len(find_elements(title='MiniAI',top_level_only=True,backend='uia'))))"));
+  console.log('V:', await py("from pywinauto.findwindows import find_elements\nprint('N:'+str(len(find_elements(title='Nexio',top_level_only=True,backend='uia'))))"));
   console.log('active:', await ev(`(document.activeElement||{}).id||(document.activeElement||{}).tagName`));
   ws.close();
 }

@@ -32,7 +32,9 @@ import {
 } from './permissions';
 import { appendLog, createRunLog, redactSecrets } from './log';
 import { requestToolTurn, type AgentMsg } from '../ai/tools-chat';
+import { buildAgentMessages } from './request';
 import { scanSecretsText } from '../../shared/attachments';
+import { toAppError } from '../errors/app-error';
 import type { HookRunner } from '../extensions/hooks';
 import { capturePreOp, recordOp } from './undo';
 import { platform } from '../platform/index';
@@ -122,13 +124,6 @@ function buildAskSystemPrompt(cwd: string, roots: string[], now: string, extra?:
     'Avoid unnecessary tool calls and explanations.',
     ...(extra ? [extra] : []),
   ].join('\n');
-}
-
-function seedToAgentMsgs(history: ChatMessage[]): AgentMsg[] {
-  return history
-    .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .slice(-20)
-    .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
 }
 
 function wrapResult(tool: string, source: string | undefined, output: string): string {
@@ -510,8 +505,9 @@ export async function runAgent(userText: string, opts: RunAgentOpts): Promise<st
         ? buildAskSystemPrompt(cwd, roots, new Date().toISOString().slice(0, 10), sysExtra)
         : buildSystemPrompt(cwd, roots, new Date().toISOString().slice(0, 10), sysExtra),
     },
-    ...seedToAgentMsgs(opts.history),
-    { role: 'user', content: opts.userParts ?? userText },
+    // why: one builder owns order + dedupe + cap — history already holds the
+    // stored user turn, so appending it again would send it twice.
+    ...buildAgentMessages(opts.history, userText, opts.userParts),
   ];
 
   const start = Date.now();
@@ -617,13 +613,13 @@ export async function runAgent(userText: string, opts: RunAgentOpts): Promise<st
   } catch (e) {
     // Parked tasks requeue with their reason (scheduler catch); never an error row.
     if (e instanceof TaskParkedError) throw e;
-    const err = e as { code?: string; message?: string };
-    if (err?.code === 'aborted' || opts.signal?.aborted) {
+    const app = toAppError(e);
+    if ((e as { code?: string })?.code === 'aborted' || opts.signal?.aborted) {
       await runHooks('RunStopped', { cwd });
       emit({ type: 'stopped' });
       return '';
     }
-    emit({ type: 'error', message: (err?.message || String(e)).slice(0, 500) });
+    emit({ type: 'error', message: app.friendly, code: app.code, technical: app.technical, action: app.action });
     return '';
   }
 }
