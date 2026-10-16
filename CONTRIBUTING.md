@@ -1,5 +1,7 @@
 # Contributing to Nexio
 
+Please follow our [Code of Conduct](CODE_OF_CONDUCT.md).
+
 Windows + macOS project. Small, focused PRs welcome.
 
 ## Setup

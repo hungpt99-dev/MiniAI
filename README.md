@@ -207,7 +207,7 @@ Details: [docs/product/implementation-status.md](docs/product/implementation-sta
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Start with [docs/](docs/README.md) and [AGENTS.md](AGENTS.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [SECURITY.md](SECURITY.md), and [ACCESSIBILITY.md](ACCESSIBILITY.md). Start with [docs/](docs/README.md) and [AGENTS.md](AGENTS.md).
 
 ## License
 

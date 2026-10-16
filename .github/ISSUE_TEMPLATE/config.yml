@@ -1,0 +1,7 @@
+contact_links:
+  - name: Documentation and troubleshooting
+    url: https://github.com/hungpt99-dev/Nexio/blob/master/docs/development/troubleshooting.md
+    about: Check setup, providers, and known issues before filing.
+  - name: Security or conduct report (private)
+    url: https://github.com/hungpt99-dev/Nexio/security/advisories/new
+    about: Vulnerabilities and Code of Conduct reports. Never file these as public issues.
